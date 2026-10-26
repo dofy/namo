@@ -33,7 +33,7 @@ Namo manages messages, queues, projects, sessions and execution boundaries. The 
 
 The workbench and CLI support **English and Simplified Chinese**. They follow the system language by default and fall back to English for unsupported languages. Task content, user input and execution logs retain their original language.
 
-The schema 8 source candidate contains the roadmap integrations above, but the currently installed receiver may still be the older schema 7 release until an explicit review and service upgrade. Image input, PDF/Office/audio material interpretation, reminders, background delegation and offline message backfill remain unsupported. See the [development plan](docs/development-plan.md) for deployment status and outstanding real-world acceptance checks.
+Schema 8 includes the roadmap integrations above and has passed review and deployment on the maintained local instance. Existing installations require an explicit service upgrade. Image input, PDF/Office/audio material interpretation, reminders, background delegation and offline message backfill remain unsupported. See the [development plan](docs/development-plan.md) for deployment status and outstanding real-world acceptance checks.
 
 ## Get started
 

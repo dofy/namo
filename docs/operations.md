@@ -222,3 +222,5 @@ pnpm run smoke:codex
 schema 6 源码新增 `task_waits`，等待任务须先完成或取消，才可应用配置或进入完整停机维护。2026-10-26 已再次备份并升级线上 schema 6，原 16 张业务表、配置、登录和 launchd 文件保留，完整性及外键检查通过。备份位于 `data/migration/waits-upgrade-2026-10-26T12-26-10-837Z/`。随后完成[发布隔离](release-isolation.md)，线上从 `data/releases/<id>/` 的固定快照启动，开发目录 `dist/` 不再是服务入口。
 
 2026-10-26，完成 schema 7 选项按钮与固定发布快照切换。先在 schema 6 一致性备份上演练迁移，再通过 `service upgrade` 固定版本并启动。原 17 张表的所有原行与原字段、配置、登录和 Node 版本保持一致；完整性 ok、外键错误 0。备份：`data/migration/release-choices-upgrade-2026-10-26T12-45-26-014Z/`。发布 ID：`132402b33c010d47179c5211b34329de51899c6a8fd983ca4a8ca19c37dc304b`；候选包 SHA-256：`9db23662d0c90b748235c1d36bc8e239fe9c22dcde7588e26cfb6fc3de6ef262`。服务启动器在快照外，先完整校验再加载应用，自动重启也不能跳过校验。
+
+2026-10-26，本轮 R0–R6 确认范围完成后，279 项测试通过、最终独立复审 ship；已有实例按授权备份升级至 schema 8。功能提交 `8853625`，固定 release `a117ac37e494d6b116566007e4e6370e4126f8fb0055da2cfbbb16bb936f4fc8`。备份：`data/migration/roadmap-upgrade-2026-10-26T15-13-21.405Z`。原 17 张表 / 333 行原数据、配置、官方登录和 Node 均保留，完整性 ok、外键错误 0；在线 ready / connected、登记与运行一致。实际 release 的认证工作台检查通过，未启用的助手偏好不因升级自动启用。真实飞书客户端逐项验收与未选定的 OpenClaw 切换仍单列。

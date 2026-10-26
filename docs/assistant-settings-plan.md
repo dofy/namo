@@ -1,6 +1,6 @@
 # 助手设置与基础档案使用
 
-更新：2026-10-26。对应[主计划](development-plan.md)的 R1。schema 8 候选已把设置核心、显式档案装配、静态预览、管理 API、双语 UI、初始化可跳过选择和 `buildTaskRunPrompt` 接入主 Engine；新 run 固定采用版本，恢复已有 runner job 时复用其持久化 prompt。当前在线仍是 schema 7，真实多用户 / 群聊 / 新旧 session 验收待 schema 8 发布后完成。助手的名称和表达风格与用户本人的 profile 是两个对象，分别管理。
+更新：2026-10-26。对应[主计划](development-plan.md)的 R1。schema 8 实现已把设置核心、显式档案装配、静态预览、管理 API、双语 UI、初始化可跳过选择和 `buildTaskRunPrompt` 接入主 Engine；新 run 固定采用版本，恢复已有 runner job 时复用其持久化 prompt。当前在线已为 schema 8；真实 Codex 新旧 session 设置更新已通过，真实飞书多用户 / 群聊验收仍待用户参与。助手的名称和表达风格与用户本人的 profile 是两个对象，分别管理。
 
 ## R1.1 助手设置
 
