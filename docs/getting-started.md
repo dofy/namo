@@ -39,6 +39,19 @@ ln -s "$PWD/bin/namo.js" "$HOME/.local/bin/namo"
 
 后台服务不能绑定到 `npx` / `pnpm dlx` 临时缓存中；需要先持久安装。当前后台服务管理经过设计支持 macOS；其他系统可以前台启动，但尚未经完整平台验收。
 
+## 前端开发
+
+本地工作台使用 React + TypeScript + Radix Themes，源码位于 `ui/`，浏览器 API 类型位于 `src/ui-contract.ts`。Vite 将资源构建到 `dist/ui/`，由现有回环 HTTP 服务提供页面和 API。安装包内已包含产物，使用者无需安装 Vite、React 开发依赖或额外启动前端服务。
+
+```sh
+pnpm run build         # 构建 CLI / 服务端及前端，并检查两侧类型
+pnpm cli ui            # 打开带本机授权的工作台
+```
+
+修改前端时，在另一个终端运行 `pnpm run ui:watch`；构建完成后刷新工作台。这里使用文件监听构建，不另开 Vite 开发服务器，也不将管理 API 暴露给跨域代理。单独检查前端类型使用 `pnpm run typecheck:ui`；完整验证使用 `pnpm test`。修改服务端代码后，重新构建并重开 UI 进程即可，不需要重启飞书 Bot。
+
+页面按任务、项目权限、连接诊断拆分，公用控件使用 Radix Themes。组件升级后应验收 Select / Dialog 的键盘操作与 CSP：动态样式使用响应 nonce，两个固定 viewport 样式由服务端精确哈希放行，不允许改成任意内联脚本或样式。
+
 ## 初始化向导
 
 `namo init` 必须在本机交互终端运行，不能通过管道提交凭据。Secret 输入不回显。Ctrl+C 后可再次运行；已保存步骤仍在。

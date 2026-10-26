@@ -37,3 +37,15 @@ test('failed service application clears maintenance and releases the edit lock',
  const rev=f.manager.config().revision;writeFileSync(join(f.data,'health.json'),JSON.stringify({pid:process.pid,managementVersion:2,configRevision:rev}));await assert.rejects(()=>f.manager.apply(rev,true),/service failed/);
  const s=new Store(join(f.data,'bot.sqlite'));assert.equal(s.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get(),undefined);s.close();assert.equal(f.manager.save(rev,{model:'still-editable'}).values.model,'still-editable');
 });
+
+test('UI serves bundled assets with strict CSP and never exposes source files or private paths',async t=>{
+ const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());
+ const response=await fetch(ui.url),html=await response.text(),csp=response.headers.get('content-security-policy')!;
+ const nonce=html.match(/name="namo-style-nonce" content="([A-Za-z0-9+/=]+)"/)?.[1];assert.ok(nonce);assert.ok(csp.includes(`'nonce-${nonce}'`));assert.doesNotMatch(csp,/unsafe-inline|unsafe-eval/);
+ assert.doesNotMatch(html,/__NAMO_STYLE_NONCE__|PRIVATE_TEST_SECRET|PRIVATE_EXTRA/);assert.match(html,/type="module"/);
+ const assets=[...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)].map(m=>m[1]);assert.equal(assets.length,2);
+ for(const path of assets){const asset=await fetch(ui.url+path);assert.equal(asset.status,200);assert.match(asset.headers.get('content-type')!,path.endsWith('.css')?/text\/css/:/text\/javascript/);assert.ok((await asset.text()).length>100);}
+ for(const path of ['/assets/config.local.json','/assets/index.js.map','/assets/%2e%2e%2fconfig.local.json','/assets/missing.js'])assert.equal((await fetch(ui.url+path)).status,404);
+ assert.equal((await fetch(ui.url+'/src/management.ts')).status,401);assert.equal((await fetch(ui.url+'/api/state')).status,401);
+ const second=await (await fetch(ui.url)).text();assert.ok(!second.includes(nonce));
+});

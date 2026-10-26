@@ -4,10 +4,19 @@ import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { Management, ManagementError } from './management.js';
 import { RecoveryError } from './recovery.js';
-import { html, css, javascript } from './ui-assets.js';
+
+const assetRoot = new URL('../ui/', import.meta.url);
+// Radix Themes' Table/Select do not forward a nonce to their viewport styles.
+// Allow only these two fixed scrollbar rules; dynamic scroll locks use a nonce.
+const viewportStyleHashes = [
+  'sha256-vGQdhYJbTuF+M8iCn1IZCHpdkiICocWHDq4qnQF4Rjw=',
+  'sha256-441zG27rExd4/il+NvIqyL8zFx5XmyNQtE381kSkUJk=',
+].map(hash => `'${hash}'`).join(' ');
 
 const equal=(a:string,b:string)=>Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 export async function startUi(manager:Management):Promise<{url:string;entryUrl:string;close:()=>Promise<void>}> {
+  try { readFileSync(new URL('index.html',assetRoot)); }
+  catch { throw new ManagementError('缺少工作台构建资源。源码开发请运行 pnpm run build；安装包请重新安装'); }
   let bootstrap=randomBytes(32).toString('hex');const bootstrapUntil=Date.now()+300000;
   let session='';let sessionUntil=0,attempts=0,busy=false,origin='',cookieName='';
   async function body(req:IncomingMessage):Promise<any>{
@@ -17,13 +26,22 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
   }
   const server=createServer(async(req,res)=>{
     const send=(status:number,value:unknown,type='application/json')=>{res.writeHead(status,{'Content-Type':`${type}; charset=utf-8`});res.end(type==='application/json'?JSON.stringify(value):value as string);};
-    headers(res);
+    const styleNonce=randomBytes(18).toString('base64');
+    headers(res,styleNonce);
     if(req.headers.host!==origin.slice('http://'.length)||req.headers['sec-fetch-site']==='cross-site')return send(403,{error:'请求来源无效'});
     let path:string;
     try{path=new URL(req.url??'/',origin).pathname;}catch{return send(400,{error:'请求路径无效'});}
-    if(req.method==='GET'&&path==='/')return send(200,html,'text/html');
-    if(req.method==='GET'&&path==='/app.js')return send(200,javascript,'text/javascript');
-    if(req.method==='GET'&&path==='/app.css')return send(200,css,'text/css');
+    if(req.method==='GET'&&path==='/') {
+      try{return send(200,readFileSync(new URL('index.html',assetRoot),'utf8').replace('__NAMO_STYLE_NONCE__',styleNonce),'text/html');}
+      catch{return send(503,{error:'工作台正在构建，请稍后刷新'});}
+    }
+    // Only Vite's public JS/CSS files are served. Never expose arbitrary paths,
+    // source maps, configuration, or another directory under dist.
+    if(req.method==='GET'&&path.startsWith('/assets/')) {
+      if(!/^\/assets\/[A-Za-z0-9_-]+\.(js|css)$/.test(path))return send(404,{error:'资源不存在'});
+      try{return send(200,readFileSync(new URL(path.slice(1),assetRoot),'utf8'),path.endsWith('.css')?'text/css':'text/javascript');}
+      catch{return send(404,{error:'资源不存在，请刷新页面'});}
+    }
     if(req.method==='GET'&&path==='/favicon.ico'){res.writeHead(204);return res.end();}
     if(req.method==='GET'&&path==='/logo.png'){
       try{res.writeHead(200,{'Content-Type':'image/png'});return res.end(readFileSync(new URL('../../assets/namo-logo.png',import.meta.url)));}catch{return res.end();}
@@ -64,9 +82,9 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
   origin=`http://127.0.0.1:${address.port}`;cookieName=`namo_ui_${address.port}`;
   return {url:origin,entryUrl:`${origin}/#${bootstrap}`,close:async()=>{session='';bootstrap='';server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
 }
-function headers(res:ServerResponse):void{
+function headers(res:ServerResponse,styleNonce:string):void{
   res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Content-Type-Options','nosniff');
-  res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+  res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'self'; style-src 'self' 'nonce-${styleNonce}' ${viewportStyleHashes}; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`);
 }
 export async function openUi(url:string):Promise<void>{
   if(!['darwin','linux'].includes(process.platform))throw new ManagementError('当前自动打开支持 macOS / Linux；其他平台请使用 CLI');

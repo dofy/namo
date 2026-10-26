@@ -1,0 +1,36 @@
+import { Component, StrictMode, type ReactNode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Theme } from '@radix-ui/themes';
+import '@radix-ui/themes/tokens/base.css';
+import '@radix-ui/themes/tokens/colors/orange.css';
+import '@radix-ui/themes/tokens/colors/slate.css';
+import '@radix-ui/themes/tokens/colors/red.css';
+import '@radix-ui/themes/tokens/colors/green.css';
+import '@radix-ui/themes/tokens/colors/blue.css';
+import '@radix-ui/themes/components.css';
+import '@radix-ui/themes/utilities.css';
+import './styles.css';
+import { App } from './App';
+import { api, message } from './api';
+import { Notice } from './components';
+
+// Radix's scroll-lock stylesheet reads get-nonce's standard global. Authorize
+// that stylesheet without enabling arbitrary inline scripts or styles.
+(window as Window & { __webpack_nonce__?: string }).__webpack_nonce__ = document.querySelector<HTMLMetaElement>('meta[name="namo-style-nonce"]')?.content;
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() { return this.state.failed ? <main className="startup-error"><Notice error>页面无法显示。请刷新；若仍失败，请关闭此工作台并重新运行 namo ui。</Notice></main> : this.props.children; }
+}
+// Exchange the single-use bootstrap before React mounts, including StrictMode's
+// extra development effect cycle. Never persist the token or put it in logs.
+async function boot() {
+  let code = location.hash.slice(1); history.replaceState(null, '', location.pathname);
+  let initial, startupError;
+  try { if (code) await api.session(code); initial = await api.state(); } catch (e) { startupError = message(e); } finally { code = ''; }
+  createRoot(document.getElementById('root')!).render(<StrictMode><Theme accentColor="orange" grayColor="slate" radius="medium" appearance="light">
+    <ErrorBoundary><App initial={initial} startupError={startupError} /></ErrorBoundary>
+  </Theme></StrictMode>);
+}
+void boot();

@@ -59,6 +59,8 @@ namo issues           # 异常核对列表（需要 schema 2）
 
 源码开发继续使用 pnpm **12.15.0**，依赖以 `pnpm-lock.yaml` 为准：
 
+本地工作台使用 **React + TypeScript + Radix Themes**，由 **Vite** 构建。静态资源随 CLI 分发，仍通过 `namo ui` 打开，无需另装前端服务。开发方式见[安装与使用](docs/getting-started.md#前端开发)。
+
 ```sh
 pnpm install --frozen-lockfile
 pnpm run build
