@@ -47,6 +47,13 @@ test('UI serves bundled assets with strict CSP and never exposes source files or
  for(const path of assets){const asset=await fetch(ui.url+path);assert.equal(asset.status,200);assert.match(asset.headers.get('content-type')!,path.endsWith('.css')?/text\/css/:/text\/javascript/);assert.ok((await asset.text()).length>100);}
  for(const path of ['/assets/config.local.json','/assets/index.js.map','/assets/%2e%2e%2fconfig.local.json','/assets/missing.js'])assert.equal((await fetch(ui.url+path)).status,404);
  assert.equal((await fetch(ui.url+'/src/management.ts')).status,401);assert.equal((await fetch(ui.url+'/api/state')).status,401);
+ for(const path of ['/settings','/profiles','/connections']){
+  const page=await fetch(ui.url+path),content=await page.text();assert.equal(page.status,200);assert.match(page.headers.get('content-type')!,/text\/html/);
+  const pageNonce=content.match(/name="namo-style-nonce" content="([A-Za-z0-9+/=]+)"/)?.[1];assert.ok(pageNonce);assert.ok(page.headers.get('content-security-policy')!.includes(`'nonce-${pageNonce}'`));
+  assert.match(content,/type="module"/);assert.doesNotMatch(content,/__NAMO_STYLE_NONCE__|PRIVATE_TEST_SECRET|PRIVATE_EXTRA/);
+ }
+ const login=await fetch(ui.url+'/api/session',{method:'POST',headers:{Origin:ui.url,'Content-Type':'application/json'},body:JSON.stringify({code:new URL(ui.entryUrl).hash.slice(1)})}),cookie=login.headers.get('set-cookie')!;
+ for(const path of ['/settings/missing','/missing','/api/missing','/src/management.ts'])assert.equal((await fetch(ui.url+path,{headers:{Cookie:cookie}})).status,404);
  const second=await (await fetch(ui.url)).text();assert.ok(!second.includes(nonce));
 });
 

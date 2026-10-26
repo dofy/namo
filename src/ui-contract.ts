@@ -1,4 +1,7 @@
 /** Browser-visible projections only. Never include configuration or auth secrets. */
+export const uiRoutes = { tasks: '/', settings: '/settings', profiles: '/profiles', connections: '/connections' } as const;
+export type UiPage = keyof typeof uiRoutes;
+
 export interface ConfigValues {
   projects: Record<string, string>;
   defaultProject: string;

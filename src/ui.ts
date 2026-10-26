@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { Management, ManagementError } from './management.js';
 import { RecoveryError } from './recovery.js';
+import { uiRoutes } from './ui-contract.js';
 
 const assetRoot = new URL('../ui/', import.meta.url);
 // Radix Themes' Table/Select do not forward a nonce to their viewport styles.
@@ -31,7 +32,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
     if(req.headers.host!==origin.slice('http://'.length)||req.headers['sec-fetch-site']==='cross-site')return send(403,{error:'请求来源无效'});
     let path:string;
     try{path=new URL(req.url??'/',origin).pathname;}catch{return send(400,{error:'请求路径无效'});}
-    if(req.method==='GET'&&path==='/') {
+    if(req.method==='GET'&&Object.values(uiRoutes).some(route=>route===path)) {
       try{return send(200,readFileSync(new URL('index.html',assetRoot),'utf8').replace('__NAMO_STYLE_NONCE__',styleNonce),'text/html');}
       catch{return send(503,{error:'工作台正在构建，请稍后刷新'});}
     }

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { Button, Heading, Text } from '@radix-ui/themes';
-import type { ManagementState } from '../src/ui-contract';
+import { uiRoutes, type ManagementState, type UiPage } from '../src/ui-contract';
 import { api, ApiError, message } from './api';
 import { Notice } from './components';
 import { Details } from './Details';
@@ -9,13 +9,27 @@ import { SettingsPage } from './pages/SettingsPage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
 import { ProfilesPage } from './pages/ProfilesPage';
 
-const pages = { tasks: '任务与工作线', settings: '项目与权限', profiles: '用户档案', connections: 'Agent 与飞书' };
-type Page = keyof typeof pages;
+const pages: Record<UiPage, string> = { tasks: '任务与工作线', settings: '项目与权限', profiles: '用户档案', connections: 'Agent 与飞书' };
+function currentPage(): UiPage {
+  return (Object.keys(uiRoutes) as UiPage[]).find(page => uiRoutes[page] === location.pathname) ?? 'tasks';
+}
 export function App({ initial, startupError }: { initial?: ManagementState; startupError?: string }) {
-  const [state, setState] = useState(initial), [view, setView] = useState<Page>('tasks'), [target, setTarget] = useState<DetailTarget | null>(null);
+  const [state, setState] = useState(initial), [view, setView] = useState(currentPage), [target, setTarget] = useState<DetailTarget | null>(null);
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(startupError ? { text: startupError, error: true } : null);
   const [refreshing, setRefreshing] = useState(false), [expired, setExpired] = useState(false);
   const sequence = useRef(0), opener = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const restorePage = () => { setView(currentPage()); setTarget(null); };
+    window.addEventListener('popstate', restorePage);
+    return () => window.removeEventListener('popstate', restorePage);
+  }, []);
+  useEffect(() => { document.title = `${pages[view]} · Namo`; }, [view]);
+  function navigate(event: MouseEvent<HTMLAnchorElement>, page: UiPage) {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (location.pathname !== uiRoutes[page]) history.pushState(null, '', uiRoutes[page]);
+    setView(page); setTarget(null);
+  }
   const notify = useCallback((text: string, error = false) => setNotice({ text, error }), []);
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const request = ++sequence.current;
@@ -35,9 +49,11 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
   const application = { applied: '保存的配置已生效', pending: '配置已保存，待应用', unknown: '在线版本未报告配置版本', stopped: '配置将在下次启动生效' };
   return <div className="app-shell">
     <aside className="sidebar">
-      <a href="/" className="brand"><img src="/logo.png" alt="Namo 狐狸标识" /><span>Namo<small>本地工作台</small></span></a>
-      <nav aria-label="主导航">{(Object.entries(pages) as [Page, string][]).map(([key, label]) =>
-        <Button key={key} variant={view === key ? 'soft' : 'ghost'} color={view === key ? 'orange' : 'gray'} aria-current={view === key ? 'page' : undefined} onClick={() => setView(key)}>{label}</Button>)}</nav>
+      <a href={uiRoutes.tasks} className="brand" onClick={event => navigate(event, 'tasks')}><img src="/logo.png" alt="Namo 狐狸标识" /><span>Namo<small>本地工作台</small></span></a>
+      <nav aria-label="主导航">{(Object.entries(pages) as [UiPage, string][]).map(([key, label]) =>
+        <Button asChild key={key} variant={view === key ? 'soft' : 'ghost'} color={view === key ? 'orange' : 'gray'}>
+          <a href={uiRoutes[key]} aria-current={view === key ? 'page' : undefined} onClick={event => navigate(event, key)}>{label}</a>
+        </Button>)}</nav>
       <div className="sidebar-foot"><span className={`dot ${state?.service.ready ? 'ready' : ''}`} />
         <Text weight="medium" size="2">{expired || !state ? '尚未授权' : state.service.ready ? '飞书已连接' : state.service.running ? '连接尚未就绪' : '服务未运行'}</Text>
         {state && <Text as="p" size="1" color="gray">{application[state.config.application]}</Text>}
