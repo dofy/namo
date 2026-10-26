@@ -7,13 +7,16 @@ import { api, message } from '../api';
 import { Choice, ConfirmButton, Field, Notice } from '../components';
 
 type ProjectRow = { id: string; name: string; path: string };
-interface Draft extends Omit<ConfigValues, 'projects' | 'readPaths' | 'denyPaths' | 'timeoutMs' | 'concurrency'> {
+interface Draft extends Omit<ConfigValues, 'projects' | 'readPaths' | 'denyPaths' | 'timeoutMs' | 'concurrency' | 'progressDelayMs' | 'progressIntervalMs' | 'progressHeartbeatMs'> {
   projects: ProjectRow[]; readPaths: string; denyPaths: string; timeoutSeconds: string; concurrency: string; newSecret: string;
+  progressDelayMs:string;progressIntervalMs:string;progressHeartbeatMs:string;
 }
 function fromConfig(config: ConfigView): Draft {
   const v = config.values;
   return { ...v, projects: Object.entries(v.projects).map(([name, path]) => ({ id: crypto.randomUUID(), name, path })),
-    readPaths: v.readPaths.join('\n'), denyPaths: v.denyPaths.join('\n'), timeoutSeconds: String(v.timeoutMs / 1000), concurrency: String(v.concurrency), newSecret: '' };
+    reactions:v.reactions!==false,progressUpdates:v.progressUpdates!==false,
+    readPaths: v.readPaths.join('\n'), denyPaths: v.denyPaths.join('\n'), timeoutSeconds: String(v.timeoutMs / 1000), concurrency: String(v.concurrency), newSecret: '',
+    progressDelayMs:String(v.progressDelayMs??12000),progressIntervalMs:String(v.progressIntervalMs??5000),progressHeartbeatMs:String(v.progressHeartbeatMs??30000) };
 }
 function toPatch(draft: Draft): ConfigValues & { newSecret: string } {
   const projects: Record<string, string> = {};
@@ -25,6 +28,7 @@ function toPatch(draft: Draft): ConfigValues & { newSecret: string } {
   }
   const { timeoutSeconds, ...values } = draft;
   return { ...values, projects, concurrency: Number(draft.concurrency), timeoutMs: Number(timeoutSeconds) * 1000,
+    progressDelayMs:Number(draft.progressDelayMs),progressIntervalMs:Number(draft.progressIntervalMs),progressHeartbeatMs:Number(draft.progressHeartbeatMs),
     readPaths: draft.readPaths.split('\n').map(x => x.trim()).filter(Boolean), denyPaths: draft.denyPaths.split('\n').map(x => x.trim()).filter(Boolean) };
 }
 export function SettingsPage({ config, recoveryAvailable, refresh, notify }: {
@@ -47,8 +51,8 @@ export function SettingsPage({ config, recoveryAvailable, refresh, notify }: {
   }, [dirty]);
   function edit<K extends keyof Draft>(key: K, value: Draft[K]) { setDraft(d => ({ ...d, [key]: value })); setDirty(true); }
   const projects = [...new Set(draft.projects.map(p => p.name.trim()).filter(Boolean))];
-  const booleanFields = (keys: ['networkAccess' | 'allowLocalCommits' | 'cards' | 'requireMention', string][]) => <div className="checks">{keys.map(([key, label]) =>
-    <Text as="label" size="2" key={key}><Checkbox checked={draft[key]} disabled={saving || (key === 'allowLocalCommits' && draft.sandbox === 'read-only')}
+  const booleanFields = (keys: ['networkAccess' | 'allowLocalCommits' | 'cards' | 'requireMention' | 'reactions' | 'progressUpdates', string][]) => <div className="checks">{keys.map(([key, label]) =>
+    <Text as="label" size="2" key={key}><Checkbox checked={draft[key]!==false} disabled={saving || (key === 'allowLocalCommits' && draft.sandbox === 'read-only')}
       onCheckedChange={value => edit(key, value === true)} /> {label}</Text>)}</div>;
   return <form onSubmit={async event => {
     event.preventDefault(); if (saving) return; setSaving(true); setError('');
@@ -89,7 +93,13 @@ export function SettingsPage({ config, recoveryAvailable, refresh, notify }: {
         <Field label={tr("每次执行时限（秒）")} htmlFor="timeout"><TextField.Root id="timeout" type="number" min="1" max="7200" required value={draft.timeoutSeconds} onChange={e => edit('timeoutSeconds', e.target.value)} /></Field>
       </div></section>
       <section className="form-section"><Heading as="h2" size="4">{tr("飞书消息")}</Heading>
-        {booleanFields([['requireMention', tr("群聊中仅响应 @")], ['cards', tr("使用任务卡片与操作按钮")]])}
+        {booleanFields([['requireMention', tr("群聊中仅响应 @")], ['cards', tr("使用任务卡片与操作按钮")],['reactions',tr("接收后添加表情回应")],['progressUpdates',tr("发送处理进度更新")]])}
+        <div className="form-grid">
+          <Field label={tr("首次进度提示延迟（毫秒）")} htmlFor="progress-delay"><TextField.Root id="progress-delay" type="number" min="1000" max="120000" required value={draft.progressDelayMs} onChange={e=>edit('progressDelayMs',e.target.value)} /></Field>
+          <Field label={tr("进度更新最短间隔（毫秒）")} htmlFor="progress-interval"><TextField.Root id="progress-interval" type="number" min="5000" max="60000" required value={draft.progressIntervalMs} onChange={e=>edit('progressIntervalMs',e.target.value)} /></Field>
+          <Field label={tr("进度心跳间隔（毫秒）")} htmlFor="progress-heartbeat"><TextField.Root id="progress-heartbeat" type="number" min="30000" max="300000" required value={draft.progressHeartbeatMs} onChange={e=>edit('progressHeartbeatMs',e.target.value)} /></Field>
+        </div>
+        <Text as="p" size="1" color="gray">{tr("关闭进度更新后不会发送常规处理提示；错误、等待、结果和必要状态仍会保留。时间设置仅在启用进度更新时生效。")}</Text>
         <Text as="p" size="1" color="gray">{tr("启用按钮前，在飞书后台订阅 card.action.trigger 回调并发布应用。未配置时可继续使用文字命令。")}</Text>
         <details><summary>{tr("更新应用 Secret")}</summary>
           <Field label={tr("新 Secret（留空保持原值）")} htmlFor="new-secret"><TextField.Root id="new-secret" type="password" autoComplete="new-password" maxLength={256} value={draft.newSecret} onChange={e => edit('newSecret', e.target.value)} /></Field>

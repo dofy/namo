@@ -49,7 +49,7 @@ namo service start
 运行 `upgrade` 前必须满足：
 
 1. launchd 服务已停止，且 `service.lock` 没有活动接收端；
-2. 数据库 schema 为当前版本，或发布流程明确支持的上一版（当前仅 6 → 7）；检查过程只读，不提前迁移；
+2. 数据库 schema 为当前版本，或发布流程明确支持的上一版（当前支持 6 / 7 → 8 的增量迁移）；检查过程只读，不提前迁移；
 3. inbox 中没有 queued、running、waiting 或 awaiting_reply；
 4. 没有 starting、running 或 lost 的独立 runner；
 5. 没有 requested 或 open wait；

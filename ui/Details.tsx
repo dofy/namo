@@ -7,6 +7,7 @@ import { api, message } from './api';
 import { ConfirmButton, Field, Notice, StatusBadge } from './components';
 import type { DetailTarget } from './pages/TasksPage';
 import { Evidence } from './Evidence';
+import { TaskContextDetails } from './TaskContextDetails';
 import { DateTime } from './browse-components';
 
 export function Details({ target, close, changed, notify, restoreFocus }: {
@@ -48,7 +49,7 @@ export function Details({ target, close, changed, notify, restoreFocus }: {
           {data.value.waits.map(wait => <div key={wait.id} className="result">
             <Text as="p" size="2">{{ requested: tr("正在保存等待"), open: tr("等待你的回答"), answered: tr("回答已保存"), cancelled: tr("已停止等待"), uncertain: tr("等待未确认，需核对") }[wait.state] ?? tr("状态待核对")}</Text>
             <div className="detail-block">{wait.question}</div>
-            {wait.state === 'open' && <Text as="p" size="2">{tr("请在原飞书话题引用问题回复，或发送 /resume")} {wait.id}  {tr("你的回答。")}</Text>}
+            {wait.state === 'open' && !('external' in wait && wait.external) && <Text as="p" size="2">{tr("请在原飞书话题引用问题回复，或发送 /resume")} {wait.id}  {tr("你的回答。")}</Text>}
           </div>)}
         </section>}
         {!!data.value.runners?.length && <section>
@@ -59,6 +60,7 @@ export function Details({ target, close, changed, notify, restoreFocus }: {
             {' · PID ' + (runner.pid ?? tr("尚未登记")) + tr(" · 最后记录 ") + new Date(runner.updatedAt).toLocaleString(getLocale())}
           </Text>)}
         </section>}
+        <TaskContextDetails task={data.value} />
         <Evidence reports={data.value.evidence} />
         <Heading as="h2" size="4">{tr("答复与投递")}</Heading>
         {data.value.results.map(result => <section className="result" key={result.part}>

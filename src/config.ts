@@ -10,13 +10,18 @@ export interface Config {
   feishu: {
     appId: string; appSecret: string; allowedUserIds: string[];
     allowedChatIds: string[]; requireMention: boolean; domain: 'feishu' | 'lark';
-    cards?: boolean;
+    cards?: boolean; reactions?: boolean; progressUpdates?: boolean;
+    progressDelayMs?: number; progressIntervalMs?: number; progressHeartbeatMs?: number;
   };
   codex: {
     bin: string; home: string; model?: string; timeoutMs: number;
     sandbox: 'read-only' | 'workspace-write';
     projects?: Record<string, string>; defaultProject?: string;
-    networkAccess?: boolean; readPaths?: string[]; denyPaths?: string[]; allowLocalCommits?: boolean;
+    networkAccess?: boolean; explicitDenyPaths?:string[]; readPaths?: string[]; denyPaths?: string[]; allowLocalCommits?: boolean;
+  };
+  gitApprovals?: {
+    gitBin?: string; sshCommand?: string; maxTtlMs: number;
+    remotes: Array<{ name: string; url: string; transport: 'https' | 'ssh' | 'local-test'; credentialHelpers?: string[] }>;
   };
   concurrency: number;
   agent?: 'codex';
@@ -37,15 +42,19 @@ export function parseConfig(d: any, absolute: string): Config {
   };
   const f = d.feishu ?? {};
   const c = d.codex ?? {};
+  const g = d.gitApprovals ?? {};
+  if (!g || typeof g !== 'object' || Array.isArray(g)) throw new Error('gitApprovals must be an object');
   if (d.agent !== undefined && d.agent !== 'codex') throw new Error(tr("当前版本只支持 codex；Claude Code 和 OpenClaw Gateway 尚未接入"));
   for (const [name, value] of Object.entries({ dataDir: d.dataDir, 'feishu.appId': f.appId,
     'feishu.appSecret': f.appSecret, 'feishu.appSecretEnv': f.appSecretEnv, 'codex.bin': c.bin,
-    'codex.home': c.home, 'codex.model': c.model })) {
+    'codex.home': c.home, 'codex.model': c.model, 'gitApprovals.gitBin': g.gitBin, 'gitApprovals.sshCommand': g.sshCommand })) {
     if (value !== undefined && typeof value !== 'string') throw new Error(tr("{0} 必须是字符串", name));
   }
   if (f.domain !== undefined && !['feishu', 'lark'].includes(f.domain)) throw new Error(tr("feishu.domain 只能是 feishu 或 lark"));
   if (f.requireMention !== undefined && typeof f.requireMention !== 'boolean') throw new Error(tr("feishu.requireMention 必须是布尔值"));
   if (f.cards !== undefined && typeof f.cards !== 'boolean') throw new Error(tr("feishu.cards 必须是布尔值"));
+  for (const key of ['reactions','progressUpdates']) if (f[key] !== undefined && typeof f[key] !== 'boolean') throw new Error(`feishu.${key} must be boolean`);
+  for (const [key,min,max] of [['progressDelayMs',1000,120000],['progressIntervalMs',5000,60000],['progressHeartbeatMs',30000,300000]] as const) if (f[key] !== undefined && (!Number.isSafeInteger(f[key]) || f[key]<min || f[key]>max)) throw new Error(`feishu.${key} must be between ${min} and ${max}`);
   if (d.dataDir === '' || c.home === '' || c.bin === '') throw new Error(tr("dataDir、codex.home、codex.bin 不能是空字符串"));
   const concurrency = d.concurrency ?? 2;
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error(tr("concurrency 必须在 1–8 之间"));
@@ -66,6 +75,18 @@ export function parseConfig(d: any, absolute: string): Config {
   }
   if (c.defaultProject !== undefined && (typeof c.defaultProject !== 'string' || !Object.hasOwn(projects, c.defaultProject))) throw new Error(tr("codex.defaultProject 必须指向已配置项目"));
   if (Object.keys(projects).length && !c.defaultProject) throw new Error(tr("配置项目后必须指定 codex.defaultProject"));
+  if (g.maxTtlMs !== undefined && (!Number.isSafeInteger(g.maxTtlMs) || g.maxTtlMs < 1_000 || g.maxTtlMs > 900_000)) throw new Error('gitApprovals.maxTtlMs must be between 1000 and 900000');
+  if (g.remotes !== undefined && !Array.isArray(g.remotes)) throw new Error('gitApprovals.remotes must be an array');
+  const gitRemotes: NonNullable<Config['gitApprovals']>['remotes'] = [];
+  const remoteNames = new Set<string>();
+  for (const value of g.remotes ?? []) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value.name) || remoteNames.has(value.name) ||
+      typeof value.url !== 'string' || !value.url || !['https', 'ssh', 'local-test'].includes(value.transport) ||
+      value.credentialHelpers !== undefined && (!Array.isArray(value.credentialHelpers) || value.credentialHelpers.some((helper: unknown) => typeof helper !== 'string' || !helper))) {
+      throw new Error('Each gitApprovals remote needs a unique safe name, URL, transport, and string credentialHelpers');
+    }
+    remoteNames.add(value.name); gitRemotes.push({ name: value.name, url: value.url, transport: value.transport, credentialHelpers: value.credentialHelpers ? [...new Set(value.credentialHelpers as string[])] : undefined });
+  }
   return {
     file: absolute, dataDir, concurrency, agent: 'codex',
     feishu: {
@@ -74,7 +95,8 @@ export function parseConfig(d: any, absolute: string): Config {
       allowedUserIds: list(f.allowedUserIds ?? [], 'feishu.allowedUserIds'),
       allowedChatIds: list(f.allowedChatIds ?? [], 'feishu.allowedChatIds'),
       requireMention: f.requireMention !== false,
-      cards: f.cards === true,
+      cards: f.cards === true, reactions:f.reactions!==false, progressUpdates:f.progressUpdates!==false,
+      progressDelayMs:f.progressDelayMs??12000, progressIntervalMs:f.progressIntervalMs??5000, progressHeartbeatMs:f.progressHeartbeatMs??30000,
       domain: f.domain === 'lark' ? 'lark' : 'feishu',
     },
     codex: {
@@ -83,9 +105,12 @@ export function parseConfig(d: any, absolute: string): Config {
       projects, defaultProject: c.defaultProject, networkAccess: c.networkAccess ?? false,
       allowLocalCommits: c.allowLocalCommits ?? false,
       readPaths: list(c.readPaths ?? [], 'codex.readPaths').map(p => realpathSync(path(p))),
+      explicitDenyPaths:list(c.denyPaths??[], 'codex.denyPaths').map(path),
       denyPaths: [...new Set([absolute, dataDir, path(c.home ?? `${dataDir}/codex-home`),
         ...list(c.denyPaths ?? [], 'codex.denyPaths').map(path)])],
     },
+    gitApprovals: { gitBin: g.gitBin ? path(g.gitBin) : undefined, sshCommand: g.sshCommand ? path(g.sshCommand) : undefined,
+      maxTtlMs: g.maxTtlMs ?? 900_000, remotes: gitRemotes },
   };
 }
 

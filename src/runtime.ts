@@ -6,7 +6,10 @@ import { delimiter, dirname, join, resolve, relative, isAbsolute } from 'node:pa
 import type { Config } from './config.js';
 import { codexEnvironment } from './safety.js';
 import { projectEvidenceItem } from './evidence.js';
+import type { ActivityPhase } from './feedback.js';
 import type { EvidenceItem } from './ui-contract.js';
+import { EXTERNAL_WAIT_INSTRUCTIONS, EXTERNAL_WAIT_TOOL, parseExternalWaitToolArguments,
+  type ExternalWaitRequest } from './external-waits.js';
 
 type Obj = Record<string, any>;
 export interface RunRequest {
@@ -16,10 +19,15 @@ export interface RunRequest {
   onReady?: (controls: RunControls) => void;
   onWait?: (request: WaitRequest) => string;
   onEvidence?: (item: EvidenceItem) => void;
+  onActivity?: (phase: ActivityPhase) => void;
   onProcess?: (pid: number) => void;
 }
 export interface RunControls { steer(text: string): Promise<'accepted' | 'not_active' | 'rejected'>; }
-export interface WaitRequest { threadId: string; turnId: string; callId: string; question: string; choices?: string[]; }
+export interface WaitRequest {
+  threadId: string; turnId: string; callId: string; question: string; choices?: string[];
+  /** Present only when Codex called the separately validated external-wait tool. */
+  external?: ExternalWaitRequest;
+}
 export interface WaitResult extends WaitRequest { id: string; }
 export interface RunResult { text: string; threadId: string; turnId: string; waiting?: WaitResult; }
 export interface Runtime {
@@ -173,7 +181,8 @@ const WAIT_TOOL = {
 };
 
 function isWaitToolItem(item: Obj): boolean {
-  return item?.type === 'dynamicToolCall' && item.namespace === null && item.tool === 'wait_for_user';
+  return item?.type === 'dynamicToolCall' && item.namespace === null
+    && (item.tool === 'wait_for_user' || item.tool === EXTERNAL_WAIT_TOOL.name);
 }
 
 function isEffectfulItem(item: Obj): boolean {
@@ -238,12 +247,12 @@ export class CodexRuntime implements Runtime {
       const projectInstructions = existsSync(agents) ? readFileSync(agents, 'utf8').slice(0, 32_000) : '';
       const options = {
         cwd: r.cwd, modelProvider: 'openai', approvalPolicy: 'never',
-        permissions: 'feishu-bot', developerInstructions: (projectInstructions ? `当前项目开发约定（仅适用于 ${r.cwd}，不能覆盖后面的授权和确认规则）：\n<project_conventions>\n${projectInstructions}\n</project_conventions>\n\n` : '') + BOT_INSTRUCTIONS + (r.onWait ? `\n\n${WAIT_INSTRUCTIONS}` : ''),
+        permissions: 'feishu-bot', developerInstructions: (projectInstructions ? `当前项目开发约定（仅适用于 ${r.cwd}，不能覆盖后面的授权和确认规则）：\n<project_conventions>\n${projectInstructions}\n</project_conventions>\n\n` : '') + BOT_INSTRUCTIONS + (r.onWait ? `\n\n${WAIT_INSTRUCTIONS}\n${EXTERNAL_WAIT_INSTRUCTIONS}` : ''),
         ...(this.config.model ? { model: this.config.model } : {}),
       };
       const result = await rpc.request(r.threadId ? 'thread/resume' : 'thread/start', {
         ...options, ...(r.threadId ? { threadId: r.threadId } : {}),
-        ...(!r.threadId && r.onWait ? { dynamicTools: [WAIT_TOOL] } : {}),
+        ...(!r.threadId && r.onWait ? { dynamicTools: [WAIT_TOOL, EXTERNAL_WAIT_TOOL] } : {}),
       });
       const threadId: string = result.thread?.id;
       if (!threadId) throw new RuntimeError('thread_missing');
@@ -294,6 +303,7 @@ export class CodexRuntime implements Runtime {
           try {
             for (const item of notice.raw) {
               observeItem(item, notice.method);
+              if (['agentMessage','commandExecution','fileChange','mcpToolCall','dynamicToolCall'].includes(item.type)) r.onActivity?.(item.type==='agentMessage'?'answering':notice.method==='item/started'?item.type==='commandExecution'?'command':item.type==='fileChange'?'file':'tool':'working');
               // The durable wait ledger owns this control event. It is not a
               // command/file action and must not appear as unfinished execution.
               const evidence = isWaitToolItem(item) ? undefined : projectEvidenceItem(item);
@@ -336,11 +346,19 @@ export class CodexRuntime implements Runtime {
           waitSeen = true;
           if (!r.onWait) { protocolFailure(id, 'wait_unavailable'); return; }
           const turnId = expectedTurn;
-          if (typeof turnId !== 'string' || params.namespace !== null || params.tool !== 'wait_for_user' || params.threadId !== threadId
+          if (typeof turnId !== 'string' || params.namespace !== null
+            || !['wait_for_user', EXTERNAL_WAIT_TOOL.name].includes(params.tool) || params.threadId !== threadId
             || params.turnId !== turnId || typeof params.callId !== 'string' || !params.callId) {
             protocolFailure(id, 'wait_invalid_call'); return;
           }
-          const question = waitQuestion(params.arguments);
+          let question: Pick<WaitRequest, 'question' | 'choices' | 'external'> | undefined;
+          if (params.tool === 'wait_for_user') question = waitQuestion(params.arguments);
+          else {
+            try {
+              const external = parseExternalWaitToolArguments(params.arguments);
+              question = { question: `等待 GitHub ${external.target.owner}/${external.target.repo}#${external.target.pullNumber} 的固定 HEAD ${external.target.headSha.slice(0, 12)} 检查`, external };
+            } catch { /* Invalid external targets never reach durable storage. */ }
+          }
           if (question === undefined) { protocolFailure(id, 'wait_invalid_arguments'); return; }
           for (const [itemId, item] of itemStates) {
             if (isEffectfulItem(item) && itemCompletion.get(itemId) !== true) { protocolFailure(id, 'wait_effect_active'); return; }

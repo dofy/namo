@@ -3,6 +3,7 @@ import { mkdirSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Envelope } from './messages.js';
+import { splitDisplay } from './richtext.js';
 
 export interface Incoming {
   key: string; messageId: string; chatKey: string; chatId: string;
@@ -13,8 +14,9 @@ export interface Outbox {
   id: number; inboxKey: string; chatId: string; kind: string; part: number;
   content: string; uuid: string; state: string; platformId: string | null;
   payload?: string | null;
+  route?: string | null;
 }
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export class Store {
   readonly db: DatabaseSync;
@@ -128,12 +130,31 @@ export class Store {
           replyInboxKey TEXT UNIQUE REFERENCES inbox(key), replyVersion INTEGER,
           UNIQUE(threadId,turnId,callId)
         );
+        CREATE TABLE IF NOT EXISTS output_sources (
+          inboxKey TEXT NOT NULL REFERENCES inbox(key), kind TEXT NOT NULL, content TEXT NOT NULL,
+          PRIMARY KEY(inboxKey,kind)
+        );
+        CREATE TABLE IF NOT EXISTS run_activity (
+          runId TEXT PRIMARY KEY REFERENCES task_runs(id), phase TEXT NOT NULL, updatedAt INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS message_feedback (
+          inboxKey TEXT PRIMARY KEY REFERENCES inbox(key), state TEXT NOT NULL DEFAULT 'pending',
+          reactionId TEXT, error TEXT, updatedAt INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS progress_updates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, outboxId INTEGER NOT NULL REFERENCES outbox(id),
+          version INTEGER NOT NULL, state TEXT NOT NULL, phase TEXT NOT NULL,
+          content TEXT NOT NULL, createdAt INTEGER NOT NULL, error TEXT, checked INTEGER NOT NULL DEFAULT 0,
+          UNIQUE(outboxId,version)
+        );
       `);
       const waitColumns = new Set(this.db.prepare('PRAGMA table_info(task_waits)').all().map(row => row.name));
       if (!waitColumns.has('choices')) this.db.exec('ALTER TABLE task_waits ADD COLUMN choices TEXT');
-      this.db.exec('PRAGMA user_version=7');
+      this.db.exec('PRAGMA user_version=8');
       const outputColumns = new Set((this.db.prepare('PRAGMA table_info(outbox)').all() as { name: string }[]).map(x => x.name));
       if (!outputColumns.has('payload')) this.db.exec('ALTER TABLE outbox ADD COLUMN payload TEXT');
+      if (!outputColumns.has('mutableProgress')) this.db.exec('ALTER TABLE outbox ADD COLUMN mutableProgress INTEGER NOT NULL DEFAULT 0');
+      if (!outputColumns.has('route')) this.db.exec('ALTER TABLE outbox ADD COLUMN route TEXT');
     });
   }
   transaction<T>(fn: () => T): T {
@@ -186,17 +207,18 @@ export class Store {
       this.db.prepare('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, cwd);
     });
   }
-  hasPending(chatKey: string, except: string): boolean {
-    return !!this.db.prepare("SELECT 1 FROM inbox WHERE chatKey=? AND key!=? AND state IN ('queued','running','waiting','awaiting_reply') LIMIT 1").get(chatKey, except);
+  hasPending(chatKey: string, except: string, ownerId?:string, scopeKey?:string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM inbox WHERE chatKey=? AND key!=? AND state IN ('queued','running','waiting','awaiting_reply') AND (? IS NULL OR senderId=?) AND (? IS NULL OR COALESCE(json_extract(envelope,'$.scopeKey'),chatKey)=?) LIMIT 1").get(chatKey,except,ownerId??null,ownerId??null,scopeKey??null,scopeKey??null);
   }
   saveRun(key: string, threadId: string, turnId?: string): void { this.db.prepare('UPDATE inbox SET threadId=?,turnId=? WHERE key=?').run(threadId, turnId ?? null, key); }
   addOutput(key: string, kind: string, content: string): void {
     const input = this.get(key);
     if (!input) throw new Error('inbox_missing');
-    const chars = Array.from(content);
-    for (let start = 0, part = 0; start < chars.length; start += 2000, part++) {
-      this.db.prepare('INSERT OR IGNORE INTO outbox(inboxKey,chatId,kind,part,content,uuid,createdAt) VALUES(?,?,?,?,?,?,?)')
-        .run(key, input.chatId, kind, part, chars.slice(start, start + 2000).join(''), randomUUID(), Date.now());
+    this.db.prepare('INSERT OR IGNORE INTO output_sources(inboxKey,kind,content) VALUES(?,?,?)').run(key, kind, content);
+    const route = JSON.stringify({ messageId: input.messageId, thread: !!input.envelope?.threadId });
+    for (const [part, chunk] of splitDisplay(content || '执行已结束，但没有返回正文。请查看任务状态和执行记录。').entries()) {
+      this.db.prepare('INSERT OR IGNORE INTO outbox(inboxKey,chatId,kind,part,content,uuid,createdAt,route,mutableProgress) VALUES(?,?,?,?,?,?,?,?,?)')
+        .run(key, input.chatId, kind, part, chunk, randomUUID(), Date.now(), route,kind==='progress'?1:0);
     }
   }
   finish(key: string, text: string, error?: string): void {

@@ -9,7 +9,7 @@ export const FEISHU_GUIDE = {
   console: 'https://open.feishu.cn/app',
   larkConsole: 'https://open.larksuite.com/app',
   websocket: 'https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-',
-  scopes: ['im:message.p2p_msg:readonly', 'im:message.group_at_msg:readonly', 'im:message:send_as_bot'],
+  scopes: ['im:message.p2p_msg:readonly', 'im:message.group_at_msg:readonly', 'im:message:send_as_bot', 'im:message.reactions:write_only', 'im:message.reactions:read', 'im:message:readonly', 'im:resource'],
   event: 'im.message.receive_v1',
 };
 export interface Candidate { senderId: string; chatId: string; messageId: string; }

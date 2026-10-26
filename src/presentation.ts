@@ -2,7 +2,7 @@ import type { Store } from './store.js';
 import type { Task } from './tasks.js';
 import { evidenceSummary, readEvidence } from './evidence.js';
 import type { RunEvidence } from './ui-contract.js';
-import { Waits } from './waits.js';
+import { Waits, linkedExternalWait } from './waits.js';
 
 export const taskStateLabel = (state: string): string => ({ queued: '排队中', running: '正在处理', succeeded: '已完成',
   waiting: '等待你补充', failed: '未完成', cancelled: '已停止', interrupted: '执行中断，需核对', needs_attention: '需要核对补充要求' }[state] ?? '状态待核对');
@@ -37,7 +37,7 @@ export function taskStatus(store: Store, task: Task): string {
   const lines = [state];
   if (task.state === 'waiting') {
     const waiting = new Waits(store).current(task.id);
-    if (waiting) lines.push(waiting.question, `恢复：/resume ${waiting.id} 你的回答`, `停止：/cancel ${task.id}`);
+    if (waiting) lines.push(waiting.question, linkedExternalWait(store,waiting.id)?'外部检查由系统核对，条件满足后继续；不能用人工回复代替检查结果。':`恢复：/resume ${waiting.id} 你的回答`, `停止：/cancel ${task.id}`);
   }
   if (task.project) lines.push(`项目：${task.project}`);
   if (store.get(task.inboxKey)?.cancelRequested && ['queued','running'].includes(task.state) && !['completed','failed','lost','reviewed'].includes(String(job?.state)))

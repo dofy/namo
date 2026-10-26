@@ -1,3 +1,4 @@
+import { optionalAssistantSetup } from './assistant-setup.js';
 import { t as tr } from './locale.js';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -157,6 +158,7 @@ export async function onboard(file: string, ui: Prompter, overrides: Partial<Ini
   } finally { connection?.close(); releaseReceiver?.(); releaseData(); }
   if (result.configured) {
     const config = loadConfig(file);
+    await optionalAssistantSetup(config,ui);
     if (process.platform === 'darwin' && await ui.confirm(tr("安装并启动 macOS 登录后自动运行的后台服务？"))) {
       ui.info(tr("正在安装服务并等待连接就绪（最多 90 秒）…"));
       const service = await deps.install(config); result.serviceInstalled = true; result.serviceReady = service.ready;

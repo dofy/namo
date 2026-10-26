@@ -1,5 +1,5 @@
 /** Browser-visible projections only. Never include configuration or auth secrets. */
-export const uiRoutes = { dashboard: '/', tasks: '/tasks', sessions: '/sessions', settings: '/settings', profiles: '/profiles', connections: '/connections' } as const;
+export const uiRoutes = { dashboard: '/', tasks: '/tasks', sessions: '/sessions', settings: '/settings', assistant: '/assistant', memory: '/memory', profiles: '/profiles', connections: '/connections' } as const;
 export type UiPage = keyof typeof uiRoutes;
 
 export interface ConfigValues {
@@ -16,6 +16,11 @@ export interface ConfigValues {
   denyPaths: string[];
   cards: boolean;
   requireMention: boolean;
+  reactions?: boolean;
+  progressUpdates?: boolean;
+  progressDelayMs?: number;
+  progressIntervalMs?: number;
+  progressHeartbeatMs?: number;
 }
 export interface ConfigView {
   revision: string;
@@ -58,7 +63,36 @@ export interface Issue {
   actions: ResolutionAction[]; guidance: string;
   history: { action: string; note: string; createdAt: number }[];
 }
+export interface AssistantValues {
+  name:string; role:string; personality:string; defaultLanguage:'auto'|'zh-CN'|'en-US'; replyLength:'concise'|'balanced'|'detailed'; conclusionFirst:boolean; technicalDetail:'essential'|'balanced'|'deep'; emoji:'never'|'sparingly'|'freely'; useProfile:boolean;
+}
+export interface AssistantView { schema:1; version:number; updatedAt:number|null; active:boolean; values:AssistantValues }
+export type MemoryViewKind = 'preference' | 'user_fact' | 'project_knowledge' | 'task_summary' | 'history_quote' | 'handoff';
+export type MemoryViewStatus = 'active' | 'pending_review' | 'disabled' | 'deleted';
+export interface MemoryViewScope { kind:'owner'|'project'|'chat'; ownerId:string; project:string|null; chatKey:string|null }
+export interface MemoryViewItem {
+  id:string; version:number; kind:MemoryViewKind; status:MemoryViewStatus; scope:MemoryViewScope;
+  source:{kind:string;ref:string}; text:string|null; usable:boolean; contentChars:number;
+  createdAt:number; updatedAt:number; expiresAt:number|null;
+}
+export interface MemoryImportCandidate {
+  migrationId:string;candidateId:string;candidateKind:'assistant'|'identity'|'user'|'memory'|'instructions'|'history';
+  memoryKind:Exclude<MemoryViewKind,'handoff'>|null;source:{instanceId:string;version:string;accountId:string;fingerprint:string};
+  name:string;bytes:number;fingerprint:string;eligible:boolean;reason?:string;
+  imports:{scope:MemoryViewScope;memoryId:string;status:MemoryViewStatus;importedAt:number}[];
+}
+export interface MemoryViewState {
+  available:boolean; reason?:string; ownerId:string; owners:{id:string;label:string}[];
+  projects:string[]; chats:{chatKey:string;project:string|null}[]; items:MemoryViewItem[];imports:MemoryImportCandidate[];
+  limits:{entryChars:number;ownerEntries:number;ownerChars:number;scopeEntries:number;scopeChars:number};
+}
+export type MemoryMutation =
+  | {action:'save';ownerId:string;input:{kind:Exclude<MemoryViewKind,'handoff'>;scope:MemoryViewScope;text:string}}
+  | {action:'import';ownerId:string;input:{migrationId:string;candidateId:string;fingerprint:string;scope:MemoryViewScope}}
+  | {action:'correct';ownerId:string;id:string;version:number;text:string}
+  | {action:'disable'|'delete'|'activate';ownerId:string;id:string;version:number};
 export interface ManagementState {
+  assistant?: AssistantView;
   service: { running?: boolean; ready?: boolean; connection?: string };
   config: ConfigView;
   database: {

@@ -60,7 +60,7 @@ test('schema 5 upgrades with durable waits and optional choices without disturbi
   created.enqueue(message('existing'));
   created.db.exec('DROP TABLE task_waits; PRAGMA user_version=5'); created.close();
   const upgraded = new Store(file);
-  assert.equal(SCHEMA_VERSION, 7); assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version, 7);
+  assert.equal(SCHEMA_VERSION, 8); assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version, 8);
   assert.equal(upgraded.get('existing')?.text, 'ORIGINAL_MARKER');
   assert.deepEqual((upgraded.db.prepare('PRAGMA table_info(task_waits)').all() as { name: string }[]).map(row => row.name),
     ['id', 'taskId', 'runId', 'threadId', 'turnId', 'callId', 'question', 'inputVersion', 'state', 'createdAt',

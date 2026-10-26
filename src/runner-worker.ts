@@ -8,7 +8,9 @@ import { Tasks, policyHash, sessionKey } from './tasks.js';
 import { CodexRuntime, RuntimeError, type RunControls, type RunResult } from './runtime.js';
 import { EvidenceRecorder } from './evidence.js';
 import { runnerJob, runnerEvent } from './runner-store.js';
+import { recordActivity } from './feedback.js';
 import { Waits } from './waits.js';
+import { requestWait } from './external-wait-bridge.js';
 
 process.umask(0o077);
 async function main(): Promise<void> {
@@ -87,10 +89,13 @@ async function main(): Promise<void> {
           store.saveRun(task.inboxKey, thread, turn); tasks.saveRun(runId, thread, turn); runnerEvent(store, runId, 'turn_bound');
         }),
         onReady: next => { controls = next; steer(); },
+        onActivity: phase => write(() => recordActivity(store, runId, phase)),
         onEvidence: item => write(() => evidence!.observe(item)),
         onWait: request => store.transaction(() => {
           owned();
-          const id = new Waits(store).request(task.id, runId, { ...request, question: redact(request.question), choices: request.choices?.map(redact) });
+          const safe = request.external ? request
+            : { ...request, question: redact(request.question), choices: request.choices?.map(redact) };
+          const id = requestWait(store, task.id, runId, safe);
           runnerEvent(store, runId, 'wait_requested'); return id;
         }),
       });

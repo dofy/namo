@@ -184,7 +184,8 @@ export class Tasks {
       new Waits(this.store).close(t.id, error === 'cancelled');
       const unresolved = this.store.db.prepare("SELECT 1 FROM task_messages WHERE taskId=? AND role='revision' AND dispatch NOT IN ('accepted','applied') LIMIT 1").get(t.id);
       const state = error === 'cancelled' ? 'cancelled' : ['interrupted','runner_lost'].includes(error ?? '') ? 'interrupted' : error ? 'failed' : unresolved ? 'needs_attention' : 'succeeded';
-      this.store.finish(t.inboxKey, text + (unresolved ? '\n\n注意：有补充要求尚未确认送入执行器，未自动重送。请用 /task 查看后明确发起后续任务。' : ''), error);
+      const progressSent=this.store.db.prepare("SELECT 1 FROM outbox WHERE inboxKey=? AND kind='progress' AND (state IN ('unknown','sending') OR EXISTS(SELECT 1 FROM progress_updates u WHERE u.outboxId=outbox.id AND u.state IN ('unknown','failed','sending')))").get(t.inboxKey);
+      this.store.finish(t.inboxKey, text + (progressSent?'\n\n本条是最终结果；进度卡若未同步，请以本条为准。':'') + (unresolved ? '\n\n注意：有补充要求尚未确认送入执行器，未自动重送。请用 /task 查看后明确发起后续任务。' : ''), error);
       this.store.db.prepare('UPDATE tasks SET state=?,error=?,finishedAt=? WHERE id=?').run(state, error ?? null, Date.now(), t.id);
       this.store.db.prepare('UPDATE task_runs SET state=?,error=?,finishedAt=? WHERE id=?').run(error ? state : 'succeeded', error ?? null, Date.now(), run);
       this.progress();
@@ -210,7 +211,7 @@ export class Tasks {
     });
   }
   /** Delay routine acknowledgements, and suppress only progress that was never sent. */
-  progress(now = Date.now()): void {
+  progress(now = Date.now(), delay = PROGRESS_DELAY_MS): void {
     this.store.transaction(() => {
       const rows = this.store.db.prepare(`SELECT o.id,o.state,o.createdAt,t.state AS execution,t.inboxKey,i.cancelRequested,
         (SELECT j.state FROM runner_jobs j JOIN task_runs r ON r.id=j.runId WHERE r.taskId=t.id ORDER BY r.startedAt DESC LIMIT 1) AS runner
@@ -220,7 +221,7 @@ export class Tasks {
         if (!['queued','running'].includes(String(row.execution)) || row.cancelRequested
           || ['completed','failed','lost','reviewed'].includes(String(row.runner))) {
           this.store.db.prepare("UPDATE outbox SET state='suppressed',error='progress_obsolete' WHERE id=?").run(row.id);
-        } else if (row.state === 'pending' || now - Number(row.createdAt) >= PROGRESS_DELAY_MS) {
+        } else if (row.state === 'pending' || now - Number(row.createdAt) >= delay) {
           this.store.db.prepare("UPDATE outbox SET state='pending',content=? WHERE id=? AND payload IS NULL")
             .run(row.execution === 'queued' ? '正在排队，开始处理后会继续回复。' : '正在处理，完成后会在这里回复。', row.id);
         }
@@ -249,9 +250,15 @@ export class Tasks {
       .all(m.chatKey, m.senderId) as unknown as Task[];
   }
   detail(t: Task): unknown {
+    const modern=Number(this.store.db.prepare('PRAGMA user_version').get()?.user_version)>=8;
     return { id: t.id, workstream: t.workstreamId, project: t.project, cwd: t.cwd, execution: t.state, inputVersion: t.inputVersion,
       startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error,
       evidence: readEvidence(this.store, t.id),
+      materials:this.store.db.prepare("SELECT s.value FROM settings s JOIN task_messages tm ON substr(s.key,1,length('material:'||tm.inboxKey||':'))='material:'||tm.inboxKey||':' WHERE tm.taskId=?").all(t.id).map(row=>{const m=JSON.parse(String(row.value));return {state:m.state,truncated:m.truncated,limitations:m.limitations,nodes:m.nodes.map(({text,...node}:Record<string,unknown>)=>node)};}),
+      activity: modern?this.store.db.prepare('SELECT a.* FROM run_activity a JOIN task_runs r ON r.id=a.runId WHERE r.taskId=? ORDER BY a.updatedAt DESC').all(t.id):[],
+      feedback: modern?this.store.db.prepare('SELECT state,error,updatedAt FROM message_feedback WHERE inboxKey=?').all(t.inboxKey):[],
+      progressUpdates: modern?this.store.db.prepare('SELECT u.version,u.state,u.phase,u.createdAt,u.error FROM progress_updates u JOIN outbox o ON o.id=u.outboxId WHERE o.inboxKey=? ORDER BY u.id DESC LIMIT 20').all(t.inboxKey):[],
+      artifacts: this.store.db.prepare("SELECT value FROM settings WHERE key LIKE 'artifact:%'").all().map(row=>JSON.parse(String(row.value))).filter(row=>row.taskId===t.id).map(({fileKey, ...row})=>row),
       waits: new Waits(this.store).list(t.id),
       runners: runnerDetails(this.store, t.id),
       messages: this.store.db.prepare('SELECT role,version,dispatch FROM task_messages WHERE taskId=? ORDER BY version').all(t.id),

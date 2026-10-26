@@ -1,9 +1,12 @@
 import * as lark from '@larksuiteoapi/node-sdk';
 import type { Config } from './config.js';
 import type { Incoming } from './store.js';
-import { SendError, type Sender } from './engine.js';
+import { SendError, type Sender, type DeliveryRoute } from './engine.js';
 import type { Material } from './messages.js';
 import type { CardEvent } from './cards.js';
+import { plainMessage } from './richtext.js';
+import type { MaterialReadAdapter } from './materials.js';
+import type { PreparedArtifact } from './artifacts.js';
 
 export interface FeishuEvent {
   sender?: { sender_type?: string; sender_id?: { open_id?: string } };
@@ -123,16 +126,72 @@ export class FeishuTransport implements Sender {
     this.close();
     throw new Error('飞书长连接未就绪，请检查平台已启用长连接接收事件和应用已发布');
   }
-  async send(chatId: string, content: string, uuid: string): Promise<string> {
-    return this.createMessage(chatId,'text',JSON.stringify({text:content}),uuid);
+  async send(chatId: string, content: string, uuid: string, route?: DeliveryRoute): Promise<string> {
+    return this.createMessage(chatId,'text',JSON.stringify({text:plainMessage(content)}),uuid,route);
   }
-  async sendCard(chatId: string, card: object, uuid: string): Promise<string> {
-    return this.createMessage(chatId,'interactive',JSON.stringify(card),uuid);
+  async sendCard(chatId: string, card: object, uuid: string, route?: DeliveryRoute): Promise<string> {
+    return this.createMessage(chatId,'interactive',JSON.stringify(card),uuid,route);
   }
-  private async createMessage(chatId:string,type:string,content:string,uuid:string):Promise<string> {
+  async sendPost(chatId: string, post: object, uuid: string, route?: DeliveryRoute): Promise<string> {
+    return this.createMessage(chatId,'post',JSON.stringify(post),uuid,route);
+  }
+  async react(messageId: string): Promise<string> {
+    let response;
+    try { response = await this.client.im.messageReaction.create({path:{message_id:messageId},data:{reaction_type:{emoji_type:'OK'}}}); }
+    catch { throw new SendError(true, 'reaction_transport_unknown'); }
+    if(response.code!==0)throw new SendError(false,`feishu_${response.code}`);
+    if(!response.data?.reaction_id)throw new SendError(true,'reaction_missing_receipt');
+    return response.data.reaction_id;
+  }
+  async unreact(messageId: string, reactionId: string): Promise<void> {
+    let response;
+    try { response=await this.client.im.messageReaction.delete({path:{message_id:messageId,reaction_id:reactionId}}); }
+    catch {throw new SendError(true,'reaction_delete_unknown');}
+    if(response.code!==0)throw new SendError(false,`feishu_${response.code}`);
+  }
+  async updateCard(messageId: string, card: object): Promise<void> {
+    let response;
+    try {response=await this.client.im.message.patch({path:{message_id:messageId},data:{content:JSON.stringify(card)}});}
+    catch {throw new SendError(true,'card_update_unknown');}
+    if(response.code!==0)throw new SendError(false,`feishu_${response.code}`);
+  }
+  async readCard(messageId: string): Promise<string> {
+    let response;
+    try {response=await this.client.im.message.get({path:{message_id:messageId}});}
+    catch {throw new SendError(true,'card_read_unknown');}
+    if(response.code!==0)throw new SendError(false,`feishu_${response.code}`);
+    return response.data?.items?.[0]?.body?.content??'';
+  }
+  readonly materials: MaterialReadAdapter = {
+    readMessage: async request => {
+      const result = await this.client.im.message.get({path:{message_id:request.messageId}});
+      if(result.code!==0)throw new Error('material_access_failed');
+      const items=result.data?.items??[];
+      if(items.some(item=>item.chat_id && item.chat_id!==request.chatId))throw new Error('material_chat_mismatch');
+      return items.map(item=>({messageId:item.message_id,parentMessageId:item.upper_message_id,chatId:item.chat_id,type:item.msg_type,body:item.body?.content,
+        sentAt:item.create_time?Number(item.create_time):undefined,author:{id:item.sender?.id}}));
+    },
+    readResource: async request => {
+      const result=await this.client.im.messageResource.get({path:{message_id:request.messageId,file_key:request.fileKey},params:{type:'file'}});
+      const stream=result.getReadableStream(); const chunks:Buffer[]=[];let size=0;
+      const timer=setTimeout(()=>stream.destroy(new Error('material_timeout')),Math.max(1,request.deadlineMs-Date.now()));
+      try {for await(const chunk of stream){const bytes=Buffer.from(chunk);size+=bytes.length;if(size>request.maxBytes)throw new Error('material_bytes_limit');chunks.push(bytes);}return {bytes:Buffer.concat(chunks)};}
+      finally {clearTimeout(timer);stream.destroy();}
+    },
+  };
+  async uploadArtifact(artifact: PreparedArtifact): Promise<string> {
+    // Upload exactly the validated frozen bytes; never reopen the user's path.
+    try {const result=await this.client.im.file.create({data:{file_type:artifact.platformFileType,file_name:artifact.name,file:artifact.readPayload()}});
+      if(!result?.file_key)throw new SendError(true,'artifact_upload_missing_receipt');return result.file_key;
+    }catch(e){if(e instanceof SendError)throw e;throw new SendError(true,'artifact_upload_unknown');}
+  }
+  async sendArtifact(chatId:string,fileKey:string,uuid:string,route:DeliveryRoute):Promise<string>{
+    return this.createMessage(chatId,'file',JSON.stringify({file_key:fileKey}),uuid,route);
+  }
+  private async createMessage(chatId:string,type:string,content:string,uuid:string,route?:DeliveryRoute):Promise<string> {
     let response: Awaited<ReturnType<typeof this.client.im.message.create>>;
     try {
-      response = await this.client.im.message.create({
+      response = route ? await this.client.im.message.reply({path:{message_id:route.messageId},data:{msg_type:type,content,uuid,reply_in_thread:route.thread}}) : await this.client.im.message.create({
         params: { receive_id_type: 'chat_id' },
         data: { receive_id: chatId, msg_type: type, content, uuid },
       });

@@ -71,6 +71,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/sessions')return send(200,manager.browse('sessions',new URL(req.url!,origin).searchParams));
         if(path==='/api/dashboard')return send(200,manager.browse('dashboard'));
         if(path==='/api/browse-options')return send(200,manager.browse('options'));
+        if(path==='/api/memories')return send(200,manager.memories(new URL(req.url!,origin).searchParams.get('ownerId')??undefined));
         if(path.startsWith('/api/tasks/'))return send(200,manager.detail(decodeURIComponent(path.slice(11))));
         if(path.startsWith('/api/issues/'))return send(200,manager.issue(decodeURIComponent(path.slice(12))));
         return send(404,{error:tr("页面不存在")});
@@ -79,6 +80,8 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
       busy=true;
       try{
         const input=await body(req);
+        if(path==='/api/assistant')return send(200,manager.assistant(input.action,input.version,input.values));
+        if(path==='/api/memories')return send(200,manager.memory(input.action,input.ownerId,input.input));
         if(path==='/api/config')return send(200,manager.save(input.revision,input.patch));
         if(path==='/api/apply')return send(200,await manager.apply(input.revision,input.confirmed===true));
         if(path==='/api/diagnose')return send(200,await manager.diagnose());
@@ -87,7 +90,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/cancel')return send(200,manager.cancel(input.id,input.inputVersion,input.requestId));
         return send(404,{error:tr("操作不存在")});
       } finally{busy=false;}
-    }catch(e){return send(e instanceof BrowseError?400:e instanceof ManagementError||e instanceof RecoveryError?409:500,{error:e instanceof BrowseError||e instanceof ManagementError||e instanceof RecoveryError?e.message:tr("操作未完成，请检查配置与本地服务；没有输出凭据或原始错误")});}
+    }catch(e){return send(e instanceof BrowseError?400:e instanceof ManagementError?e.status:e instanceof RecoveryError?409:500,{error:e instanceof BrowseError||e instanceof ManagementError||e instanceof RecoveryError?e.message:tr("操作未完成，请检查配置与本地服务；没有输出凭据或原始错误")});}
   }));
   server.requestTimeout=10000;server.headersTimeout=5000;server.maxHeadersCount=30;
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});

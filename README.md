@@ -24,13 +24,16 @@ Namo manages messages, queues, projects, sessions and execution boundaries. The 
 - **Questions and answers:** the agent can pause for your input; answer by replying to the question or choosing a matching card option.
 - **Independent runners:** active tasks run separately from the receiver. Uncertain or interrupted work is retained for review instead of blindly rerunning it.
 - **Execution evidence:** file patches, command exit codes, artifact checks and Git HEAD snapshots, with capture limits made explicit.
-- **Local workbench:** a dashboard, searchable task and session lists, user/project/status/date filters, pagination, details, profiles, settings and connection diagnostics.
-- **Concise chat replies:** ordinary answers arrive as text; optional task cards provide details and stop actions. Buttons require the Feishu callback subscription.
+- **Assistant and scoped memory:** opt-in assistant identity and style, versioned owner/project/chat memories, explicit correction/disable/delete, and bounded handoffs. Memories never grant operation authority.
+- **Materials and artifacts:** bounded reading of merged-forward text and direct UTF-8 text files, plus authorized delivery of selected task files. Image artifacts can be delivered as files, but image input is not interpreted.
+- **Local workbench:** a dashboard, searchable task and session lists, user/project/status/date filters, pagination, details, profiles, assistant settings, memory review, configuration and connection diagnostics.
+- **Concise chat replies:** durable acceptance reactions, original-message/topic routing, safe rich text and a single updatable progress card. Buttons require the Feishu callback subscription.
+- **Controlled continuations:** exact-head public GitHub check waits can resume the same task without model polling; a limited-protection Git push approval path binds one approval to one task, commit, remote and branch.
 - **Local service management:** guided setup, isolated official Codex login, diagnostics, immutable service releases and macOS background service commands.
 
 The workbench and CLI support **English and Simplified Chinese**. They follow the system language by default and fall back to English for unsupported languages. Task content, user input and execution logs retain their original language.
 
-Image/file/voice interpretation, streaming cards, reminders, background delegation, long-term memory and offline message backfill are not implemented. See the [development plan](docs/development-plan.md) for milestones and outstanding real-world acceptance checks.
+The schema 8 source candidate contains the roadmap integrations above, but the currently installed receiver may still be the older schema 7 release until an explicit review and service upgrade. Image input, PDF/Office/audio material interpretation, reminders, background delegation and offline message backfill remain unsupported. See the [development plan](docs/development-plan.md) for deployment status and outstanding real-world acceptance checks.
 
 ## Get started
 
@@ -92,12 +95,19 @@ NAMO_LANG=zh-CN namo doctor
 | `/tasks`, `/task N-ID` | View your tasks in the current chat |
 | `/material text` | Hold supporting material for up to ten minutes without executing it |
 | `/run request` | Start work with pending material; ordinary messages can also start tasks |
+| `/run --deliver relative/path -- request` | Pre-authorize delivery of one exact project-relative result when this task succeeds |
 | `/amend N-ID text` | Add input to a task; replying to your task message also works |
 | `/cancel [N-ID]` | Stop your task; without an ID, target your task in the current topic |
 | `/session [W-ID]` | Inspect or select a session and resume its agent context |
 | `/new`, `/reset` | Start a new context while preserving files and task history |
 | `/resume WAIT-ID answer` | Answer a waiting question; a quoted reply or card choice also works |
 | `/profile` | View and manage your basic profile in a direct message |
+| `/deliver N-ID relative/path` | Deliver an allowlisted file from your completed task after ownership and path checks |
+| `/remember owner\|project\|chat text`, `/memories [query]` | Explicitly save or list scoped memory in a verified direct message |
+| `/memory-correct M-ID version text`, `/memory-disable M-ID version`, `/forget M-ID version` | Version-check and change an existing memory |
+| `/handoff N-ID` | Save a bounded, scoped handoff from one of your tasks; it does not copy the agent session or grant authority |
+| `/push-request N-ID remote refs/heads/branch` | Request a preview for one preconfigured Git target from your succeeded task |
+| `/push-approve AP-ID --confirm`, `/push-reject AP-ID`, `/push-status AP-ID` | Approve and attempt once, reject, or inspect your approval in the same verified direct chat |
 | `/issues`, `/issue ID` | Inspect execution or delivery issues and follow the returned review instructions |
 | `/whoami`, `/help` | Show your chat identity or available commands |
 
@@ -106,10 +116,14 @@ NAMO_LANG=zh-CN namo doctor
 - The template defaults to read-only access. Use setup or the workbench to grant access to specific project directories, network commands and local Git commits.
 - Configuration, runtime data and isolated Codex login files remain excluded from agent access. Do not grant access to your entire home directory to fix a toolchain issue.
 - Write permission also permits file deletion. Cancellation, timeout or context reset does not undo completed actions.
-- Pushes and deployments require explicit confirmation through agent instructions. An enforced command-level approval gate is not implemented yet.
+- Git push approvals bind an exact task, owner/chat, project, configured remote, branch, HEAD SHA, configuration revision and expiry, then allow a single execution attempt. This is **limited protection**, not complete enforcement: a generally networked agent or another credential path could bypass the approval entrypoint. Deployment is not implemented as a generic target.
+- OpenClaw import requires an explicitly selected source file, supported version and application. It never imports provider authentication, gateways, plugins or tasks, and it cannot automatically take over a receiver; cutover and rollback remain an explicit, verified manual gate.
+- GitHub external waits use unauthenticated read-only access by default and therefore target public repositories. Private-repository token injection exists only as an adapter capability and is not exposed in product configuration.
 - A platform send receipt means the platform accepted the message, not that the user read it. Ambiguous sends are retained for review.
 - A sleeping or disconnected host cannot provide continuous service. There is no offline history backfill.
 - Never commit `config.local.json`, `data/`, logs, tokens or authentication files. Namo does not automatically import personal MCP servers, plugins or third-party model gateways.
+
+Local-only administration also provides `namo migrate`, `namo migrate inspect … --json`, and `namo approval request|inspect|approve|reject|execute|reconcile …`. Migration never switches receivers automatically. Approval targets must already exist in `gitApprovals`; approve, execute and reconcile use explicit confirmation where required. See the [OpenClaw migration](docs/openclaw-migration-plan.md) and [Git approval](docs/approvals.md) documents.
 
 Background service management currently supports macOS. Other systems can use foreground mode but have not completed full platform acceptance. Claude Code and OpenClaw are detected but are not supported execution backends.
 
@@ -129,6 +143,7 @@ Detailed engineering and operations documents are currently in Chinese:
 - [Configuration and operations](docs/operations.md)
 - [Architecture](docs/architecture.md) and [development plan](docs/development-plan.md)
 - [Execution evidence](docs/result-evidence.md), [independent runners](docs/runner.md), [waiting and resuming](docs/waits.md)
+- [Materials and artifact delivery](docs/materials.md), [scoped memory](docs/memory.md), [OpenClaw migration](docs/openclaw-migration-plan.md), [Git approval](docs/approvals.md)
 - [Release isolation](docs/release-isolation.md) and [brand assets](docs/brand.md)
 
 Project: [github.com/dofy/namo](https://github.com/dofy/namo). Report reproducible issues without credentials, private configuration or raw conversation data.

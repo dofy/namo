@@ -1,5 +1,5 @@
 import { t as tr, getLocale } from './i18n';
-import type { ApplyResult, BrowseOptions, ConfigValues, ConfigView, Dashboard, Diagnostic, Issue, ManagementState, PageResult, ProfileValues, ResolutionAction, SessionSummary, TaskDetail, TaskList, UserProfile } from '../src/ui-contract';
+import type { ApplyResult, AssistantView, AssistantValues, BrowseOptions, ConfigValues, ConfigView, Dashboard, Diagnostic, Issue, ManagementState, MemoryMutation, MemoryViewState, PageResult, ProfileValues, ResolutionAction, SessionSummary, TaskDetail, TaskList, UserProfile } from '../src/ui-contract';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -15,6 +15,12 @@ async function request<T>(path: string, body?: unknown, signal?: AbortSignal): P
   return data as T;
 }
 export const api = {
+  assistantSave: (version:number,values:AssistantValues)=>request<AssistantView>('/api/assistant',{action:'save',version,values}),
+  assistantReset: (version:number)=>request<AssistantView>('/api/assistant',{action:'reset',version}),
+  assistantPreview: (values:AssistantValues)=>request<string>('/api/assistant',{action:'preview',values}),
+  memories: (ownerId?:string,signal?:AbortSignal)=>request<MemoryViewState>(`/api/memories${ownerId?`?ownerId=${encodeURIComponent(ownerId)}`:''}`,undefined,signal),
+  memory: (mutation:MemoryMutation)=>request<MemoryViewState>('/api/memories',{action:mutation.action,ownerId:mutation.ownerId,input:mutation.action==='save'?mutation.input:
+    mutation.action==='import'?mutation.input:mutation.action==='correct'?{id:mutation.id,version:mutation.version,text:mutation.text}:{id:mutation.id,version:mutation.version}}),
   session: (code: string) => request('/api/session', { code }),
   state: (signal?: AbortSignal) => request<ManagementState>('/api/state', undefined, signal),
   tasks: (query: string, signal?: AbortSignal) => request<TaskList>(`/api/tasks?${query}`, undefined, signal),

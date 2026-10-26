@@ -18,6 +18,10 @@ const requestWait = (overrides = {}, args = { question: '请选择 A 或 B' }) =
   write({ method: 'item/started', params: { threadId: 'thread-one', turnId: 'turn-one', item: waitItem } });
   write({ id: 900, method: 'item/tool/call', params: waitParams });
 };
+const requestExternalWait = () => requestWait({ tool: 'wait_for_external' }, {
+  owner: 'octo-org', repo: 'app', pull_number: 42, head_sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  required_checks: [{ kind: 'check_run', context: 'build', app_id: 123 }], timeout_minutes: 30
+});
 createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line);
   if (m.method === 'initialize') return write({ id: m.id, result: {} });
@@ -40,6 +44,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     }
     if (mode === 'resume-wait' && ('dynamicTools' in threadParams || threadParams.threadId !== 'thread-one')) process.exit(21);
     if (mode !== 'resume-wait' && (!threadParams.dynamicTools || threadParams.dynamicTools[0]?.name !== 'wait_for_user'
+      || threadParams.dynamicTools[1]?.name !== 'wait_for_external'
       || !threadParams.developerInstructions.includes('/new'))) process.exit(22);
     if (mode === 'wait-fast') {
       requestWait();
@@ -55,6 +60,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (mode === 'malformed') return requestWait({}, { question: 'ok', extra: true });
     if (mode === 'choices') return requestWait({}, { question: '选择语言', choices: ['中文', '英文'] });
     if (mode === 'invalid-choices') return requestWait({}, { question: '选择语言', choices: ['中文', '中文'] });
+    if (mode === 'external-wait') return requestExternalWait();
     requestWait();
     return;
   }
@@ -131,6 +137,18 @@ test('structured choices are preserved before wait acknowledgement and malformed
   await assert.rejects(waitRun(invalid.runtime, invalid.dir, 'invalid-choices'),
     (e: unknown) => e instanceof RuntimeError && e.code === 'wait_protocol_error');
   assert.equal(existsSync(join(invalid.dir, 'persisted')), false);
+});
+
+test('external wait uses the same durable ACK, interrupt and terminal-turn protocol with validated arguments', async t => {
+  const f = fixture(t); const requests: WaitRequest[] = [];
+  const result = await waitRun(f.runtime, f.dir, 'external-wait', { onWait(request) {
+    requests.push(request); writeFileSync(join(f.dir, 'persisted'), request.question); return 'wait-db-one';
+  } });
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0].external, { target: { owner: 'octo-org', repo: 'app', pullNumber: 42,
+    headSha: 'a'.repeat(40) }, requiredChecks: [{ kind: 'check_run', context: 'build', appId: 123 }], timeoutMs: 1_800_000 });
+  assert.match(requests[0].question, /octo-org\/app#42/);
+  assert.deepEqual(result.waiting, { id: 'wait-db-one', ...requests[0] });
 });
 
 test('resume refuses a response that silently forks to a different thread id', async t => {

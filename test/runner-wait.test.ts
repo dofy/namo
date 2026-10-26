@@ -10,7 +10,8 @@ import { RunnerRuntime } from '../src/runner.js';
 import { RuntimeError, type RunRequest, type RunResult, type Runtime } from '../src/runtime.js';
 import { Store, type Incoming } from '../src/store.js';
 import { Tasks } from '../src/tasks.js';
-import { Waits } from '../src/waits.js';
+import { Waits, linkedExternalWait } from '../src/waits.js';
+import { ExternalWaits } from '../src/external-waits.js';
 
 const until = async (predicate: () => boolean, timeout = 8000) => {
   const end = Date.now() + timeout;
@@ -26,7 +27,7 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
-let cwd, thread = 'thread-durable', turn, waitItem, waitParams, count = 0;
+let cwd, thread = 'thread-durable', turn, waitItem, waitParams, count = 0, external = false;
 const finish = text => {
   const item = { id: 'final-' + count, type: 'agentMessage', phase: 'final_answer', text };
   send({ method: 'item/completed', params: { threadId: thread, turnId: turn, item } });
@@ -44,6 +45,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     count++; turn = 'turn-' + count;
     appendFileSync(join(cwd, 'calls'), 'turn\\n');
     const prompt = JSON.parse(m.params.input[0].text);
+    external = JSON.stringify(prompt).includes('EXTERNAL_RUNNER_WAIT_MARKER');
     send({ id: m.id, result: { turn: { id: turn } } });
     if (prompt.type === 'task_resume') {
       if (prompt.question !== 'Which branch?' || prompt.reply !== 'take blue' || 'messages' in prompt
@@ -51,9 +53,12 @@ createInterface({ input: process.stdin }).on('line', line => {
       writeFileSync(join(cwd, 'resume-prompt.json'), JSON.stringify(prompt));
       return finish('resumed once');
     }
-    waitParams = { threadId: thread, turnId: turn, callId: 'call-durable', namespace: null,
-      tool: 'wait_for_user', arguments: { question: 'Which branch?' } };
-    waitItem = { id: waitParams.callId, type: 'dynamicToolCall', namespace: null, tool: 'wait_for_user',
+    waitParams = { threadId: thread, turnId: turn, callId: external ? 'call-external' : 'call-durable', namespace: null,
+      tool: external ? 'wait_for_external' : 'wait_for_user', arguments: external ? {
+        owner: 'octo-org', repo: 'app', pull_number: 42, head_sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        required_checks: [{ kind: 'check_run', context: 'build', app_id: 123 }], timeout_minutes: 30
+      } : { question: 'Which branch?' } };
+    waitItem = { id: waitParams.callId, type: 'dynamicToolCall', namespace: null, tool: waitParams.tool,
       arguments: waitParams.arguments, status: 'inProgress', contentItems: null, success: null };
     send({ method: 'item/started', params: { threadId: thread, turnId: turn, item: waitItem } });
     return send({ id: 900, method: 'item/tool/call', params: waitParams });
@@ -62,9 +67,14 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (m.error || m.result?.success !== true) process.exit(33);
     const database = join(dirname(cwd), 'data', 'bot.sqlite');
     const db = new DatabaseSync(database, { readOnly: true });
-    const row = db.prepare("SELECT id,state,question FROM task_waits WHERE callId='call-durable'").get(); db.close();
+    const row = db.prepare('SELECT id,state,question FROM task_waits WHERE callId=?').get(waitParams.callId);
+    const link = external ? db.prepare("SELECT value FROM settings WHERE key='external-wait-link:'||?").get(row?.id) : undefined;
+    const ext = link ? JSON.parse(db.prepare('SELECT value FROM settings WHERE key=?').get('external-wait:' + link.value)?.value || 'null') : undefined;
+    db.close();
     const body = JSON.parse(m.result.contentItems?.[0]?.text || '{}');
-    if (!row || row.state !== 'requested' || row.question !== 'Which branch?' || body.wait_id !== row.id) process.exit(34);
+    if (!row || row.state !== 'requested' || body.wait_id !== row.id
+      || (!external && row.question !== 'Which branch?')
+      || (external && (!row.question.includes('octo-org/app#42') || ext?.target?.headSha !== 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'))) process.exit(34);
     writeFileSync(join(cwd, 'ack-after-durable'), row.id);
     return;
   }
@@ -155,4 +165,45 @@ test('detached worker durably requests a wait before ACK, survives receiver loss
   await until(() => deliveries.filter(text => text.includes('resumed once')).length === 1);
   await until(() => (store.db.prepare('SELECT pid FROM runner_jobs ORDER BY createdAt DESC LIMIT 1').get()?.pid
     ? processState(Number(store.db.prepare('SELECT pid FROM runner_jobs ORDER BY createdAt DESC LIMIT 1').get()?.pid)) === 'dead' : false));
+});
+
+test('detached worker stores both external and task wait ledgers before ACK, then parks without a human bypass', async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'namo-runner-external-wait-')));
+  const data = join(root, 'data'), project = join(root, 'project'); mkdirSync(data); mkdirSync(project);
+  const bin = join(root, 'fake-codex.mjs'); writeFileSync(bin, FAKE_CODEX, { mode: 0o700 });
+  const file = join(root, 'config.json');
+  writeFileSync(file, JSON.stringify({ dataDir: data,
+    feishu: { appId: 'app', appSecret: 'TEST_ONLY_SECRET', allowedUserIds: ['alice'] }, concurrency: 1,
+    codex: { bin, home: join(data, 'home'), timeoutMs: 5000, sandbox: 'workspace-write',
+      projects: { one: project }, defaultProject: 'one' } }));
+  const config = loadConfig(file), store = new Store(join(data, 'bot.sqlite')), tasks = new Tasks(store);
+  const engine = new Engine(store, new RunnerRuntime(store, config),
+    { async send(_chat: string, _text: string, uuid: string) { return uuid; } }, config);
+  t.after(async () => {
+    await engine.stop();
+    for (const row of store.db.prepare('SELECT pid,runtimePid FROM runner_jobs').all()) {
+      if (row.runtimePid) { try { process.kill(-Number(row.runtimePid), 'SIGKILL'); } catch {} }
+      if (row.pid) { try { process.kill(Number(row.pid), 'SIGKILL'); } catch {} }
+    }
+    store.close(); rmSync(root, { recursive: true, force: true });
+  });
+  engine.start(); engine.accept(incoming('external', 'EXTERNAL_RUNNER_WAIT_MARKER'));
+  try { await until(() => tasks.get(store.get('external')?.taskId ?? '')?.state === 'waiting'); }
+  catch {
+    const taskId = store.get('external')?.taskId;
+    assert.fail(JSON.stringify({ inbox: store.get('external')?.state, task: taskId ? tasks.get(taskId)?.state : undefined,
+      jobs: store.db.prepare('SELECT state,error FROM runner_jobs').all(),
+      waits: store.db.prepare('SELECT callId,state,question FROM task_waits').all() }));
+  }
+  const task = tasks.get(store.get('external')!.taskId!)!, wait = new Waits(store).current(task.id)!;
+  const externalId = linkedExternalWait(store, wait.id)!;
+  assert.match(externalId, /^EXT-/); assert.equal(new ExternalWaits(store).get(externalId)?.state, 'open');
+  assert.equal(wait.state, 'open'); assert.match(wait.question, /octo-org\/app#42/);
+  assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM runner_events WHERE kind='wait_requested'").get()?.n, 1);
+  engine.accept(incoming('forged-resume', `/resume ${wait.id} checks passed`));
+  await until(() => store.get('forged-resume')?.state === 'replied');
+  assert.equal(tasks.get(task.id)?.state, 'waiting'); assert.equal(new Waits(store).get(wait.id)?.state, 'open');
+  engine.accept(incoming('cancel-external', `/cancel ${task.id}`));
+  await until(() => tasks.get(task.id)?.state === 'cancelled');
+  assert.equal(new ExternalWaits(store).get(externalId)?.state, 'cancelled');
 });

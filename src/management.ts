@@ -11,11 +11,14 @@ import { Recovery, RecoveryError, type Resolution } from './recovery.js';
 import { serviceAction, serviceStatus, activeData, waitForService } from './service.js';
 import { doctor } from './doctor.js';
 import { acquireLock, makeRedactor } from './safety.js';
+import { AssistantSettings, AssistantSettingsError } from './assistant.js';
+import { Memories, MemoryError, MEMORY_LIMITS, type MemoryAuthority, type MemoryScope } from './memory.js';
+import { MigrationMemory, MigrationMemoryError, migrationMemoryStatus } from './migration-memory.js';
 import { Profiles, ProfileError } from './profiles.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
 import { Browse, BrowseError } from './browse.js';
 
-export class ManagementError extends Error {}
+export class ManagementError extends Error { constructor(message:string,readonly status=409){super(message);} }
 export interface ManagementDeps {
   status: typeof serviceStatus; action: typeof serviceAction; wait: typeof waitForService; diagnose: typeof doctor;
 }
@@ -55,7 +58,8 @@ export class Management {
     try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid)applied=h.configRevision;}catch{/* Not yet instrumented. */}
     return {revision,valid,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
       values:{projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.allowLocalCommits??false,
-        concurrency:raw.concurrency??2,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false},
+        concurrency:raw.concurrency??2,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
+        reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??12000,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},
       feishu:{appId:f.appId??'',domain:f.domain??'feishu',secretConfigured:!!f.appSecret||!!process.env[f.appSecretEnv??'FEISHU_APP_SECRET'],pairedUsers:Array.isArray(f.allowedUserIds)?f.allowedUserIds.length:0,
         restrictedChats:Array.isArray(f.allowedChatIds)?f.allowedChatIds.length:0},file:this.file};
   }
@@ -67,7 +71,107 @@ export class Management {
         workstreams:s.db.prepare('SELECT id,project,createdAt FROM workstreams ORDER BY createdAt DESC LIMIT 30').all(),
         issues:schema===SCHEMA_VERSION?new Recovery(s).list():[],queue:s.status()};
     });
-    return {service:this.status(),config:this.config(),database:db??{schema:0,tasks:[],issues:[],workstreams:[]},recoveryAvailable:db?.schema===SCHEMA_VERSION,profiles:this.profiles()};
+    return {service:this.status(),config:this.config(),database:db??{schema:0,tasks:[],issues:[],workstreams:[]},recoveryAvailable:db?.schema===SCHEMA_VERSION,profiles:this.profiles(),assistant:this.read(s=>new AssistantSettings(s).read())};
+  }
+  assistant(action: string, version: number, values: unknown): unknown {
+    try {return this.write(s=>{const settings=new AssistantSettings(s);
+      if(action==='preview')return settings.preview(values);
+      if(action==='reset')return settings.reset(version,{kind:'local-owner',authenticated:true});
+      if(action==='save')return settings.save(version,values,{kind:'local-owner',authenticated:true});
+      throw new ManagementError('Unsupported assistant operation',400);
+    });}catch(e){if(e instanceof AssistantSettingsError)throw new ManagementError(e.message,
+      e.code==='invalid'?400:e.code==='forbidden'?403:e.code==='conflict'||e.code==='run_already_adopted'?409:503);throw e;}
+  }
+  private memoryIdentity(ownerId?:unknown):{ownerId:string;owners:{id:string;label:string}[];projects:string[];appId:string;channel:'feishu'|'lark';secret:string} {
+    let config;try{config=loadConfig(this.file);}catch{throw new ManagementError(tr("配置尚未通过校验，请检查项目目录和权限后保存。"),409);}
+    const f=config.feishu,ids=[...new Set(f.allowedUserIds)];
+    if(!ids.length)throw new ManagementError(tr("请先完成应用配置和用户配对"),409);
+    if(ownerId!==undefined&&(typeof ownerId!=='string'||!ids.includes(ownerId)))throw new ManagementError(tr("只能管理当前应用中已配对用户的记忆"),403);
+    const selected=typeof ownerId==='string'?ownerId:ids[0]!;
+    const names=this.read(s=>{
+      const account=s.db.prepare("SELECT value FROM settings WHERE key='account'").get()?.value;
+      if(account&&account!==f.appId)throw new ManagementError(tr("应用与数据目录不匹配，不能读取或修改档案"),409);
+      if(!s.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_profiles'").get())return new Map<string,string>();
+      return new Map(s.db.prepare('SELECT userId,name FROM user_profiles WHERE channel=? AND appId=?').all(f.domain,f.appId)
+        .map(row=>[String(row.userId),String(row.name)]));
+    })??new Map<string,string>();
+    const redact=makeRedactor([f.appSecret].filter(Boolean));
+    return {ownerId:selected,owners:ids.map(id=>({id,label:redact(names.get(id)??'')||id})),projects:Object.keys(config.codex.projects??{}),
+      appId:f.appId,channel:f.domain,secret:f.appSecret};
+  }
+  private memoryChats(s:Store,ownerId:string,projects:string[]):{chatKey:string;project:string|null}[] {
+    const allowed=new Set(projects),seen=new Set<string>(),result:{chatKey:string;project:string|null}[]=[];
+    const add=(chatKey:unknown,project:unknown)=>{if(typeof chatKey!=='string'||!chatKey)return;const p=typeof project==='string'&&allowed.has(project)?project:null,key=JSON.stringify([chatKey,p]);if(!seen.has(key)){seen.add(key);result.push({chatKey,project:p});}};
+    for(const row of s.db.prepare('SELECT DISTINCT i.chatKey,t.project FROM inbox i LEFT JOIN tasks t ON t.id=i.taskId WHERE i.senderId=?').all(ownerId))add(row.chatKey,row.project);
+    for(const row of s.db.prepare('SELECT DISTINCT chatKey,project FROM workstreams WHERE ownerId=?').all(ownerId))add(row.chatKey,row.project);
+    return result.sort((a,b)=>a.chatKey.localeCompare(b.chatKey)||(a.project??'').localeCompare(b.project??''));
+  }
+  memories(ownerId?:unknown):unknown {
+    try{
+      const identity=this.memoryIdentity(ownerId),result=this.read(s=>{
+        if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)throw new ManagementError(tr("在线数据尚未升级，记忆暂不可编辑；请在维护窗口升级接收服务"),409);
+        const redact=makeRedactor([identity.secret].filter(Boolean)),memory=new Memories(s,redact),chats=this.memoryChats(s,identity.ownerId,identity.projects);
+        return {available:true,ownerId:identity.ownerId,owners:identity.owners,projects:identity.projects,chats,
+          imports:new MigrationMemory(s,{dataDir:this.dataDir,configFile:this.file,appId:identity.appId},redact).list(),
+          items:memory.manage({kind:'local-owner',authenticated:true,ownerId:identity.ownerId}),limits:{entryChars:MEMORY_LIMITS.entryChars,
+            ownerEntries:MEMORY_LIMITS.ownerEntries,ownerChars:MEMORY_LIMITS.ownerChars,scopeEntries:MEMORY_LIMITS.scopeEntries,scopeChars:MEMORY_LIMITS.scopeChars}};
+      });
+      if(!result)throw new ManagementError(tr("尚无服务数据库，请先完成初始化"),409);
+      return result;
+    }catch(e){if(e instanceof MemoryError)throw this.memoryError(e);if(e instanceof MigrationMemoryError)throw new ManagementError(e.message,migrationMemoryStatus(e));throw e;}
+  }
+  memory(action:unknown,ownerId:unknown,input:unknown):unknown {
+    const identity=this.memoryIdentity(ownerId);
+    try{return this.write(s=>{
+      const account=s.db.prepare("SELECT value FROM settings WHERE key='account'").get()?.value;
+      if(account&&account!==identity.appId)throw new ManagementError(tr("应用与数据目录不匹配，不能读取或修改档案"),409);
+      const redactor=makeRedactor([identity.secret].filter(Boolean)),memory=new Memories(s,redactor),chats=this.memoryChats(s,identity.ownerId,identity.projects);
+      if(!input||typeof input!=='object'||Array.isArray(input))throw new ManagementError(tr("请求内容无效"),400);
+      const value=input as Record<string,unknown>,authority:MemoryAuthority={kind:'local-owner',authenticated:true,ownerId:identity.ownerId,
+        source:{kind:'local-owner',ref:`workbench:${randomUUID()}`}};
+      if(action==='save'){
+        const scope=this.validMemoryScope(value.scope,identity.ownerId,identity.projects,chats),text=value.text;
+        if(typeof text==='string'&&redactor(text)!==text)throw new ManagementError(tr("记忆不能包含凭据，请移除后重试"),400);
+        memory.save({kind:value.kind as any,scope,text:text as string},authority);
+      }else if(action==='import'){
+        const scope=this.validMemoryScope(value.scope,identity.ownerId,identity.projects,chats);
+        new MigrationMemory(s,{dataDir:this.dataDir,configFile:this.file,appId:identity.appId},redactor).importPending({
+          migrationId:value.migrationId as string,candidateId:value.candidateId as string,fingerprint:value.fingerprint as string,scope,
+        },{kind:'local-owner',authenticated:true,ownerId:identity.ownerId});
+      }else{
+        if(typeof value.id!=='string'||!Number.isSafeInteger(value.version))throw new ManagementError(tr("记忆编号或版本无效"),400);
+        if(action==='correct'){
+          if(typeof value.text==='string'&&redactor(value.text)!==value.text)throw new ManagementError(tr("记忆不能包含凭据，请移除后重试"),400);
+          memory.correct(value.id,Number(value.version),{text:value.text as string},authority);
+        }else if(action==='disable')memory.disable(value.id,Number(value.version),authority);
+        else if(action==='delete')memory.delete(value.id,Number(value.version),authority);
+        else if(action==='activate')memory.activatePending(value.id,Number(value.version),authority);
+        else throw new ManagementError(tr("操作不存在"),400);
+      }
+      return this.memoryState(s,identity);
+    });}catch(e){if(e instanceof MemoryError)throw this.memoryError(e);if(e instanceof MigrationMemoryError)throw new ManagementError(e.message,migrationMemoryStatus(e));throw e;}
+  }
+  private memoryState(s:Store,identity:ReturnType<Management['memoryIdentity']>):unknown {
+    const memory=new Memories(s,makeRedactor([identity.secret].filter(Boolean)));
+    const redact=makeRedactor([identity.secret].filter(Boolean));
+    return {available:true,ownerId:identity.ownerId,owners:identity.owners,projects:identity.projects,chats:this.memoryChats(s,identity.ownerId,identity.projects),
+      imports:new MigrationMemory(s,{dataDir:this.dataDir,configFile:this.file,appId:identity.appId},redact).list(),
+      items:memory.manage({kind:'local-owner',authenticated:true,ownerId:identity.ownerId}),limits:{entryChars:MEMORY_LIMITS.entryChars,
+        ownerEntries:MEMORY_LIMITS.ownerEntries,ownerChars:MEMORY_LIMITS.ownerChars,scopeEntries:MEMORY_LIMITS.scopeEntries,scopeChars:MEMORY_LIMITS.scopeChars}};
+  }
+  private validMemoryScope(raw:unknown,ownerId:string,projects:string[],chats:{chatKey:string;project:string|null}[]):MemoryScope {
+    if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new ManagementError(tr("记忆范围无效"),400);
+    const scope=raw as Record<string,unknown>;
+    if(scope.ownerId!==ownerId)throw new ManagementError(tr("只能管理当前选择用户的记忆"),403);
+    if(scope.kind==='owner'&&scope.project===null&&scope.chatKey===null)return scope as unknown as MemoryScope;
+    if(scope.kind==='project'&&typeof scope.project==='string'&&projects.includes(scope.project)&&scope.chatKey===null)return scope as unknown as MemoryScope;
+    if(scope.kind==='chat'&&typeof scope.chatKey==='string'&&(scope.project===null||typeof scope.project==='string')
+      &&chats.some(chat=>chat.chatKey===scope.chatKey&&(scope.project===null||chat.project===scope.project)))return scope as unknown as MemoryScope;
+    throw new ManagementError(tr("记忆范围不属于当前已配对用户、项目或聊天"),403);
+  }
+  private memoryError(error:MemoryError):ManagementError {
+    const status=error.code==='invalid'?400:error.code==='forbidden'?403:error.code==='missing'?404:error.code==='capacity'?413:error.code==='storage_invalid'?503:409;
+    return new ManagementError(error.message,status);
   }
   private projections(s: Store): Browse {
     const {raw}=this.source(),f=raw.feishu??{};
@@ -118,13 +222,13 @@ export class Management {
     try {
       const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError(tr("配置已被其他页面或程序修改，请刷新后重试"));
       if(!patch||typeof patch!=='object'||Array.isArray(patch))throw new ManagementError(tr("配置内容无效"));
-      const allowed=['projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','newSecret'];
+      const allowed=['projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret'];
       if(Object.keys(patch).some(k=>!allowed.includes(k)))throw new ManagementError(tr("包含不允许编辑的配置项"));
       const next=structuredClone(raw);next.codex??={};next.feishu??={};
-      for(const key of allowed.filter(k=>!['concurrency','cards','requireMention','newSecret'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
+      for(const key of allowed.filter(k=>!['concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
       if(next.codex.defaultProject==='')delete next.codex.defaultProject;
       if(Object.hasOwn(patch,'concurrency'))next.concurrency=patch.concurrency;
-      for(const k of ['cards','requireMention'])if(Object.hasOwn(patch,k))next.feishu[k]=patch[k];
+      for(const k of ['cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs'])if(Object.hasOwn(patch,k))next.feishu[k]=patch[k];
       if(patch.newSecret!==undefined) {
         if(typeof patch.newSecret!=='string'||patch.newSecret.length>256)throw new ManagementError(tr("Secret 格式无效"));
         if(patch.newSecret)next.feishu.appSecret=patch.newSecret;

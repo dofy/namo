@@ -23,6 +23,7 @@ export async function doctor(file: string, live = false): Promise<Check[]> {
     }
   } finally { connection.close(); }
   checks.push({ id: 'feishu.pairing', status: c.feishu.allowedUserIds.length ? 'ok' : 'fail', message: c.feishu.allowedUserIds.length ? tr("已有 {0} 位授权用户", c.feishu.allowedUserIds.length) : tr("尚未配对用户，任何消息都不会执行"), next: c.feishu.allowedUserIds.length ? undefined : tr("运行 namo init 完成一次性配对与本地确认") });
+  checks.push({id:'feishu.optional-features',status:'warn',message:tr('表情、消息读取、文件上传和卡片更新需在飞书后台核对权限；诊断不会制造测试消息。'),next:'im:message.reactions:write_only / im:message.reactions:read / im:message:readonly / im:resource / im:message:send_as_bot'});
   const status = serviceStatus(c);
   checks.push({ id: 'service', status: status.ready ? 'ok' : 'warn', message: status.ready ? tr("后台实例已报告连接就绪") : status.running ? tr("后台进程存在，但当前连接就绪状态尚未确认") : tr("后台服务未运行"), next: status.ready ? undefined : tr("运行 namo service status 和 namo logs；前台模式使用 namo start") });
   if (live) {

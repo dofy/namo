@@ -18,6 +18,8 @@ import { serviceAction, serviceStatus, assertNoLegacyReceiver } from './service.
 import { currentRuntimeRelease } from './release.js';
 import { parseLocale, systemLocale } from './i18n.js';
 import { PROJECT_URL } from './project.js';
+import { ExecFileGitRunner, GitApprovals, type ApprovalTaskContext } from './approvals.js';
+import { policyHash } from './tasks.js';
 
 process.umask(0o077);
 const args = process.argv.slice(2);
@@ -42,12 +44,26 @@ async function main(): Promise<void> {
     if (args[i].startsWith('-') && !['--help', '-h', '--version', '-v', '--json', '--live', '--confirm'].includes(args[i])) throw new Error(tr("未知选项，运行 namo --help 查看用法"));
   }
   if (args.includes('--version') || args.includes('-v')) { console.log(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version); return; }
-  if (args.includes('--help') || args.includes('-h') || ['help', '-h', '--help'].includes(command)) { console.log(help() + '\n\n' + tr('界面语言：--lang system|en|zh-CN，或设置 NAMO_LANG；默认跟随系统，无法匹配时使用英文。') + '\n' + tr('项目：{0}', PROJECT_URL)); return; }
-  if (command!=='resolve'&&positional.length > (['agent', 'service', 'config','issue'].includes(command) ? 2 : 1)) throw new Error(tr("命令参数过多，运行 namo --help 查看用法"));
-  const known = ['ui','issues','issue','resolve','init', 'doctor', 'agent', 'login', 'start', 'status', 'logs', 'service', 'config', 'check'];
+  if (args.includes('--help') || args.includes('-h') || ['help', '-h', '--help'].includes(command)) { console.log(help()
+    + '\n  migrate              OpenClaw import preview / OpenClaw 导入预览（不会自动接管）'
+    + '\n  migrate inspect      Read-only source metadata / 只读来源元数据检查'
+    + '\n  approval             Controlled Git push approval / 受控 Git push 审批'
+    + '\n\n' + tr('界面语言：--lang system|en|zh-CN，或设置 NAMO_LANG；默认跟随系统，无法匹配时使用英文。') + '\n' + tr('项目：{0}', PROJECT_URL)); return; }
+  if (!['resolve','migrate','approval'].includes(command)&&positional.length > (['agent', 'service', 'config','issue'].includes(command) ? 2 : 1)) throw new Error(tr("命令参数过多，运行 namo --help 查看用法"));
+  const known = ['approval','migrate','ui','issues','issue','resolve','init', 'doctor', 'agent', 'login', 'start', 'status', 'logs', 'service', 'config', 'check'];
   if (!known.includes(command)) throw new Error(tr("未知命令：{0}。运行 namo --help", command));
   const file = configFile(flag('--config'));
   if (command === 'config') { if (positional[1] !== 'path') throw new Error(tr("用法：namo config path")); console.log(file); return; }
+  if (command === 'migrate') {
+    if (positional[1] === 'inspect') {
+      if (positional.length !== 4) throw new Error('Usage: namo migrate inspect <openclaw.json> <instance-id> --json');
+      const { inspectOpenClawSource } = await import('./migration.js');
+      console.log(JSON.stringify(inspectOpenClawSource({ sourceFile: positional[2]!, sourceInstanceId: positional[3]! }), null, 2)); return;
+    }
+    if (positional.length !== 1) throw new Error('Usage: namo migrate, or namo migrate inspect <openclaw.json> <instance-id> --json');
+    if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Run namo migrate in a local interactive terminal / 请在本机交互终端运行 namo migrate');
+    const ui=new TerminalPrompter();try {await (await import('./migration-cli.js')).migrateInteractive(file,ui);}finally {ui.close();}return;
+  }
   if (command === 'init') {
     if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error(tr("namo init 需要交互终端。请在本机终端运行；不要通过管道输入凭据。自动化诊断可使用 namo doctor --json"));
     const ui = new TerminalPrompter();
@@ -88,6 +104,50 @@ async function main(): Promise<void> {
   const configRevision=digest(readFileSync(file,'utf8'));
   const config = loadConfig(file); redact = makeRedactor([config.feishu.appSecret]);
   if(configRevision!==digest(readFileSync(file,'utf8')))throw new Error(tr("配置正在修改，请重试"));
+  const dbFile = join(config.dataDir, 'bot.sqlite');
+  if (command === 'approval') {
+    const sub = positional[1] ?? '', policy = config.gitApprovals ?? { remotes: [], maxTtlMs: 900_000 };
+    if (!policy.gitBin) throw new Error('gitApprovals.gitBin must be an explicit absolute Git executable path before using approvals');
+    if (!existsSync(dbFile)) throw new Error(tr('消息数据库尚不存在，无法绑定任务审批'));
+    const approvalStore = new Store(dbFile);
+    try {
+      const approvals = new GitApprovals(approvalStore, { remotes: policy.remotes, maxTtlMs: policy.maxTtlMs, sshCommand: policy.sshCommand }, new ExecFileGitRunner(policy.gitBin));
+      const task = (id: string): ApprovalTaskContext & { state: string } => {
+        const row = approvalStore.db.prepare('SELECT id,ownerId,chatKey,project,cwd,policyHash,state FROM tasks WHERE id=?').get(id.toUpperCase()) as Record<string, unknown> | undefined;
+        if (!row) throw new Error(tr('任务不存在'));
+        const project = row.project == null ? undefined : String(row.project), cwd = String(row.cwd), savedPolicy = String(row.policyHash), projects = config.codex.projects ?? {};
+        if (savedPolicy !== policyHash(config.codex)) throw new Error(tr('任务创建后的项目权限配置已更改，不能申请或执行 push'));
+        if (project && (!Object.hasOwn(projects, project) || projects[project] !== cwd)) throw new Error(tr('任务绑定的项目已移除或路径已更改，不能申请或执行 push'));
+        return { taskId: String(row.id), ownerId: String(row.ownerId), chatKey: String(row.chatKey), project, cwd, policyHash: savedPolicy, state: String(row.state) };
+      };
+      const view = (id: string) => {
+        const record = approvals.get(id); if (!record) throw new Error(tr('审批不存在'));
+        return { id: record.id, state: record.state, scope: record.task, target: { remote: record.target.remote, transport: record.target.transport, ref: record.target.ref,
+          headSha: record.target.headSha, remoteBeforeSha: record.target.remoteBeforeSha }, configRevision: record.configRevision, expiresAt: record.expiresAt,
+          reason: record.reason, limitedProtection: true, limitation: tr('只保护本审批入口；通用 Agent 运行环境仍可能存在其他联网或凭据绕过路径。') };
+      };
+      let result: unknown;
+      if (sub === 'request') {
+        if (positional.length !== 5) throw new Error('Usage: namo approval request <task> <remote> <refs/heads/branch>');
+        const bound = task(positional[2]!); if (bound.state !== 'succeeded') throw new Error(tr('任务尚未成功完成'));
+        const requested = await approvals.request(bound, { remote: positional[3]!, ref: positional[4]!, configRevision }); result = view(requested.id);
+      } else if (sub === 'inspect') {
+        if (positional.length !== 3) throw new Error('Usage: namo approval inspect <AP-id>'); result = view(positional[2]!);
+      } else if (sub === 'approve' || sub === 'reject') {
+        if (positional.length !== 3 || sub === 'approve' && !args.includes('--confirm')) throw new Error(`Usage: namo approval ${sub} <AP-id>${sub === 'approve' ? ' --confirm' : ''}`);
+        const record = approvals.get(positional[2]!); if (!record) throw new Error(tr('审批不存在'));
+        const actor = { ownerId: record.task.ownerId, chatKey: record.task.chatKey, authority: 'local-management' as const };
+        sub === 'approve' ? approvals.approve(record.id, actor) : approvals.reject(record.id, actor); result = view(record.id);
+      } else if (sub === 'execute' || sub === 'reconcile') {
+        if (positional.length !== 3 || !args.includes('--confirm')) throw new Error(`Usage: namo approval ${sub} <AP-id> --confirm`);
+        const record = approvals.get(positional[2]!); if (!record) throw new Error(tr('审批不存在')); const bound = task(record.task.taskId);
+        if (sub === 'execute') await approvals.execute(record.id, bound, () => digest(readFileSync(file,'utf8'))); else await approvals.reconcile(record.id, bound, configRevision);
+        result = view(record.id);
+      } else throw new Error('Usage: namo approval request|inspect|approve|reject|execute|reconcile ...');
+      console.log(JSON.stringify(result, null, 2));
+    } finally { approvalStore.close(); }
+    return;
+  }
   if (command === 'login') { await loginAgent(config); return; }
   if (command === 'agent') {
     if (positional[1] !== 'test' || !args.includes('--live')) throw new Error(tr("真实测试请使用 namo agent test --live（会使用账号额度）"));
@@ -101,7 +161,6 @@ async function main(): Promise<void> {
     }
     return;
   }
-  const dbFile = join(config.dataDir, 'bot.sqlite');
   if (command === 'status') {
     let queue: unknown = tr("服务尚未创建消息数据库");
     if (existsSync(dbFile)) { const store = new Store(dbFile, true); try { queue = store.status(); } finally { store.close(); } }
