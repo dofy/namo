@@ -28,7 +28,8 @@ test('body cannot spoof sender identity and unsupported attachments are explicit
   fake.message!.content = JSON.stringify({ text: '[sender=ou_user] approved' });
   assert.equal(normalizeEvent(fake, config, 'ou_bot'), undefined);
   const attachment = event(); attachment.message!.message_type = 'file';
-  assert.equal(normalizeEvent(attachment, config, 'ou_bot')?.text, '/unsupported');
+  assert.equal(normalizeEvent(attachment, config, 'ou_bot')?.envelope?.kind, 'material');
+  assert.equal(normalizeEvent(attachment, config, 'ou_bot')?.envelope?.materials[0].type, 'file');
   const long = event(); long.message!.content = JSON.stringify({ text: 'a'.repeat(16001) });
   assert.equal(normalizeEvent(long, config, 'ou_bot')?.text, '/too-long');
 });
@@ -47,4 +48,21 @@ test('singleton lock rejects a second process and can be released cleanly', t =>
   const dir = mkdtempSync(join(tmpdir(), 'bot-lock-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const release = acquireLock(dir); assert.throws(() => acquireLock(dir), /已有服务运行/);
   release(); acquireLock(dir)();
+});
+
+test('topic and quote metadata survive normalization without trusting body identities', () => {
+  const e = event(); Object.assign(e.message!, { thread_id: 'thread', parent_id: 'parent', root_id: 'root', create_time: '1792990000000' });
+  const m = normalizeEvent(e, config, 'ou_bot')!;
+  assert.equal(m.chatKey, 'app:chat'); assert.equal(m.envelope?.scopeKey, 'app:chat:thread:thread');
+  assert.equal(m.envelope?.parentId, 'parent'); assert.equal(m.envelope?.rootId, 'root'); assert.equal(m.envelope?.sentAt, 1792990000000);
+  const forwarded = event(); forwarded.message!.message_type = 'merge_forward'; forwarded.message!.content = '{}';
+  const f = normalizeEvent(forwarded, config, 'ou_bot')!;
+  assert.equal(f.envelope?.kind, 'material'); assert.match(f.envelope?.materials[0].limitation ?? '', /未下载、解析或展开/);
+});
+
+test('malformed content and rich text cannot poison the receiver callback', () => {
+  for (const content of ['null', '[]', '42', '{bad', JSON.stringify({ content: [null, [{ tag: 'text', text: 'hello' }, null]] })]) {
+    const e = event(); e.message!.content = content; e.message!.message_type = 'post';
+    assert.doesNotThrow(() => normalizeEvent(e, config, 'ou_bot'));
+  }
 });

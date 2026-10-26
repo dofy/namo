@@ -13,6 +13,12 @@ createInterface({input:process.stdin}).on('line', line=>{
  if(!m.method || m.id===undefined)return;
  if(m.method==='initialize')return write({id:m.id,result:{}});
  if(m.method==='thread/start'||m.method==='thread/resume')return write({id:m.id,result:{thread:{id:m.params.threadId||'thread-one'}}});
+ if(m.method==='turn/steer'){
+  if(m.params.expectedTurnId!=='turn-one')return write({id:m.id,error:{code:-32602,message:'wrong turn'}});
+  if(m.params.input[0].text==='reject')return write({id:m.id,error:{code:-32600,message:'rejected'}});
+  write({id:m.id,result:{turnId:'turn-one'}});
+  return write({method:'turn/completed',params:{threadId:m.params.threadId,turn:{id:'turn-one',status:'completed',items:[{id:'final',type:'agentMessage',phase:'final_answer',text:'steered answer'}]}}});
+ }
  if(m.method==='turn/start'){
   if(m.params.sandboxPolicy || m.params.permissions!=='feishu-bot')return write({id:m.id,error:{code:-32600,message:'legacy permissions rejected'}});
   const prompt=m.params.input[0].text;
@@ -65,4 +71,22 @@ test('cancellation kills the owned subprocess and rejects the turn', async t => 
   const abort = new AbortController();
   await assert.rejects(runtime.run({ cwd: dir, prompt: 'hang', signal: abort.signal,
     onThread: () => {}, onTurn: () => abort.abort() }), (e: unknown) => e instanceof RuntimeError && e.code === 'cancelled');
+});
+
+test('running input uses turn/steer with an exact turn receipt and explicit rejection is distinguishable', async t => {
+  const { dir, runtime } = fixture(t, 2000); const receipts: string[] = [];
+  let steering: Promise<void> | undefined;
+  const completed = await runtime.run({ cwd: dir, prompt: 'hang', signal: new AbortController().signal, onThread() {}, onTurn() {},
+    onReady(controls) { steering = (async () => {
+      receipts.push(await controls.steer('reject'));
+      receipts.push(await controls.steer('追加要求'));
+    })(); } });
+  await steering; assert.deepEqual(receipts, ['rejected', 'accepted']); assert.equal(completed.text, 'steered answer');
+});
+
+test('a turn completed before readiness never sends a steer to the next turn', async t => {
+  const { dir, runtime } = fixture(t); let receipt: Promise<string> | undefined;
+  await runtime.run({ cwd: dir, prompt: 'hello', signal: new AbortController().signal, onThread() {}, onTurn() {},
+    onReady(controls) { receipt = controls.steer('late amendment'); } });
+  assert.equal(await receipt, 'not_active');
 });

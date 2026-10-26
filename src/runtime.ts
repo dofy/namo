@@ -10,7 +10,9 @@ type Obj = Record<string, any>;
 export interface RunRequest {
   threadId?: string; cwd: string; prompt: string; signal: AbortSignal;
   onThread: (id: string) => void; onTurn: (id: string) => void;
+  onReady?: (controls: RunControls) => void;
 }
+export interface RunControls { steer(text: string): Promise<'accepted' | 'not_active' | 'rejected'>; }
 export interface RunResult { text: string; threadId: string; turnId: string; }
 export interface Runtime { run(request: RunRequest): Promise<RunResult>; }
 export class RuntimeError extends Error {
@@ -156,6 +158,7 @@ export class CodexRuntime implements Runtime {
     let timer: NodeJS.Timeout | undefined;
     let stopListening = () => {};
     let abort: () => void = () => {};
+    let completed = false;
     try {
       await rpc.request('initialize', { clientInfo: { name: 'feishu_codex_bot', title: 'Feishu Codex Bot', version: '0.1.0' }, capabilities: { experimentalApi: true } });
       rpc.notify('initialized');
@@ -183,6 +186,7 @@ export class CodexRuntime implements Runtime {
           if (params.threadId !== threadId) return;
           if (method === 'item/completed' && params.item?.type === 'agentMessage') messages.set(params.item.id, params.item);
           if (method !== 'turn/completed') return;
+          completed = true;
           const turn = params.turn;
           if (turn?.status !== 'completed') { reject(new RuntimeError(turn?.status === 'interrupted' ? 'cancelled' : 'turn_failed')); return; }
           for (const item of turn.items ?? []) if (item.type === 'agentMessage') messages.set(item.id, item);
@@ -203,6 +207,19 @@ export class CodexRuntime implements Runtime {
       // schema. Select the same restricted profile on both thread and turn.
       const turn = await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: r.prompt }], approvalPolicy: 'never', permissions: 'feishu-bot' });
       r.onTurn(turn.turn.id);
+      r.onReady?.({ steer: async text => {
+        if (completed || r.signal.aborted) return 'not_active';
+        try {
+          const result = await rpc.request('turn/steer', { threadId, expectedTurnId: turn.turn.id, input: [{ type: 'text', text }] });
+          if (result.turnId !== turn.turn.id) throw new RuntimeError('steer_receipt_mismatch');
+          return 'accepted';
+        } catch (e) {
+          // An explicit protocol rejection is known not to have accepted input.
+          // Timeout/disconnect/mismatched receipt remain ambiguous to the caller.
+          if (e instanceof RuntimeError && /^rpc_-\d+$/.test(e.code)) return 'rejected';
+          throw e;
+        }
+      } });
       if (r.signal.aborted) abort();
       return await completion;
     } finally {

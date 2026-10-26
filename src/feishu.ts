@@ -2,11 +2,13 @@ import * as lark from '@larksuiteoapi/node-sdk';
 import type { Config } from './config.js';
 import type { Incoming } from './store.js';
 import { SendError, type Sender } from './engine.js';
+import type { Material } from './messages.js';
 
 export interface FeishuEvent {
   sender?: { sender_type?: string; sender_id?: { open_id?: string } };
   message?: {
     message_id?: string; chat_id?: string; chat_type?: string; message_type?: string;
+    thread_id?: string; parent_id?: string; root_id?: string; create_time?: string;
     content?: string; mentions?: { key: string; id?: { open_id?: string } }[];
   };
 }
@@ -20,26 +22,45 @@ export function normalizeEvent(event: FeishuEvent, config: Config['feishu'], bot
   const mentioned = m.mentions?.filter(x => x.id?.open_id === botId) ?? [];
   if (m.chat_type !== 'p2p' && config.requireMention && !mentioned.length) return;
   let text = '';
+  const materials: Material[] = [];
+  const limitations: string[] = [];
   let content: any;
   try { content = JSON.parse(m.content ?? '{}'); } catch { content = {}; }
+  if (!content || typeof content !== 'object' || Array.isArray(content)) content = {};
   if (m.message_type === 'text') text = typeof content.text === 'string' ? content.text : '';
   else if (m.message_type === 'post') {
     const post = content.content ? content : content.zh_cn ?? content.en_us ?? Object.values(content)[0];
     if (post && typeof post === 'object') {
-      text = [post.title, ...(post.content ?? []).map((row: any[]) => row.map(item => {
+      text = [post.title, ...(Array.isArray(post.content) ? post.content : []).filter(Array.isArray).map((row: any[]) => row.map(item => {
+        if (!item || typeof item !== 'object') return '';
         if (item.tag === 'text') return item.text ?? '';
         if (item.tag === 'a') return `${item.text ?? ''} (${item.href ?? ''})`;
         if (item.tag === 'at') return `[提及 ${item.user_name ?? item.user_id ?? ''}]`;
+        materials.push({ type: String(item.tag ?? 'unknown').slice(0, 48), resourceKey: typeof item.image_key === 'string' ? item.image_key.slice(0, 512) : undefined,
+          limitation: '仅保存资源描述，尚未读取内容' });
         return '[此富文本元素暂不支持读取]';
       }).join(''))].filter(Boolean).join('\n');
     }
-  } else text = '/unsupported';
+  } else {
+    materials.push({ type: m.message_type ?? 'unknown', resourceKey: typeof content.file_key === 'string' ? content.file_key.slice(0, 512)
+      : typeof content.image_key === 'string' ? content.image_key.slice(0, 512) : undefined,
+      name: typeof content.file_name === 'string' ? content.file_name.slice(0, 256) : undefined,
+      limitation: '当前仅保存资源描述，未下载、解析或展开转发内容' });
+    limitations.push('此消息的实际内容尚未读取，不能据占位符推断内容');
+    text = '';
+  }
   for (const mention of mentioned) text = text.split(mention.key).join('');
   text = text.trim();
-  if (!text) text = '/help';
+  if (!text && !materials.length) text = '/help';
   if (text.length > 16_000) text = '/too-long';
+  const chatKey = `${config.appId}:${m.chat_id}`;
+  const scopeKey = m.thread_id ? `${chatKey}:thread:${m.thread_id}` : chatKey;
   return { key: `${config.appId}:${m.message_id}`, messageId: m.message_id,
-    chatKey: `${config.appId}:${m.chat_id}`, chatId: m.chat_id, senderId, text };
+    chatKey, chatId: m.chat_id, senderId, text,
+    envelope: { version: 1, type: m.message_type ?? 'unknown', kind: !text && materials.length ? 'material' : 'instruction', scopeKey,
+      threadId: m.thread_id, parentId: m.parent_id, rootId: m.root_id,
+      sentAt: m.create_time && /^\d+$/.test(m.create_time) ? Number(m.create_time) : undefined,
+      materials: materials.slice(0, 30), limitations } };
 }
 
 export class FeishuTransport implements Sender {

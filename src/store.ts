@@ -2,12 +2,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import type { Envelope } from './messages.js';
 
 export interface Incoming {
   key: string; messageId: string; chatKey: string; chatId: string;
-  senderId: string; text: string; createdAt?: number;
+  senderId: string; text: string; createdAt?: number; envelope?: Envelope;
 }
-export interface Inbox extends Incoming { seq: number; state: string; cancelRequested: number; }
+export interface Inbox extends Incoming { seq: number; state: string; cancelRequested: number; taskId?: string; materialUntil?: number; }
 export interface Outbox {
   id: number; inboxKey: string; chatId: string; kind: string; part: number;
   content: string; uuid: string; state: string; platformId: string | null;
@@ -15,11 +16,13 @@ export interface Outbox {
 
 export class Store {
   readonly db: DatabaseSync;
+  private transactionDepth = 0;
   constructor(file: string, readOnly = false) {
     if (readOnly) { this.db = new DatabaseSync(file, { readOnly: true }); return; }
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(file);
     chmodSync(file, 0o600);
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) > 1) { this.db.close(); throw new Error('数据库版本较新，请使用对应版本的 Namo'); }
     this.db.exec(`
       PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
       PRAGMA foreign_keys=ON;
@@ -44,11 +47,48 @@ export class Store {
         UNIQUE(inboxKey,kind,part)
       );
     `);
+    this.transaction(() => {
+      const columns = new Set((this.db.prepare('PRAGMA table_info(inbox)').all() as { name: string }[]).map(x => x.name));
+      for (const [name, type] of [['envelope', 'TEXT'], ['taskId', 'TEXT'], ['materialUntil', 'INTEGER']]) {
+        if (!columns.has(name)) this.db.exec(`ALTER TABLE inbox ADD COLUMN ${name} ${type}`);
+      }
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS workstreams (
+          id TEXT PRIMARY KEY, chatKey TEXT NOT NULL, scopeKey TEXT NOT NULL, ownerId TEXT NOT NULL,
+          project TEXT, cwd TEXT NOT NULL, policyHash TEXT NOT NULL, createdAt INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS bindings (
+          scopeKey TEXT NOT NULL, ownerId TEXT NOT NULL, workstreamId TEXT NOT NULL REFERENCES workstreams(id),
+          PRIMARY KEY(scopeKey,ownerId)
+        );
+        CREATE TABLE IF NOT EXISTS tasks (
+          id TEXT PRIMARY KEY, inboxKey TEXT NOT NULL UNIQUE REFERENCES inbox(key),
+          workstreamId TEXT NOT NULL REFERENCES workstreams(id), ownerId TEXT NOT NULL,
+          chatKey TEXT NOT NULL, scopeKey TEXT NOT NULL, project TEXT, cwd TEXT NOT NULL, policyHash TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'queued', inputVersion INTEGER NOT NULL DEFAULT 1,
+          startedAt INTEGER, finishedAt INTEGER, error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS tasks_queue ON tasks(state);
+        CREATE TABLE IF NOT EXISTS task_messages (
+          taskId TEXT NOT NULL REFERENCES tasks(id), inboxKey TEXT NOT NULL REFERENCES inbox(key),
+          role TEXT NOT NULL, version INTEGER NOT NULL, dispatch TEXT NOT NULL DEFAULT 'pending',
+          PRIMARY KEY(taskId,inboxKey), UNIQUE(inboxKey)
+        );
+        CREATE TABLE IF NOT EXISTS task_runs (
+          id TEXT PRIMARY KEY, taskId TEXT NOT NULL REFERENCES tasks(id), inputVersion INTEGER NOT NULL,
+          state TEXT NOT NULL, threadId TEXT, turnId TEXT, startedAt INTEGER NOT NULL, finishedAt INTEGER, error TEXT
+        );
+        PRAGMA user_version=1;
+      `);
+    });
   }
   transaction<T>(fn: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
-    try { const value = fn(); this.db.exec('COMMIT'); return value; }
-    catch (e) { this.db.exec('ROLLBACK'); throw e; }
+    const savepoint = this.transactionDepth ? `namo_${this.transactionDepth}` : undefined;
+    this.db.exec(savepoint ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+    this.transactionDepth++;
+    try { const value = fn(); this.db.exec(savepoint ? `RELEASE ${savepoint}` : 'COMMIT'); return value; }
+    catch (e) { this.db.exec(savepoint ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK'); throw e; }
+    finally { this.transactionDepth--; }
   }
   bindAccount(appId: string): void {
     this.transaction(() => {
@@ -58,15 +98,20 @@ export class Store {
     });
   }
   enqueue(m: Incoming): boolean {
-    return this.db.prepare('INSERT OR IGNORE INTO inbox(key,messageId,chatKey,chatId,senderId,text,createdAt) VALUES(?,?,?,?,?,?,?)')
-      .run(m.key, m.messageId, m.chatKey, m.chatId, m.senderId, m.text, m.createdAt ?? Date.now()).changes === 1;
+    return this.db.prepare('INSERT OR IGNORE INTO inbox(key,messageId,chatKey,chatId,senderId,text,createdAt,envelope) VALUES(?,?,?,?,?,?,?,?)')
+      .run(m.key, m.messageId, m.chatKey, m.chatId, m.senderId, m.text, m.createdAt ?? Date.now(), m.envelope ? JSON.stringify(m.envelope) : null).changes === 1;
   }
-  get(key: string): Inbox | undefined { return this.db.prepare('SELECT * FROM inbox WHERE key=?').get(key) as unknown as Inbox | undefined; }
+  decode(row: unknown): Inbox | undefined {
+    if (!row) return;
+    const value = row as Inbox & { envelope?: Envelope | string | null };
+    return { ...value, envelope: typeof value.envelope === 'string' ? JSON.parse(value.envelope) as Envelope : value.envelope ?? undefined } as Inbox;
+  }
+  get(key: string): Inbox | undefined { return this.decode(this.db.prepare('SELECT * FROM inbox WHERE key=?').get(key)); }
   next(excluded: string[]): Inbox | undefined {
     const rows = this.db.prepare(`SELECT i.* FROM inbox i WHERE i.state='queued'
       AND NOT EXISTS (SELECT 1 FROM inbox p WHERE p.chatKey=i.chatKey AND p.seq<i.seq
         AND p.state IN ('queued','running','awaiting_reply')) ORDER BY i.seq LIMIT 100`).all() as unknown as Inbox[];
-    return rows.find(r => !excluded.includes(r.chatKey));
+    return this.decode(rows.find(r => !excluded.includes(r.chatKey)));
   }
   claim(key: string): boolean { return this.db.prepare("UPDATE inbox SET state='running' WHERE key=? AND state='queued'").run(key).changes === 1; }
   thread(chatKey: string): string | undefined { return (this.db.prepare('SELECT threadId FROM sessions WHERE chatKey=?').get(chatKey) as { threadId: string } | undefined)?.threadId; }
