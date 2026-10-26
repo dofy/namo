@@ -26,13 +26,13 @@ Namo 管理消息、队列、项目、会话和执行边界；任务理解与工
 
 ## 快速开始
 
-需要 Node.js **24.15+**、npm、已安装的官方 Codex CLI，以及具备机器人能力的飞书自建应用。当前实现已在 Codex CLI **0.154.0** 上验证；升级后应重跑协议及权限检查。
+需要 Node.js **24.15+**、pnpm **12.15.0**、已安装的官方 Codex CLI，以及具备机器人能力的飞书自建应用。当前实现已在 Codex CLI **0.154.0** 上验证；升级后应重跑协议及权限检查。包管理器版本由 `packageManager` 固定，依赖以 `pnpm-lock.yaml` 为准。
 
 ```sh
 git clone git@github.com:dofy/namo.git
 cd namo
-npm ci
-npm run build
+pnpm install --frozen-lockfile
+pnpm run build
 # 仅在首次配置时执行，已有文件请勿覆盖
 cp config.example.json config.local.json
 chmod 600 config.local.json
@@ -44,13 +44,13 @@ chmod 600 config.local.json
 
 ```sh
 # 使用独立的 data/codex-home 完成官方登录
-npm run login
-npm run check
-npm run smoke:codex
-npm start
+pnpm run login
+pnpm run check
+pnpm run smoke:codex
+pnpm start
 ```
 
-看到 `ready` 后私聊机器人；群里需要 @ bot。真实模型 smoke 可运行 `npm run smoke:codex -- --run`，会使用账号额度。
+看到 `ready` 后私聊机器人；群里需要 @ bot。真实模型 smoke 可运行 `pnpm run smoke:codex -- --run`，会使用账号额度。
 
 ## 在项目中工作
 
@@ -93,12 +93,12 @@ npm start
 
 ```sh
 # macOS：安装或卸载自动启动，保留配置和数据
-npm run service:install
-npm run service:uninstall
+pnpm run service:install
+pnpm run service:uninstall
 
 # 本地状态和验证
-npm run status
-npm test
+pnpm run status
+pnpm test
 ```
 
 自动启动不会继承终端中临时导出的 Secret。现有服务更新代码或配置后，先编译，再卸载并重新安装服务；不要删除 `data/`。

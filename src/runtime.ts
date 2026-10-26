@@ -53,6 +53,11 @@ class Rpc {
       '-c', `permissions.feishu-bot.network.enabled=${policy?.networkAccess === true}`], {
       env: { ...codexEnvironment(home), npm_config_script_shell: '/bin/sh',
         npm_config_userconfig: '/dev/null', npm_config_cache: join(tmpdir(), 'feishu-codex-bot-npm'),
+        pnpm_config_script_shell: '/bin/sh', pnpm_config_npmrc_auth_file: '/dev/null',
+        pnpm_config_cache_dir: join(tmpdir(), 'namo-pnpm-cache'),
+        pnpm_config_store_dir: join(tmpdir(), 'namo-pnpm-store'),
+        pnpm_config_state_dir: join(tmpdir(), 'namo-pnpm-state'),
+        NPM_CONFIG_USERCONFIG: '/dev/null', XDG_CONFIG_HOME: join(tmpdir(), 'namo-tool-config'),
         GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' },
       stdio: 'pipe', detached: process.platform !== 'win32',
     });

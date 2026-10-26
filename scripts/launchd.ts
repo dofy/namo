@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, validateFeishu } from '../src/config.js';
 import { codexEnvironment } from '../src/safety.js';
 
-if (process.platform !== 'darwin') throw new Error('此脚本仅支持 macOS launchd；其它平台直接 npm start');
+if (process.platform !== 'darwin') throw new Error('此脚本仅支持 macOS launchd；其它平台直接 pnpm start');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const label = 'local.feishu-codex-bot';
 const file = join(homedir(), 'Library/LaunchAgents', `${label}.plist`);
@@ -20,7 +20,7 @@ if (mode === 'uninstall') {
   const config = loadConfig(join(root, 'config.local.json'));
   validateFeishu(config);
   const auth = spawnSync(config.codex.bin, ['login', 'status'], { env: codexEnvironment(config.codex.home), stdio: 'pipe', timeout: 15_000 });
-  if (auth.status !== 0) throw new Error('请先 npm run login');
+  if (auth.status !== 0) throw new Error('请先 pnpm run login');
   if (existsSync(file)) throw new Error('服务配置已存在；先 service:uninstall 再安装');
   mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
   mkdirSync(dirname(file), { recursive: true });

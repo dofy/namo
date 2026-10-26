@@ -39,7 +39,7 @@ async function main(): Promise<void> {
     try { validateFeishu(config); } catch (e) { feishu = (e as Error).message; }
     console.log(JSON.stringify({ node: process.version, codexLoggedIn: auth.status === 0,
       codexHome: config.codex.home, feishuConfig: feishu, dataDir: config.dataDir,
-      next: auth.status === 0 ? '配置完成后 npm start' : '先运行 npm run login 完成 bot 专用 Codex 登录' }, null, 2));
+      next: auth.status === 0 ? '配置完成后 pnpm start' : '先运行 pnpm run login 完成 bot 专用 Codex 登录' }, null, 2));
     if (auth.status !== 0 || feishu !== 'ready') process.exitCode = 1;
     return;
   }
@@ -50,7 +50,7 @@ async function main(): Promise<void> {
   }
   if (command !== 'start') throw new Error('命令：start / check / login / status [--config 路径]');
   validateFeishu(config);
-  if (probe().status !== 0) throw new Error('bot 的 Codex 尚未登录，请先运行 npm run login');
+  if (probe().status !== 0) throw new Error('bot 的 Codex 尚未登录，请先运行 pnpm run login');
   const release = acquireLock(config.dataDir);
   let store: Store | undefined;
   let engine: Engine | undefined;

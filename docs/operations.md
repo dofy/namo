@@ -17,12 +17,12 @@
 
 ## 启动
 
-需要 Node.js 24.15+、npm、已安装的官方 `codex` CLI。本项目已在 codex-cli 0.154.0 上验证协议握手。CLI 升级后先运行 smoke 和测试。
+需要 Node.js 24.15+、pnpm 12.15.0、已安装的官方 `codex` CLI。本项目已在 codex-cli 0.154.0 上验证协议握手。CLI 升级后先运行 smoke 和测试。
 
 ```sh
 cd /absolute/path/to/namo
-npm ci
-npm run build
+pnpm install --frozen-lockfile
+pnpm run build
 cp config.example.json config.local.json
 chmod 600 config.local.json
 ```
@@ -41,11 +41,11 @@ chmod 600 config.local.json
 本项目使用独立的 `data/codex-home`。通过官方流程登录：
 
 ```sh
-npm run login
-npm run check
-npm run smoke:codex
+pnpm run login
+pnpm run check
+pnpm run smoke:codex
 # 登录后验证一次真实模型调用（会占用账号额度）
-npm run smoke:codex -- --run
+pnpm run smoke:codex -- --run
 ```
 
 独立登录避免加载你日常 Codex 的 MCP、插件和私人项目配置。不会复制 OpenClaw 凭据、修改已有 Codex 配置或设置第三方模型入口。不要把 `codex.home` 指向日常 Codex 目录来省略登录。
@@ -73,16 +73,16 @@ npm run smoke:codex -- --run
 
 飞书发送 `/project` 查看当前目录和项目列表，`/project bot` 切换。仅能选择本地配置中的项目；切换会清理上下文，正在执行或排队时拒绝切换。第一次从原隔离工作区进入项目也会开始新上下文。新增项目需在本地 `codex.projects` 中添加名称和绝对路径，然后重启服务；不会根据模型输出自动扩大目录权限。普通代码文件可修改或删除，因此执行破坏性操作前仍需用户明确指示。
 
-命令可以运行测试、构建和访问网络。npm 使用 `/bin/sh` 执行脚本、独立临时缓存及空用户配置，不继承个人 npm 登录凭据；私有包、SSH、推送和部署可能需要另外配置，不会自动接入你的账号。本地修改、测试和提交可作为开发流程直接完成，只提交本次任务相关文件。Git 命令不加载个人全局/系统配置及认证助手；每个项目需有自己的仓库局部作者姓名和邮箱；不会自动导入个人 Git 认证凭据。
+命令可以运行测试、构建和访问网络。pnpm 与兼容的 npm 命令使用 `/bin/sh` 执行脚本，并使用独立临时缓存与空用户认证配置；pnpm 配置目录也与个人环境隔离，不继承个人包仓库登录凭据；私有包、SSH、推送和部署可能需要另外配置，不会自动接入你的账号。本地修改、测试和提交可作为开发流程直接完成，只提交本次任务相关文件。Git 命令不加载个人全局/系统配置及认证助手；每个项目需有自己的仓库局部作者姓名和邮箱；不会自动导入个人 Git 认证凭据。
 
 推送和部署前必须先列明仓库、分支、提交或部署环境，在对话中等待用户后续确认；一般开发请求不算确认，目标或内容变化需要重新确认。脚本和 hooks 内的推送、部署也适用。当前确认由每轮注入的 bot 指令约束，没有实现命令级强制拦截或通用发布审批引擎。未经明确要求不会安装依赖。
 
 修改配置或代码后：
 
 ```sh
-npm run build
-npm run service:uninstall
-npm run service:install
+pnpm run build
+pnpm run service:uninstall
+pnpm run service:install
 ```
 
 当前 Codex 0.154.0 使用命名权限配置 `feishu-bot`，并允许读取 Codex 自身安装目录以启动辅助进程；不自动扫描主机和祖先目录的 AGENTS.md；服务显式加载当前项目根目录的普通 AGENTS.md 文件，拒绝符号链接，子目录约定需要执行器按任务读取。权限接口需启用 app-server 的 experimentalApi。已实测原只读边界，并在项目开发模式下验证代码修改、命令、构建及联网；项目外测试文件和 bot 配置仍被拒绝。升级 CLI 后应重新验证这些边界。
@@ -94,7 +94,7 @@ npm run service:install
 3. 前台运行：
 
 ```sh
-npm start
+pnpm start
 ```
 
 看到日志 `ready` 才代表长连接已就绪。私聊 bot：`你好，只回复连接成功`；随后问一个承接上文的问题验证会话续接。群里 @ bot 发送同样的消息。
@@ -103,9 +103,9 @@ npm start
 5. 确认前台运行正常后，可安装自动启动：
 
 ```sh
-npm run service:install
+pnpm run service:install
 # 卸载服务，保留配置和数据
-npm run service:uninstall
+pnpm run service:uninstall
 ```
 
 launchd 不继承终端临时导出的 Secret。使用自动启动时，推荐把 Secret 放在权限 600 的本地配置；脚本不会把凭据写进 plist。
@@ -115,7 +115,7 @@ launchd 不继承终端临时导出的 Secret。使用自动启动时，推荐�
 ## 状态与恢复语义
 
 ```sh
-npm run status
+pnpm run status
 tail -f data/service.log
 ```
 
@@ -140,10 +140,18 @@ Mac 休眠/断网期间不提供在线服务。此版依赖飞书重投和 SDK �
 ## 开发与验证
 
 ```sh
-npm test
-npm run smoke:codex
+pnpm test
+pnpm run smoke:codex
 ```
 
 测试使用真实 SQLite 文件与实际子进程 JSON-RPC 模拟器，覆盖：持久去重、同群顺序、全局并发、重启恢复、取消、消息分段、发送不确定性、模型断流/失败/超时，以及身份与凭据边界。不会连接飞书或发送消息。
 
 参考：[Codex app-server](https://learn.chatgpt.com/docs/app-server)、[飞书官方 Node SDK](https://github.com/larksuite/node-sdk)。
+
+## pnpm 依赖管理
+
+使用 `packageManager` 固定的 pnpm 12.15.0 和 `pnpm-lock.yaml`；安装依赖运行 `pnpm install --frozen-lockfile`，新增依赖使用 `pnpm add`，不要生成 npm 或 Yarn 锁文件。
+
+`pnpm-workspace.yaml` 保存单包项目的 pnpm 设置，并不引入额外子项目。`saveExact` 保持直接依赖精确版本；protobufjs 的 postinstall 仅检查依赖版本格式，已显式禁止，实际 SDK 导入和测试已验证。
+
+迁移保留原 npm 锁文件中的全部 73 个依赖版本。pnpm 的默认发布时间策略会回退发布未满 24 小时的版本，因此仅为迁移前已经锁定的 `follow-redirects@1.16.2` 保留精确版本例外；没有全局关闭发布时间保护。

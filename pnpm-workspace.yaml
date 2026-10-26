@@ -1,0 +1,6 @@
+saveExact: true
+allowBuilds:
+  protobufjs: false
+# Preserve the exact patch already locked before the package manager migration.
+minimumReleaseAgeExclude:
+  - follow-redirects@1.16.2
