@@ -148,7 +148,7 @@ for (const outcome of ['success', 'cancel', 'unknown-send'] as const) test('engi
     return { text: 'MODEL_ANSWER', threadId: 'thread', turnId: 'turn' };
   } };
   const engine = new Engine(store, runtime, { async send(_c, text, uuid) {
-    if (text.includes('执行记录')) { attempts++; if (outcome === 'unknown-send') throw new SendError(true, 'timeout'); }
+    if (text.includes('检查命令')) { attempts++; if (outcome === 'unknown-send') throw new SendError(true, 'timeout'); }
     return uuid;
   } }, { dataDir: dir, concurrency: 1 });
   t.after(async () => { await engine.stop(); store.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -159,7 +159,7 @@ for (const outcome of ['success', 'cancel', 'unknown-send'] as const) test('engi
   }
   const task = new Tasks(store).get(store.get('input')!.taskId!)!, [report] = readEvidence(store, task.id);
   assert.equal(report.items.length, 1); assert.equal(report.state, outcome === 'cancel' ? 'partial' : 'finished');
-  assert.match(String(store.db.prepare("SELECT content FROM outbox WHERE kind='result'").get()?.content), /执行记录/);
+  assert.match(String(store.db.prepare("SELECT content FROM outbox WHERE kind='result'").get()?.content), /检查命令/);
   await engine.pump(); assert.equal(calls, 1); assert.equal(attempts, 1);
   if (outcome === 'unknown-send') assert.equal(store.get('input')?.state, 'delivery_unknown');
 });

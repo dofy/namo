@@ -14,7 +14,7 @@ export interface Outbox {
   content: string; uuid: string; state: string; platformId: string | null;
   payload?: string | null;
 }
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 7;
 
 export class Store {
   readonly db: DatabaseSync;
@@ -72,6 +72,10 @@ export class Store {
           startedAt INTEGER, finishedAt INTEGER, error TEXT
         );
         CREATE INDEX IF NOT EXISTS tasks_queue ON tasks(state);
+        CREATE INDEX IF NOT EXISTS tasks_workstream ON tasks(workstreamId);
+        CREATE INDEX IF NOT EXISTS tasks_owner ON tasks(ownerId);
+        CREATE INDEX IF NOT EXISTS inbox_created ON inbox(createdAt,seq);
+        CREATE INDEX IF NOT EXISTS bindings_workstream ON bindings(workstreamId);
         CREATE TABLE IF NOT EXISTS task_messages (
           taskId TEXT NOT NULL REFERENCES tasks(id), inboxKey TEXT NOT NULL REFERENCES inbox(key),
           role TEXT NOT NULL, version INTEGER NOT NULL, dispatch TEXT NOT NULL DEFAULT 'pending',
@@ -115,8 +119,19 @@ export class Store {
           seq INTEGER PRIMARY KEY AUTOINCREMENT, runId TEXT NOT NULL REFERENCES runner_jobs(runId),
           kind TEXT NOT NULL, createdAt INTEGER NOT NULL
         );
-        PRAGMA user_version=5;
+        CREATE TABLE IF NOT EXISTS task_waits (
+          id TEXT PRIMARY KEY, taskId TEXT NOT NULL REFERENCES tasks(id),
+          runId TEXT NOT NULL UNIQUE REFERENCES task_runs(id),
+          threadId TEXT NOT NULL, turnId TEXT NOT NULL, callId TEXT NOT NULL,
+          question TEXT NOT NULL, inputVersion INTEGER NOT NULL,
+          state TEXT NOT NULL, createdAt INTEGER NOT NULL, settledAt INTEGER,
+          replyInboxKey TEXT UNIQUE REFERENCES inbox(key), replyVersion INTEGER,
+          UNIQUE(threadId,turnId,callId)
+        );
       `);
+      const waitColumns = new Set(this.db.prepare('PRAGMA table_info(task_waits)').all().map(row => row.name));
+      if (!waitColumns.has('choices')) this.db.exec('ALTER TABLE task_waits ADD COLUMN choices TEXT');
+      this.db.exec('PRAGMA user_version=7');
       const outputColumns = new Set((this.db.prepare('PRAGMA table_info(outbox)').all() as { name: string }[]).map(x => x.name));
       if (!outputColumns.has('payload')) this.db.exec('ALTER TABLE outbox ADD COLUMN payload TEXT');
     });
@@ -149,7 +164,7 @@ export class Store {
   next(excluded: string[]): Inbox | undefined {
     const rows = this.db.prepare(`SELECT i.* FROM inbox i WHERE i.state='queued'
       AND NOT EXISTS (SELECT 1 FROM inbox p WHERE p.chatKey=i.chatKey AND p.seq<i.seq
-        AND p.state IN ('queued','running','awaiting_reply')) ORDER BY i.seq LIMIT 100`).all() as unknown as Inbox[];
+        AND p.state IN ('queued','running','waiting','awaiting_reply')) ORDER BY i.seq LIMIT 100`).all() as unknown as Inbox[];
     return this.decode(rows.find(r => !excluded.includes(r.chatKey)));
   }
   claim(key: string): boolean { return this.db.prepare("UPDATE inbox SET state='running' WHERE key=? AND state='queued'").run(key).changes === 1; }
@@ -172,7 +187,7 @@ export class Store {
     });
   }
   hasPending(chatKey: string, except: string): boolean {
-    return !!this.db.prepare("SELECT 1 FROM inbox WHERE chatKey=? AND key!=? AND state IN ('queued','running','awaiting_reply') LIMIT 1").get(chatKey, except);
+    return !!this.db.prepare("SELECT 1 FROM inbox WHERE chatKey=? AND key!=? AND state IN ('queued','running','waiting','awaiting_reply') LIMIT 1").get(chatKey, except);
   }
   saveRun(key: string, threadId: string, turnId?: string): void { this.db.prepare('UPDATE inbox SET threadId=?,turnId=? WHERE key=?').run(threadId, turnId ?? null, key); }
   addOutput(key: string, kind: string, content: string): void {

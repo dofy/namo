@@ -1,5 +1,5 @@
 /** Browser-visible projections only. Never include configuration or auth secrets. */
-export const uiRoutes = { tasks: '/', settings: '/settings', profiles: '/profiles', connections: '/connections' } as const;
+export const uiRoutes = { dashboard: '/', tasks: '/tasks', sessions: '/sessions', settings: '/settings', profiles: '/profiles', connections: '/connections' } as const;
 export type UiPage = keyof typeof uiRoutes;
 
 export interface ConfigValues {
@@ -28,6 +28,28 @@ export interface ConfigView {
 export interface TaskSummary {
   id: string; workstreamId: string; project: string | null; state: string; inputVersion: number;
   startedAt: number | null; finishedAt: number | null; error: string | null;
+}
+export interface TaskListItem extends TaskSummary {
+  title: string; ownerId: string; ownerName: string; createdAt: number;
+}
+export interface SessionSummary {
+  id: string; title: string; latestTitle: string; ownerId: string; ownerName: string; project: string | null;
+  createdAt: number; lastActiveAt: number; taskCount: number; current: boolean;
+  state: 'running' | 'waiting' | 'queued' | 'idle';
+}
+export interface BrowseOptions {
+  users: { id: string; name: string }[]; projects: string[];
+}
+export interface PageResult<T> { items: T[]; total: number; page: number; pageSize: number; pages: number }
+export interface TaskList extends PageResult<TaskListItem> { session: SessionSummary | null }
+export interface Dashboard {
+  generatedAt: number; timeZone: string; today: number; weekStart: number;
+  totalTasks: number; totalSessions: number; activeUsers: number;
+  running: number; waiting: number; queued: number; completedToday: number;
+  successRate: number | null; averageDurationMs: number | null;
+  failed: number; deliveryIssues: number;
+  daily: { date: string; from: number; count: number }[];
+  recent: TaskListItem[];
 }
 export type ResolutionAction = 'received' | 'retry' | 'dismiss' | 'reviewed';
 export interface Issue {
@@ -58,11 +80,13 @@ export interface ProfileState { available: boolean; reason?: string; configRevis
 export interface TaskDetail {
   id: string; workstream: string; project: string | null; cwd: string; execution: string; inputVersion: number;
   startedAt: number | null; finishedAt: number | null; error: string | null;
+  title?: string; ownerId?: string; ownerName?: string; createdAt?: number;
   messages: { role: string; version: number; dispatch: string }[];
   runs: { id: string; inputVersion: number; state: string; startedAt: number; finishedAt: number | null; error: string | null }[];
   delivery: { kind: string; part: number; state: string; error: string | null }[];
   results: { content: string; state: string; part: number }[];
   evidence?: RunEvidence[];
+  waits?: { id: string; runId: string; question: string; state: string; createdAt: number; settledAt: number | null }[];
   runners?: { runId: string; state: string; pid: number | null; createdAt: number; updatedAt: number; error: string | null;
     events: { kind: string; createdAt: number }[] }[];
 }

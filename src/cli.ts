@@ -1,3 +1,4 @@
+import { t as tr, withLocale } from './locale.js';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from './config.js';
@@ -14,56 +15,41 @@ import { doctor } from './doctor.js';
 import { TerminalPrompter, Cancelled } from './prompts.js';
 import { onboard } from './onboarding.js';
 import { serviceAction, serviceStatus, assertNoLegacyReceiver } from './service.js';
+import { currentRuntimeRelease } from './release.js';
+import { parseLocale, systemLocale } from './i18n.js';
+import { PROJECT_URL } from './project.js';
 
 process.umask(0o077);
 const args = process.argv.slice(2);
-const positional = args.filter((a, i) => !a.startsWith('-') && (i === 0 || args[i - 1] !== '--config'));
+const positional = args.filter((a, i) => !a.startsWith('-') && (i === 0 || !['--config', '--lang'].includes(args[i - 1])));
+const startupRelease = positional[0] === 'start' ? currentRuntimeRelease(import.meta.url) : undefined;
 function flag(name: string): string | undefined {
   const i = args.indexOf(name);
   if (i < 0) return;
-  if (!args[i + 1] || args[i + 1].startsWith('--')) throw new Error(`${name} 需要一个路径`);
+  if (!args[i + 1] || args[i + 1].startsWith('--')) throw new Error(tr("{0} 需要一个路径", name));
   return args[i + 1];
 }
-const HELP = `Namo · 飞书连接本地 Agent（首版支持 Codex）
-
-用法：namo <命令> [--config 路径]
-  init                 可恢复的交互初始化、飞书引导和用户配对
-  doctor [--live]       分层诊断；--live 会调用模型并使用账号额度
-  agent list           探测本机执行器，标明尚未支持的后端
-  agent test --live     真实 Codex 响应测试（会使用账号额度）
-  login                登录 Namo 独立的官方 Codex 环境
-  start                前台接收（Ctrl+C 停止接收，已开工任务继续）
-  status               消息队列和后台服务状态
-  logs                 最近 80 行日志（自动脱敏）
-  service <操作>       install / status / start / stop / restart / uninstall
-  ui                   打开仅本机可访问的管理界面（Ctrl+C 关闭）
-  issues               列出待核对异常
-  issue <编号>         查看异常与核对版本
-  resolve <编号> <版本> <动作> <依据> --confirm
-                       received / retry / dismiss / reviewed；不会重跑模型
-  config path          显示当前配置文件位置
-
---json 可用于 doctor / agent list / status。未指定配置时优先使用
-NAMO_CONFIG、当前目录已有 config.local.json，再使用系统用户目录。
-首版后台服务管理仅支持 macOS；其他平台可使用前台模式。
-初始化不会自动安装 Agent、迁移 OpenClaw 或发布应用。`;
+const help = () => tr("Namo · 飞书连接本地 Agent（首版支持 Codex）\n\n用法：namo <命令> [--config 路径]\n  init                 可恢复的交互初始化、飞书引导和用户配对\n  doctor [--live]       分层诊断；--live 会调用模型并使用账号额度\n  agent list           探测本机执行器，标明尚未支持的后端\n  agent test --live     真实 Codex 响应测试（会使用账号额度）\n  login                登录 Namo 独立的官方 Codex 环境\n  start                前台接收（Ctrl+C 停止接收，已开工任务继续）\n  status               消息队列和后台服务状态\n  logs                 最近 80 行日志（自动脱敏）\n  service <操作>       install / status / start / stop / restart / upgrade / uninstall\n  ui                   打开仅本机可访问的管理界面（Ctrl+C 关闭）\n  issues               列出待核对异常\n  issue <编号>         查看异常与核对版本\n  resolve <编号> <版本> <动作> <依据> --confirm\n                       received / retry / dismiss / reviewed；不会重跑模型\n  config path          显示当前配置文件位置\n\n--json 可用于 doctor / agent list / status。未指定配置时优先使用\nNAMO_CONFIG、当前目录已有 config.local.json，再使用系统用户目录。\n首版后台服务管理仅支持 macOS；其他平台可使用前台模式。\n初始化不会自动安装 Agent、迁移 OpenClaw 或发布应用。");
 function finish(code: number): void { process.exitCode = code; setTimeout(() => process.exit(code), 250).unref(); }
 let redact = makeRedactor();
 async function main(): Promise<void> {
   const command = positional[0] ?? 'help';
+  const requestedLocale = flag('--lang') ?? process.env.NAMO_LANG;
+  if (requestedLocale !== undefined && requestedLocale !== 'system' && !parseLocale(requestedLocale)) throw new Error(tr('语言支持 system、en 或 zh-CN；使用 --lang 或 NAMO_LANG 设置'));
+  if (args.filter(arg => arg === '--lang').length > 1) throw new Error(tr('请只指定一次 --lang'));
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--config') { flag('--config'); i++; continue; }
-    if (args[i].startsWith('-') && !['--help', '-h', '--version', '-v', '--json', '--live', '--confirm'].includes(args[i])) throw new Error('未知选项，运行 namo --help 查看用法');
+    if (['--config', '--lang'].includes(args[i])) { flag(args[i]); i++; continue; }
+    if (args[i].startsWith('-') && !['--help', '-h', '--version', '-v', '--json', '--live', '--confirm'].includes(args[i])) throw new Error(tr("未知选项，运行 namo --help 查看用法"));
   }
   if (args.includes('--version') || args.includes('-v')) { console.log(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version); return; }
-  if (args.includes('--help') || args.includes('-h') || ['help', '-h', '--help'].includes(command)) { console.log(HELP); return; }
-  if (command!=='resolve'&&positional.length > (['agent', 'service', 'config','issue'].includes(command) ? 2 : 1)) throw new Error('命令参数过多，运行 namo --help 查看用法');
+  if (args.includes('--help') || args.includes('-h') || ['help', '-h', '--help'].includes(command)) { console.log(help() + '\n\n' + tr('界面语言：--lang system|en|zh-CN，或设置 NAMO_LANG；默认跟随系统，无法匹配时使用英文。') + '\n' + tr('项目：{0}', PROJECT_URL)); return; }
+  if (command!=='resolve'&&positional.length > (['agent', 'service', 'config','issue'].includes(command) ? 2 : 1)) throw new Error(tr("命令参数过多，运行 namo --help 查看用法"));
   const known = ['ui','issues','issue','resolve','init', 'doctor', 'agent', 'login', 'start', 'status', 'logs', 'service', 'config', 'check'];
-  if (!known.includes(command)) throw new Error(`未知命令：${command}。运行 namo --help`);
+  if (!known.includes(command)) throw new Error(tr("未知命令：{0}。运行 namo --help", command));
   const file = configFile(flag('--config'));
-  if (command === 'config') { if (positional[1] !== 'path') throw new Error('用法：namo config path'); console.log(file); return; }
+  if (command === 'config') { if (positional[1] !== 'path') throw new Error(tr("用法：namo config path")); console.log(file); return; }
   if (command === 'init') {
-    if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('namo init 需要交互终端。请在本机终端运行；不要通过管道输入凭据。自动化诊断可使用 namo doctor --json');
+    if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error(tr("namo init 需要交互终端。请在本机终端运行；不要通过管道输入凭据。自动化诊断可使用 namo doctor --json"));
     const ui = new TerminalPrompter();
     try { const r = await onboard(file, ui); if (!r.configured) process.exitCode = 1; }
     finally { ui.close(); }
@@ -72,7 +58,7 @@ async function main(): Promise<void> {
   if (command === 'agent' && positional[1] === 'list') {
     const infos = detectAgents();
     if (args.includes('--json')) console.log(JSON.stringify(infos, null, 2));
-    else for (const a of infos) console.log(`${a.id}: ${a.installed ? `已安装 ${a.version ?? '版本未知'}` : '未找到'} · ${a.kind} · ${a.supported ? '可用后端' : '尚未接入'}${a.path ? `\n  ${a.path}` : ''}`);
+    else for (const a of infos) console.log(`${a.id}: ${a.installed ? tr("已安装 {0}", a.version ?? tr("版本未知")) : tr("未找到")} · ${a.kind} · ${a.supported ? tr("可用后端") : tr("尚未接入")}${a.path ? `\n  ${a.path}` : ''}`);
     return;
   }
   if (command === 'doctor' || command === 'check') {
@@ -82,11 +68,11 @@ async function main(): Promise<void> {
     if (checks.some(c => c.status === 'fail')) process.exitCode = 1;
     return;
   }
-  if (!existsSync(file)) throw new Error('尚无配置，请先运行 namo init，或通过 --config 指定现有配置');
+  if (!existsSync(file)) throw new Error(tr("尚无配置，请先运行 namo init，或通过 --config 指定现有配置"));
   if(command==='ui') {
     const {startUi,openUi}=await import('./ui.js');const ui=await startUi(new Management(file));
     try{await openUi(ui.entryUrl);}catch(e){await ui.close();throw e;}
-    console.log(`Namo 本地工作台已打开：${ui.url}\n仅本机可访问；关闭此进程会使页面授权失效。没有启动飞书接收端。`);
+    console.log(tr("Namo 本地工作台已打开：{0}\n仅本机可访问；关闭此进程会使页面授权失效。没有启动飞书接收端。", ui.url));
     let stopping=false;const close=async()=>{if(stopping)return;stopping=true;await ui.close();finish(0);};
     process.once('SIGINT',()=>void close());process.once('SIGTERM',()=>void close());return;
   }
@@ -95,16 +81,16 @@ async function main(): Promise<void> {
     if(command==='issues'){const state=manager.state();console.log(JSON.stringify({available:state.recoveryAvailable,issues:state.database.issues},null,2));}
     else if(command==='issue')console.log(JSON.stringify(manager.issue(positional[1]??''),null,2));
     else {
-      if(!args.includes('--confirm')||positional.length<5)throw new Error('先用 issue 查看并核对；resolve 需要编号、版本、动作、核对依据和 --confirm。retry 可能重复发送，但不会重跑模型');
+      if(!args.includes('--confirm')||positional.length<5)throw new Error(tr("先用 issue 查看并核对；resolve 需要编号、版本、动作、核对依据和 --confirm。retry 可能重复发送，但不会重跑模型"));
       console.log(JSON.stringify(manager.reconcile({subject:positional[1],stamp:positional[2],action:positional[3],note:positional.slice(4).join(' '),requestId:randomUUID(),acknowledgeDuplicate:positional[3]==='retry'})));
     }return;
   }
   const configRevision=digest(readFileSync(file,'utf8'));
   const config = loadConfig(file); redact = makeRedactor([config.feishu.appSecret]);
-  if(configRevision!==digest(readFileSync(file,'utf8')))throw new Error('配置正在修改，请重试');
+  if(configRevision!==digest(readFileSync(file,'utf8')))throw new Error(tr("配置正在修改，请重试"));
   if (command === 'login') { await loginAgent(config); return; }
   if (command === 'agent') {
-    if (positional[1] !== 'test' || !args.includes('--live')) throw new Error('真实测试请使用 namo agent test --live（会使用账号额度）');
+    if (positional[1] !== 'test' || !args.includes('--live')) throw new Error(tr("真实测试请使用 namo agent test --live（会使用账号额度）"));
     const ok = await liveAgentTest(config); console.log(JSON.stringify({ modelTurnVerified: ok })); if (!ok) process.exitCode = 1; return;
   }
   if (command === 'service') { console.log(JSON.stringify(await serviceAction(positional[1] ?? 'status', config), null, 2)); return; }
@@ -117,17 +103,18 @@ async function main(): Promise<void> {
   }
   const dbFile = join(config.dataDir, 'bot.sqlite');
   if (command === 'status') {
-    let queue: unknown = '服务尚未创建消息数据库';
+    let queue: unknown = tr("服务尚未创建消息数据库");
     if (existsSync(dbFile)) { const store = new Store(dbFile, true); try { queue = store.status(); } finally { store.close(); } }
     console.log(JSON.stringify({ service: serviceStatus(config), queue }, null, 2)); return;
   }
   const { validateFeishu } = await import('./config.js'); validateFeishu(config);
-  if ((await probeAgent(config)).some(c => c.status === 'fail')) throw new Error('Agent 尚未就绪，请运行 namo doctor 或 namo login');
+  if ((await probeAgent(config)).some(c => c.status === 'fail')) throw new Error(tr("Agent 尚未就绪，请运行 namo doctor 或 namo login"));
   const release = acquireLock(config.dataDir);
   let releaseReceiver: (() => void) | undefined;
   let store: Store | undefined, engine: Engine | undefined, transport: FeishuTransport | undefined;
   let closing: Promise<void> | undefined;
-  let health: Record<string, unknown> = { pid: process.pid, startedAt: new Date().toISOString(), ready: false, connection: 'connecting',configRevision,managementVersion:2 };
+  let health: Record<string, unknown> = { pid: process.pid, startedAt: new Date().toISOString(), ready: false, connection: 'connecting',
+    configRevision,managementVersion:2,...(startupRelease ? { releaseId: startupRelease.id } : {}) };
   const log = (event: string, fields: Record<string, unknown> = {}) => {
     if (['ready', 'stopped', 'feishu_connected', 'feishu_reconnecting', 'feishu_reconnected', 'feishu_connection_failed', 'feishu_startup_timeout'].includes(event)) {
       const connection = event === 'ready' || ['feishu_connected', 'feishu_reconnected'].includes(event) ? 'connected'
@@ -142,7 +129,7 @@ async function main(): Promise<void> {
     try { await engine?.stop(); } finally { try { store?.close(); } finally { releaseReceiver?.(); release(); } }
     log('stopped');
   })();
-  const stop = async (code: number) => { try { await close(); finish(code); } catch { console.error('服务关闭失败'); finish(1); } };
+  const stop = async (code: number) => { try { await close(); finish(code); } catch { console.error(tr("服务关闭失败")); finish(1); } };
   process.once('SIGINT', () => void stop(0)); process.once('SIGTERM', () => void stop(0));
   try {
     mkdirSync(config.codex.home, { recursive: true, mode: 0o700 });
@@ -152,11 +139,13 @@ async function main(): Promise<void> {
     transport = new FeishuTransport(config.feishu, log);
     engine = new Engine(store, new RunnerRuntime(store, config), transport, config, redact, log, () => void stop(1));
     const service = engine;
-    await transport.connect(m => { service.accept(m); },event=>service.acceptCard(event)); if (closing) return;
-    engine.start(); log('ready', { dataDir: config.dataDir, concurrency: config.concurrency });
+    await transport.connect(m => withLocale('zh-CN', () => { service.accept(m); }), event => withLocale('zh-CN', () => service.acceptCard(event))); if (closing) return;
+    withLocale('zh-CN', () => service.start()); log('ready', { dataDir: config.dataDir, concurrency: config.concurrency });
   } catch (e) { await close(); throw e; }
 }
-main().then(() => { if (!['start','ui'].includes(positional[0]) || args.includes('--help') || args.includes('--version') || args.includes('-h') || args.includes('-v')) finish(Number(process.exitCode ?? 0)); }).catch(e => {
-  const message = e instanceof Cancelled ? e.message : e instanceof SyntaxError ? '配置 JSON 格式错误；未输出配置正文' : e instanceof Error ? e.message : '操作未完成';
+const languageChoice = args.includes('--lang') ? args[args.indexOf('--lang') + 1] : process.env.NAMO_LANG;
+const defaultLocale = systemLocale([process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || Intl.DateTimeFormat().resolvedOptions().locale]);
+withLocale(parseLocale(languageChoice) ?? defaultLocale, () => main().then(() => { if (!['start','ui'].includes(positional[0]) || args.includes('--help') || args.includes('--version') || args.includes('-h') || args.includes('-v')) finish(Number(process.exitCode ?? 0)); }).catch(e => {
+  const message = e instanceof Cancelled ? e.message : e instanceof SyntaxError ? tr("配置 JSON 格式错误；未输出配置正文") : e instanceof Error ? e.message : tr("操作未完成");
   console.error(redact(message.slice(0, 500))); finish(e instanceof Cancelled ? 130 : 1);
-});
+}));

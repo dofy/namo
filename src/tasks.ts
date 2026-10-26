@@ -3,6 +3,8 @@ import type { Config } from './config.js';
 import { Store, type Inbox, type Incoming } from './store.js';
 import { readEvidence } from './evidence.js';
 import { runnerDetails } from './runner-store.js';
+import { Waits } from './waits.js';
+import { RuntimeError } from './runtime.js';
 
 export interface ProjectBinding { project?: string; cwd: string; policyHash: string; }
 export interface Workstream extends ProjectBinding { id: string; chatKey: string; scopeKey: string; ownerId: string; }
@@ -13,6 +15,7 @@ export interface Task extends Workstream {
 export interface Revision { inboxKey: string; text: string; version: number; dispatch: string; }
 export const scopeOf = (m: Incoming) => m.envelope?.scopeKey ?? m.chatKey;
 export const sessionKey = (w: string) => `workstream:${w}`;
+export const PROGRESS_DELAY_MS = 12_000;
 const id = (prefix: string) => `${prefix}-${randomBytes(6).toString('hex').toUpperCase()}`;
 export class TaskInputError extends Error {}
 export function policyHash(c?: Config['codex']): string {
@@ -120,6 +123,7 @@ export class Tasks {
   }
   amend(task: Task, m: Incoming): Revision {
     return this.store.transaction(() => {
+      if (new Waits(this.store).current(task.id)) throw new TaskInputError('任务正在进入等待。请收到问题后引用回复，或用 /task 查看恢复方式。');
       const version = task.inputVersion + 1;
       if (version > 100) throw new TaskInputError('本任务已达到 100 个输入版本，请明确发起后续任务。');
       this.store.db.prepare('UPDATE tasks SET inputVersion=? WHERE id=?').run(version, task.id);
@@ -136,14 +140,14 @@ export class Tasks {
   dispatch(key: string, state: string): void { this.store.db.prepare("UPDATE task_messages SET dispatch=? WHERE inboxKey=? AND role='revision'").run(state, key); }
   candidates(): Task[] {
     return this.store.db.prepare(`SELECT t.* FROM tasks t JOIN inbox i ON i.key=t.inboxKey WHERE t.state='queued' AND i.state='queued'
-      AND NOT EXISTS(SELECT 1 FROM inbox p WHERE p.chatKey=i.chatKey AND p.seq<i.seq AND p.state IN ('queued','running','awaiting_reply'))
+      AND NOT EXISTS(SELECT 1 FROM inbox p WHERE p.chatKey=i.chatKey AND p.seq<i.seq AND p.state IN ('queued','running','waiting','awaiting_reply'))
       ORDER BY i.seq`).all() as unknown as Task[];
   }
   start(t: Task): string {
     return this.store.transaction(() => {
       if (!this.store.claim(t.inboxKey)) throw new Error('task_already_claimed');
-      this.store.db.prepare("UPDATE tasks SET state='running',startedAt=? WHERE id=? AND state='queued'").run(Date.now(), t.id);
-      this.store.db.prepare("UPDATE task_messages SET dispatch='applied' WHERE taskId=? AND version<=?").run(t.id, t.inputVersion);
+      this.store.db.prepare("UPDATE tasks SET state='running',startedAt=COALESCE(startedAt,?) WHERE id=? AND state='queued'").run(Date.now(), t.id);
+      this.store.db.prepare("UPDATE task_messages SET dispatch='applied' WHERE taskId=? AND version<=? AND dispatch='pending'").run(t.id, t.inputVersion);
       const run = randomUUID();
       this.store.db.prepare("INSERT INTO task_runs(id,taskId,inputVersion,state,startedAt) VALUES(?,?,?,'running',?)").run(run, t.id, t.inputVersion, Date.now());
       return run;
@@ -153,6 +157,16 @@ export class Tasks {
     this.store.db.prepare('UPDATE task_runs SET threadId=?,turnId=? WHERE id=?').run(thread, turn ?? null, run);
   }
   prompt(t: Task): string {
+    const resume = new Waits(this.store).resume(t);
+    if (resume) {
+      const reply = this.store.get(resume.replyInboxKey!);
+      if (!reply) throw new RuntimeError('wait_reply_missing');
+      const revisions = this.store.db.prepare(`SELECT i.text,tm.version FROM task_messages tm JOIN inbox i ON i.key=tm.inboxKey
+        WHERE tm.taskId=? AND tm.role='revision' AND tm.version>? AND tm.version<=? ORDER BY tm.version`).all(t.id, resume.replyVersion!, t.inputVersion);
+      return JSON.stringify({ type: 'task_resume', task_id: t.id, wait_id: resume.id, prior_run_id: resume.runId,
+        prior_turn_id: resume.turnId, question: resume.question, reply: reply.text.replace(/^\/resume\s+WAIT-[A-F0-9]{12}\s+/i, '').trim(), revisions,
+        note: '继续同一任务。不要重做已完成的操作；目录可能已被其他任务修改，先核对当前状态。本次等待只收集事实或选择，不能作为推送、部署、删除、发送消息或权限变更的批准。' });
+    }
     const rows = this.store.db.prepare(`SELECT i.*,tm.role,tm.version FROM task_messages tm JOIN inbox i ON i.key=tm.inboxKey WHERE tm.taskId=? AND tm.version<=?
       ORDER BY CASE tm.role WHEN 'instruction' THEN 1 WHEN 'material' THEN 2 ELSE 3 END,tm.version,i.seq`).all(t.id, t.inputVersion);
     return JSON.stringify({ task_id: t.id, workstream_id: t.workstreamId, project: t.project, input_version: t.inputVersion,
@@ -160,29 +174,57 @@ export class Tasks {
       messages: rows.map(row => { const m = this.store.decode(row)!; return { role: row.role, version: row.version, message_id: m.messageId,
         sender_open_id: m.senderId, chat_id: m.chatId, text: m.text, context: m.envelope }; }) });
   }
+  thread(t: Task): string | undefined {
+    const resume = new Waits(this.store).resume(t), thread = this.store.thread(sessionKey(t.workstreamId));
+    if (resume && thread !== resume.threadId) throw new RuntimeError('wait_context_changed');
+    return resume?.threadId ?? thread;
+  }
   finish(t: Task, run: string, text: string, error?: string): void {
     this.store.transaction(() => {
+      new Waits(this.store).close(t.id, error === 'cancelled');
       const unresolved = this.store.db.prepare("SELECT 1 FROM task_messages WHERE taskId=? AND role='revision' AND dispatch NOT IN ('accepted','applied') LIMIT 1").get(t.id);
       const state = error === 'cancelled' ? 'cancelled' : ['interrupted','runner_lost'].includes(error ?? '') ? 'interrupted' : error ? 'failed' : unresolved ? 'needs_attention' : 'succeeded';
       this.store.finish(t.inboxKey, text + (unresolved ? '\n\n注意：有补充要求尚未确认送入执行器，未自动重送。请用 /task 查看后明确发起后续任务。' : ''), error);
       this.store.db.prepare('UPDATE tasks SET state=?,error=?,finishedAt=? WHERE id=?').run(state, error ?? null, Date.now(), t.id);
       this.store.db.prepare('UPDATE task_runs SET state=?,error=?,finishedAt=? WHERE id=?').run(error ? state : 'succeeded', error ?? null, Date.now(), run);
+      this.progress();
     });
   }
   cancel(t: Task): boolean {
     return this.store.transaction(() => {
       const current = this.get(t.id);
-      if (!current || !['queued','running'].includes(current.state) || current.inputVersion !== t.inputVersion) return false;
+      if (!current || !['queued','running','waiting'].includes(current.state) || current.inputVersion !== t.inputVersion) return false;
       const job = this.store.db.prepare(`SELECT j.state FROM runner_jobs j JOIN task_runs r ON r.id=j.runId
         WHERE r.taskId=? AND r.state='running' ORDER BY r.startedAt DESC LIMIT 1`).get(t.id);
       // Serialize every cancellation channel against the worker's final write.
       if (job && !['starting','running'].includes(String(job.state))) return false;
       this.store.db.prepare('UPDATE inbox SET cancelRequested=1 WHERE key=?').run(current.inboxKey);
-      if (current.state === 'queued') {
-        this.store.claim(current.inboxKey); this.store.finish(current.inboxKey, '这条任务已取消。', 'cancelled');
+      if (current.state === 'queued' || current.state === 'waiting') {
+        new Waits(this.store).close(t.id, true);
+        this.store.db.prepare("UPDATE inbox SET state='running' WHERE key=? AND state IN ('queued','waiting')").run(current.inboxKey);
+        this.store.finish(current.inboxKey, '这条任务已取消。已发生的操作不会自动撤销。', 'cancelled');
         this.store.db.prepare("UPDATE tasks SET state='cancelled',error='cancelled',finishedAt=? WHERE id=?").run(Date.now(), current.id);
       }
+      this.progress();
       return true;
+    });
+  }
+  /** Delay routine acknowledgements, and suppress only progress that was never sent. */
+  progress(now = Date.now()): void {
+    this.store.transaction(() => {
+      const rows = this.store.db.prepare(`SELECT o.id,o.state,o.createdAt,t.state AS execution,t.inboxKey,i.cancelRequested,
+        (SELECT j.state FROM runner_jobs j JOIN task_runs r ON r.id=j.runId WHERE r.taskId=t.id ORDER BY r.startedAt DESC LIMIT 1) AS runner
+        FROM outbox o JOIN tasks t ON t.inboxKey=o.inboxKey JOIN inbox i ON i.key=t.inboxKey
+        WHERE o.kind='progress' AND o.state IN ('deferred','pending')`).all();
+      for (const row of rows) {
+        if (!['queued','running'].includes(String(row.execution)) || row.cancelRequested
+          || ['completed','failed','lost','reviewed'].includes(String(row.runner))) {
+          this.store.db.prepare("UPDATE outbox SET state='suppressed',error='progress_obsolete' WHERE id=?").run(row.id);
+        } else if (row.state === 'pending' || now - Number(row.createdAt) >= PROGRESS_DELAY_MS) {
+          this.store.db.prepare("UPDATE outbox SET state='pending',content=? WHERE id=? AND payload IS NULL")
+            .run(row.execution === 'queued' ? '正在排队，开始处理后会继续回复。' : '正在处理，完成后会在这里回复。', row.id);
+        }
+      }
     });
   }
   recover(preserveRunners = false): void {
@@ -191,20 +233,26 @@ export class Tasks {
       this.store.db.prepare(`UPDATE task_messages SET dispatch='unknown' WHERE dispatch='submitting' AND taskId IN (SELECT id FROM tasks WHERE 1=1${taskFilter})`).run();
       this.store.db.prepare(`UPDATE tasks SET state='interrupted',error='interrupted',finishedAt=? WHERE state='running'${taskFilter}`).run(Date.now());
       this.store.db.prepare(`UPDATE task_runs SET state='interrupted',error='interrupted',finishedAt=? WHERE state='running'${preserveRunners ? ' AND NOT EXISTS(SELECT 1 FROM runner_jobs j WHERE j.runId=task_runs.id)' : ''}`).run(Date.now());
+      new Waits(this.store).recover();
     });
   }
   list(m: Incoming): Task[] {
     return this.store.db.prepare('SELECT * FROM tasks WHERE chatKey=? AND ownerId=? ORDER BY rowid DESC LIMIT 10')
       .all(m.chatKey, m.senderId) as unknown as Task[];
   }
+  latest(m: Incoming): Task | undefined {
+    return this.store.db.prepare('SELECT * FROM tasks WHERE chatKey=? AND ownerId=? AND scopeKey=? ORDER BY rowid DESC LIMIT 1')
+      .get(m.chatKey, m.senderId, scopeOf(m)) as unknown as Task | undefined;
+  }
   pending(m: Incoming): Task[] {
-    return this.store.db.prepare("SELECT * FROM tasks WHERE chatKey=? AND ownerId=? AND state IN ('queued','running') ORDER BY rowid")
+    return this.store.db.prepare("SELECT * FROM tasks WHERE chatKey=? AND ownerId=? AND state IN ('queued','running','waiting') ORDER BY rowid")
       .all(m.chatKey, m.senderId) as unknown as Task[];
   }
   detail(t: Task): unknown {
     return { id: t.id, workstream: t.workstreamId, project: t.project, cwd: t.cwd, execution: t.state, inputVersion: t.inputVersion,
       startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error,
       evidence: readEvidence(this.store, t.id),
+      waits: new Waits(this.store).list(t.id),
       runners: runnerDetails(this.store, t.id),
       messages: this.store.db.prepare('SELECT role,version,dispatch FROM task_messages WHERE taskId=? ORDER BY version').all(t.id),
       runs: this.store.db.prepare('SELECT id,inputVersion,state,startedAt,finishedAt,error FROM task_runs WHERE taskId=? ORDER BY startedAt').all(t.id),

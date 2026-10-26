@@ -6,6 +6,18 @@ function fixture(t:any,deps:any={}){
  writeFileSync(file,JSON.stringify(raw));const s=new Store(join(data,'bot.sqlite'));s.close();const manager=new Management(file,{status:()=>({running:false,installed:true,registered:false,mode:'stopped'}),diagnose:async()=>[{id:'test',status:'ok',message:'isolated diagnostic'}],...deps});
  t.after(()=>rmSync(dir,{recursive:true,force:true}));return {dir,data,project,file,raw,manager};
 }
+test('HTTP localizes application errors per request while preserving user task text', async t => {
+ const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());
+ const login=await fetch(ui.url+'/api/session',{method:'POST',headers:{Origin:ui.url,'Content-Type':'application/json'},body:JSON.stringify({code:new URL(ui.entryUrl).hash.slice(1)})});
+ const cookie=login.headers.get('set-cookie')!;
+ const s=new Store(join(f.data,'bot.sqlite'));s.enqueue({key:'locale-task',messageId:'locale-task',chatKey:'chat',chatId:'chat',senderId:'alice',text:'保留我的原文 {0} English'});const task=new Tasks(s).create(s.get('locale-task')!,{cwd:f.project,policyHash:'p'});s.close();
+ for(const language of ['en','zh-CN']){
+  const headers={Cookie:cookie,'Accept-Language':language};
+  const invalid=await fetch(ui.url+'/api/tasks?pageSize=17',{headers});assert.equal(invalid.status,400);
+  const error=(await invalid.json()) as {error:string};assert.match(error.error,language==='en'?/Page size/:/每页/);
+  const detail=await (await fetch(ui.url+'/api/tasks/'+task.id,{headers})).json() as {title:string};assert.equal(detail.title,'保留我的原文 {0} English');
+ }
+});
 test('configuration projection excludes credentials and preserves unknown fields on save',t=>{const f=fixture(t),before=f.manager.config();assert.doesNotMatch(JSON.stringify(f.manager.state()),/PRIVATE_TEST_SECRET|PRIVATE_EXTRA/);const saved=f.manager.save(before.revision,{model:'test-model'});const raw=JSON.parse(readFileSync(f.file,'utf8'));assert.equal(raw.custom.keep,'untouched');assert.equal(raw.feishu.extraSecret,f.raw.feishu.extraSecret);assert.equal(raw.feishu.appSecret,f.raw.feishu.appSecret);assert.equal(saved.values.model,'test-model');assert.equal(readdirSync(join(f.data,'config-backups')).length,1);assert.throws(()=>f.manager.save(before.revision,{model:'stale'}),/配置已被/);});
 test('invalid configuration and unapproved fields cannot overwrite saved configuration',t=>{const f=fixture(t),before=readFileSync(f.file,'utf8'),revision=f.manager.config().revision;assert.throws(()=>f.manager.save(revision,{projects:{app:'/missing-namo-project'}}),/校验/);assert.throws(()=>f.manager.save(revision,{dataDir:'/tmp'}),/不允许/);assert.throws(()=>f.manager.save(revision,{sandbox:'danger-full-access'}),/校验/);assert.equal(readFileSync(f.file,'utf8'),before);});
 test('UI can repair an invalid project path without changing identity or data directory',t=>{const f=fixture(t);writeFileSync(f.file,JSON.stringify({...f.raw,codex:{...f.raw.codex,projects:{app:'/not-a-project'}}}));assert.equal(f.manager.config().valid,false);f.manager.save(f.manager.config().revision,{projects:{app:f.project}});assert.equal(f.manager.config().valid,true);assert.equal(JSON.parse(readFileSync(f.file,'utf8')).feishu.appId,f.raw.feishu.appId);});
@@ -43,11 +55,16 @@ test('UI serves bundled assets with strict CSP and never exposes source files or
  const response=await fetch(ui.url),html=await response.text(),csp=response.headers.get('content-security-policy')!;
  const nonce=html.match(/name="namo-style-nonce" content="([A-Za-z0-9+/=]+)"/)?.[1];assert.ok(nonce);assert.ok(csp.includes(`'nonce-${nonce}'`));assert.doesNotMatch(csp,/unsafe-inline|unsafe-eval/);
  assert.doesNotMatch(html,/__NAMO_STYLE_NONCE__|PRIVATE_TEST_SECRET|PRIVATE_EXTRA/);assert.match(html,/type="module"/);
- const assets=[...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)].map(m=>m[1]);assert.equal(assets.length,2);
- for(const path of assets){const asset=await fetch(ui.url+path);assert.equal(asset.status,200);assert.match(asset.headers.get('content-type')!,path.endsWith('.css')?/text\/css/:/text\/javascript/);assert.ok((await asset.text()).length>100);}
- for(const path of ['/assets/config.local.json','/assets/index.js.map','/assets/%2e%2e%2fconfig.local.json','/assets/missing.js'])assert.equal((await fetch(ui.url+path)).status,404);
+ const assets=[...html.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g)].map(m=>m[1]);assert.equal(assets.length,4);
+ assert.match(csp,/font-src 'self'/);assert.match(html,/rel="icon" type="image\/png" href="\/favicon.png"/);
+ for(const path of assets){const asset=await fetch(ui.url+path);assert.equal(asset.status,200);
+  if(path.endsWith('.woff2')){assert.equal(asset.headers.get('content-type'),'font/woff2');assert.equal(Buffer.from(await asset.arrayBuffer()).subarray(0,4).toString(),'wOF2');}
+  else{assert.match(asset.headers.get('content-type')!,path.endsWith('.css')?/text\/css/:/text\/javascript/);assert.ok((await asset.text()).length>100);}}
+ const favicon=await fetch(ui.url+'/favicon.png');assert.equal(favicon.status,200);assert.equal(favicon.headers.get('content-type'),'image/png');assert.deepEqual([...new Uint8Array(await favicon.arrayBuffer()).subarray(0,8)],[137,80,78,71,13,10,26,10]);
+ const fallback=await fetch(ui.url+'/favicon.ico',{redirect:'manual'});assert.equal(fallback.status,302);assert.equal(fallback.headers.get('location'),'/favicon.png');
+ for(const path of ['/assets/config.local.json','/assets/index.js.map','/assets/%2e%2e%2fconfig.local.json','/assets/missing.js','/assets/missing.woff2'])assert.equal((await fetch(ui.url+path)).status,404);
  assert.equal((await fetch(ui.url+'/src/management.ts')).status,401);assert.equal((await fetch(ui.url+'/api/state')).status,401);
- for(const path of ['/settings','/profiles','/connections']){
+ for(const path of ['/tasks','/sessions','/settings','/profiles','/connections']){
   const page=await fetch(ui.url+path),content=await page.text();assert.equal(page.status,200);assert.match(page.headers.get('content-type')!,/text\/html/);
   const pageNonce=content.match(/name="namo-style-nonce" content="([A-Za-z0-9+/=]+)"/)?.[1];assert.ok(pageNonce);assert.ok(page.headers.get('content-security-policy')!.includes(`'nonce-${pageNonce}'`));
   assert.match(content,/type="module"/);assert.doesNotMatch(content,/__NAMO_STYLE_NONCE__|PRIVATE_TEST_SECRET|PRIVATE_EXTRA/);

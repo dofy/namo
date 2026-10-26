@@ -9,3 +9,4 @@ data/
 work/
 output/playwright/
 .playwright-mcp/
+.playwright-cli/

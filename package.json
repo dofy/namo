@@ -15,6 +15,7 @@
     "login": "node dist/src/cli.js login",
     "status": "node dist/src/cli.js status",
     "service:install": "node dist/scripts/launchd.js install",
+    "service:upgrade": "node dist/scripts/launchd.js upgrade",
     "service:uninstall": "node dist/scripts/launchd.js uninstall",
     "prepack": "pnpm run build",
     "cli": "node bin/namo.js",
@@ -38,7 +39,11 @@
     "typescript": "7.0.2",
     "vite": "8.3.5"
   },
-  "description": "A local-first coding agent gateway, starting with Feishu and Codex.",
+  "description": "A local-first AI work companion connecting Feishu and Lark to Codex.",
+  "repository": { "type": "git", "url": "git+https://github.com/dofy/namo.git" },
+  "homepage": "https://github.com/dofy/namo#readme",
+  "bugs": { "url": "https://github.com/dofy/namo/issues" },
+  "keywords": ["ai-agent", "codex", "feishu", "lark", "local-first", "typescript"],
   "packageManager": "pnpm@12.15.0",
   "bin": {
     "namo": "bin/namo.js"
@@ -50,7 +55,9 @@
     "dist/ui/",
     "config.example.json",
     "README.md",
+    "README.zh-CN.md",
     "docs/",
-    "assets/namo-logo.png"
+    "assets/namo-logo.png",
+    "assets/fonts/"
   ]
 }

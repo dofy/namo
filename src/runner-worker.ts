@@ -8,6 +8,7 @@ import { Tasks, policyHash, sessionKey } from './tasks.js';
 import { CodexRuntime, RuntimeError, type RunControls, type RunResult } from './runtime.js';
 import { EvidenceRecorder } from './evidence.js';
 import { runnerJob, runnerEvent } from './runner-store.js';
+import { Waits } from './waits.js';
 
 process.umask(0o077);
 async function main(): Promise<void> {
@@ -75,7 +76,7 @@ async function main(): Promise<void> {
       }, 200);
       const raw = await new CodexRuntime(config.codex).run({ taskId: task.id, runId,
         cwd: task.cwd, prompt: runnerJob(store, runId)!.prompt,
-        threadId: store.thread(sessionKey(task.workstreamId)), signal: abort.signal,
+        threadId: tasks.thread(task), signal: abort.signal,
         onProcess: pid => write(() => { store.db.prepare('UPDATE runner_jobs SET runtimePid=? WHERE runId=?').run(pid, runId); runnerEvent(store, runId, 'runtime_started'); }),
         onThread: thread => write(() => {
           store.saveThread(sessionKey(task.workstreamId), thread); store.saveRun(task.inboxKey, thread); tasks.saveRun(runId, thread);
@@ -87,8 +88,13 @@ async function main(): Promise<void> {
         }),
         onReady: next => { controls = next; steer(); },
         onEvidence: item => write(() => evidence!.observe(item)),
+        onWait: request => store.transaction(() => {
+          owned();
+          const id = new Waits(store).request(task.id, runId, { ...request, question: redact(request.question), choices: request.choices?.map(redact) });
+          runnerEvent(store, runId, 'wait_requested'); return id;
+        }),
       });
-      result = { ...raw, text: redact(raw.text) };
+      result = { ...raw, text: redact(raw.text), ...(raw.waiting ? { waiting: { ...raw.waiting, question: redact(raw.waiting.question), choices: raw.waiting.choices?.map(redact) } } : {}) };
     } catch (e) {
       error = abort.signal.reason === 'worker_stopped' ? 'interrupted'
         : storageFailed ? 'runner_storage_error' : e instanceof RuntimeError ? e.code : 'runtime_error';
@@ -96,6 +102,7 @@ async function main(): Promise<void> {
     if (storageFailed) error = 'runner_storage_error';
     write(() => {
       if (store.get(task.inboxKey)?.cancelRequested) error = 'cancelled';
+      if (error) new Waits(store).close(task.id, error === 'cancelled');
       evidence?.finish(!error);
       store.db.prepare('UPDATE runner_jobs SET state=?,result=?,error=?,updatedAt=? WHERE runId=?')
         .run(error ? 'failed' : 'completed', error ? null : JSON.stringify(result), error ?? null, Date.now(), runId);

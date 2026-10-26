@@ -11,10 +11,11 @@ import { renderLaunchAgent } from '../src/service.js';
 const bin=resolve('bin/namo.js');
 test('CLI help/version need no config; absent configuration doctor and piped init fail clearly',t=>{
  const dir=mkdtempSync(join(tmpdir(),'namo-cli-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
- const run=(...a:string[])=>spawnSync(process.execPath,[bin,...a],{cwd:dir,encoding:'utf8',env:{...process.env,NAMO_HOME:dir}});
+ const run=(...a:string[])=>spawnSync(process.execPath,[bin,...a],{cwd:dir,encoding:'utf8',env:{...process.env,NAMO_HOME:dir,NAMO_LANG:'system',LC_ALL:'en_US.UTF-8'}});
  assert.equal(run('--help').status,0);assert.match(run('--version').stdout,/0\.1\.0/);
  const doctor=run('doctor','--json');assert.equal(doctor.status,1);assert.equal(JSON.parse(doctor.stdout).some((x:any)=>x.id==='config'&&x.status==='fail'),true);
- const init=run('init');assert.equal(init.status,1);assert.match(init.stderr,/交互终端/);
+ const init=run('init');assert.equal(init.status,1);assert.match(init.stderr,/interactive terminal/);
+ assert.match(run('init','--lang','zh-CN').stderr,/交互终端/);
  assert.equal(run('agent','test').status,1);
  assert.equal(run('--config',join(dir,'other.json'),'config','path').stdout.trim(),join(dir,'other.json'));
  assert.equal(run('doctor','--unknown').status,1);

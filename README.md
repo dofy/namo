@@ -4,135 +4,131 @@
 
 <h1 align="center">Namo</h1>
 
-<p align="center"><strong>住在本地，帮你把事情做完的小狐狸。</strong><br />
-A local-first coding agent gateway.</p>
+<p align="center"><strong>A little fox on your machine, helping you get work done.</strong><br />
+A local-first AI work companion for Feishu, Lark and Codex.</p>
 
-Namo 将聊天应用连接到本地开发环境。首期支持 **飞书 / Lark + Codex app-server**：从私聊或群 @ 发起任务，在指定项目中修改代码、运行命令和测试，再将结果回复到原会话。
+<p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a><br />
+<a href="https://github.com/dofy/namo">GitHub</a> · <a href="https://github.com/dofy/namo/issues">Issues</a> · <a href="docs/development-plan.md">Development plan</a></p>
 
-Namo 管理消息、队列、项目、会话和执行边界；任务理解与工具执行交给官方 Codex。代码、执行环境和任务状态位于本机，模型推理使用 Codex 账号对应的服务。
+Namo connects chat to your local development environment. Send a direct message or mention the bot in a group to work on a configured project, edit files, run commands and tests, and receive the result in the same conversation.
 
-**状态：早期可用版本。** 面向个人或少量可信用户，已验证真实飞书收发及本地开发流程，仍需自行维护运行主机。
+Namo manages messages, queues, projects, sessions and execution boundaries. The official **Codex app-server** handles reasoning and tools. Code, task state and execution stay on your machine; model inference uses the service associated with your Codex account.
 
-## 已有能力
+**Status: early access.** Intended for individuals and small groups of trusted users. Real Feishu messaging has been verified, but you maintain the host yourself. No npm package has been published yet.
 
-- **聊天入口**：飞书长连接，支持私聊、群 @、文字及基本富文本；通过一次性本地配对和用户白名单限制访问。
-- **项目与会话**：绑定已配置项目，按聊天话题和用户管理工作线与 Codex session，支持新建、查询和显式续接。
-- **消息与任务**：稳定任务编号；指令、材料和修订分别落库，排队补充合并，运行补充走 Codex 原生追加协议。
-- **可靠执行**：SQLite 持久化入站与出站，消息去重，同聊天及同项目目录串行，可配置全局并发。
-- **明确恢复**：排队任务可恢复；执行中断或发送结果不明时保留记录，不盲目重跑或重发。
-- **本地工作台**：`namo ui` 查看任务、运行和投递记录，修改项目与权限，诊断连接，逐项核对异常。
-- **任务执行证据**：记录文件补丁、命令退出码、产物存在性和 Git HEAD 快照，工作台 / 飞书展示并标明采集限制；[schema 4 补充](docs/result-evidence.md)已上线并通过真实私聊与状态按钮验收。
-- **独立运行进程**：schema 5 源码支持接收服务重启时保留正在执行的任务，持久保存结果、修订和运行事件；失联保留占位、不自动重跑。[本地实现与隔离验证](docs/runner.md)已完成，在线升级另行安排。
-- **基础用户档案**：私聊 `/profile` 或工作台管理称呼、语言和时区；按应用与用户隔离，独立于配对权限。现有实例已升级，私聊查询收发验收通过。
-- **可选任务卡片**：固定接收 / 结果卡片，支持查看状态与停止；默认仍发文本，按钮需配置飞书回调。
-- **开发权限**：可配置项目内读写、命令联网及本地 Git 提交；配置模板默认只读。
-- **本地常驻**：单实例锁、分层 doctor、协议 smoke，以及 macOS 后台服务安装、启停和卸载。
+## What it does
 
-当前不包含图片 / 文件 / 语音解析、流式卡片、定时提醒、后台派工或离线历史消息补拉。
+- **Feishu / Lark chat:** persistent connection, direct messages, group mentions, text and basic rich text; one-time pairing and a user allowlist control access.
+- **Projects and sessions:** work in configured directories, preserve conversation context, switch projects and explicitly resume sessions.
+- **Durable tasks:** SQLite inbox and outbox, message deduplication, input revisions, per-chat and per-project serialization, and a global concurrency limit.
+- **Questions and answers:** the agent can pause for your input; answer by replying to the question or choosing a matching card option.
+- **Independent runners:** active tasks run separately from the receiver. Uncertain or interrupted work is retained for review instead of blindly rerunning it.
+- **Execution evidence:** file patches, command exit codes, artifact checks and Git HEAD snapshots, with capture limits made explicit.
+- **Local workbench:** a dashboard, searchable task and session lists, user/project/status/date filters, pagination, details, profiles, settings and connection diagnostics.
+- **Concise chat replies:** ordinary answers arrive as text; optional task cards provide details and stop actions. Buttons require the Feishu callback subscription.
+- **Local service management:** guided setup, isolated official Codex login, diagnostics, immutable service releases and macOS background service commands.
 
-M1 已完成现有安装的升级与核心私聊验收，见 [验收记录](docs/m1-verification.md)。其他已有常驻服务不会因代码编译自动切换；消息升级、维护窗口与回退限制见 [架构说明](docs/architecture.md) 和 [配置与运维](docs/operations.md)。
+The workbench and CLI support **English and Simplified Chinese**. They follow the system language by default and fall back to English for unsupported languages. Task content, user input and execution logs retain their original language.
 
-M1 异常核对与 M2 管理 / 基础档案已完成实现和隔离验证，现有实例为 schema 4，真实档案查询、执行证据及查看状态回调通过；档案修改及工作台配置应用等仍待验收，见 [M2 验收记录](docs/m2-verification.md)。M3 独立运行已完成本地实现，尚未切换在线实例或发布 npm 包。
+Image/file/voice interpretation, streaming cards, reminders, background delegation, long-term memory and offline message backfill are not implemented. See the [development plan](docs/development-plan.md) for milestones and outstanding real-world acceptance checks.
 
-## 安装与初始化
+## Get started
 
-当前为发布前验收版，**尚未发布 npm**，正式发布需要所有者确认。已提供包含编译产物的 CLI tarball，无需用户克隆源码或安装 pnpm：
+Requirements: **Node.js 24.15+**, the official Codex CLI and a Feishu or Lark internal app with bot capabilities. Use the official Codex authentication and provider.
+
+Until a package is published, build from source with **pnpm 12.15.0**:
 
 ```sh
+git clone https://github.com/dofy/namo.git
+cd namo
+pnpm install --frozen-lockfile
+pnpm run build
+pnpm cli init
+```
+
+The resumable wizard guides you through agent detection, isolated login, project permissions, app credentials and user pairing. A live model/messaging check is optional and may use account quota.
+
+To build a local CLI package:
+
+```sh
+pnpm pack
 npm install -g ./namo-0.1.0.tgz
 namo init
 ```
 
-需要 Node.js **24.15+** 和官方 Codex CLI。向导会完成 Agent 探测、独立登录、项目权限选择、飞书配置、一次性配对，以及可选的真实模型收发验证；可中断后继续，不要求手工查询 open_id 或编辑 JSON。
-
-完整步骤：[安装与第一次使用](docs/getting-started.md)。已有配置可以显式指定 `--config`，当前目录的旧 `config.local.json` 也继续兼容；配置与数据不会自动移动或覆盖。
+Existing configuration can be selected with `--config`. Namo also recognizes `NAMO_CONFIG` and an existing `config.local.json` in the current directory. It does not silently move or overwrite existing configuration or data.
 
 ```sh
 namo --help
 namo agent list
-namo doctor           # 不调用模型
-namo doctor --live    # 明确进行真实模型测试，可能使用账号额度
+namo doctor           # Environment and connection checks; no model inference
+namo doctor --live    # Explicit real model test; may use account quota
 namo status
 namo logs
-namo ui               # 本机工作台，不启动另一接收端
-namo issues           # 异常核对列表（需要 schema 2）
+namo ui               # Local workbench; does not start another receiver
 ```
 
-首版后台服务管理支持 macOS，其他系统可前台运行但尚未完整验收。Codex 协议基线为 **0.154.0**；CLI 版本变化后会重新探测协议与权限配置，不会自动放宽沙箱。Claude Code 和 OpenClaw Gateway 仅显示发现状态，尚未实现接入。
+### Language
 
-源码开发继续使用 pnpm **12.15.0**，依赖以 `pnpm-lock.yaml` 为准：
+Use **Language** at the bottom of the workbench sidebar to select **System language**, **English** or **简体中文**. Your choice is remembered across workbench launches on the same browser and loopback host. Switching language preserves current filters and unsaved form input.
 
-本地工作台使用 **React + TypeScript + Radix Themes**，由 **Vite** 构建。静态资源随 CLI 分发，仍通过 `namo ui` 打开，无需另装前端服务。开发方式见[安装与使用](docs/getting-started.md#前端开发)。
+CLI priority is `--lang` → `NAMO_LANG` → system language (`LC_ALL`, `LC_MESSAGES`, `LANG`, then the runtime locale). Unsupported system languages fall back to English. `system` explicitly restores automatic selection.
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm run build
-pnpm cli --help
-pnpm cli init
-pnpm test
+namo --lang en --help
+namo --lang zh-CN init
+namo --lang system doctor
+NAMO_LANG=zh-CN namo doctor
 ```
 
-## 在项目中工作
+`--version`, paths and JSON output remain machine-readable; project links appear in help and the workbench sidebar. External agent output and historical records keep their original text.
 
-配置模板默认使用只读的隔离会话目录。要对真实项目进行开发，将下面字段**合并**进本地配置，并替换项目路径：
+## Chat commands
 
-```json
-{
-  "concurrency": 1,
-  "codex": {
-    "sandbox": "workspace-write",
-    "projects": { "app": "/absolute/path/to/project" },
-    "defaultProject": "app",
-    "networkAccess": true,
-    "allowLocalCommits": true
-  }
-}
-```
-
-项目目录必须已存在。Homebrew 等位于系统默认范围外的工具链，可能需要通过 `codex.readPaths` 显式授权读取；不要为此放开整个个人目录。Git 使用仓库局部作者配置，不加载个人全局 / 系统配置；需要时先在目标仓库配置 `user.name` 和 `user.email`。
-
-| 命令 | 作用 |
+| Command | Purpose |
 | --- | --- |
-| `/project` | 查看目录与可选项目；`/project app` 切换并开始新上下文 |
-| `/status` | 查看队列、目录与权限状态 |
-| `/tasks`、`/task N-编号` | 查看本人在本聊天的近期任务、执行状态、修订与投递状态 |
-| `/issues`、`/issue 编号` | 查看本人、本聊天的异常及核对指引；按返回的 `/resolve` 命令处理，不重跑模型 |
-| `/material 内容` | 暂存材料，10 分钟等待处理说明；过期不自动执行 |
-| `/run 处理要求` | 开工并关联同用户、话题和项目的待处理材料；普通文字也可直接开工 |
-| `/amend N-编号 补充` | 追加到原任务；引用本人任务消息也可追加，已结束的任务会创建后续任务 |
-| `/cancel [N-编号]` | 停止本人、本聊天的指定任务；无编号仅取消当前话题的本人任务 |
-| `/session [W-编号]` | 查看或选择本人在本聊天的工作线，续接其 Agent 上下文 |
-| `/new`、`/reset` | 开始新的工作线上下文，保留历史任务、代码和文件 |
-| `/whoami` | 查看当前飞书用户及会话 ID |
-| `/help` | 查看支持的功能和命令 |
+| `/project [name]` | List projects or switch project and start a new context |
+| `/status` | Show queue, directory and permission status |
+| `/tasks`, `/task N-ID` | View your tasks in the current chat |
+| `/material text` | Hold supporting material for up to ten minutes without executing it |
+| `/run request` | Start work with pending material; ordinary messages can also start tasks |
+| `/amend N-ID text` | Add input to a task; replying to your task message also works |
+| `/cancel [N-ID]` | Stop your task; without an ID, target your task in the current topic |
+| `/session [W-ID]` | Inspect or select a session and resume its agent context |
+| `/new`, `/reset` | Start a new context while preserving files and task history |
+| `/resume WAIT-ID answer` | Answer a waiting question; a quoted reply or card choice also works |
+| `/profile` | View and manage your basic profile in a direct message |
+| `/issues`, `/issue ID` | Inspect execution or delivery issues and follow the returned review instructions |
+| `/whoami`, `/help` | Show your chat identity or available commands |
 
-## 权限与运行边界
+## Execution boundaries
 
-- 工具按当前项目和显式配置的路径授权；bot 配置、运行数据及独立 Codex 登录目录自动排除。
-- 项目写权限也允许修改或删除普通文件。取消、超时或重置不会撤销已经发生的操作。
-- 本地修改、测试和提交可以直接执行；**推送和部署必须先说明目标与内容，等待用户确认**。当前这项确认由 bot 指令约束，尚无命令级强制审批拦截。
-- 出站 `sent` 回执表示平台已接受创建消息，不代表用户已读。发送结果不明会单独记账。
-- Mac 休眠或断网时无法持续提供服务。本版本没有历史消息补拉，不能保证离线期间所有消息都能恢复。
-- `config.local.json`、`data/`、日志和认证文件属于私有数据，禁止提交。独立 Codex 环境不自动接入个人 MCP、插件或第三方模型网关。
+- The template defaults to read-only access. Use setup or the workbench to grant access to specific project directories, network commands and local Git commits.
+- Configuration, runtime data and isolated Codex login files remain excluded from agent access. Do not grant access to your entire home directory to fix a toolchain issue.
+- Write permission also permits file deletion. Cancellation, timeout or context reset does not undo completed actions.
+- Pushes and deployments require explicit confirmation through agent instructions. An enforced command-level approval gate is not implemented yet.
+- A platform send receipt means the platform accepted the message, not that the user read it. Ambiguous sends are retained for review.
+- A sleeping or disconnected host cannot provide continuous service. There is no offline history backfill.
+- Never commit `config.local.json`, `data/`, logs, tokens or authentication files. Namo does not automatically import personal MCP servers, plugins or third-party model gateways.
 
-## 常驻与开发
+Background service management currently supports macOS. Other systems can use foreground mode but have not completed full platform acceptance. Claude Code and OpenClaw are detected but are not supported execution backends.
+
+## Development
+
+The stack is TypeScript, Node.js built-in SQLite, the official Feishu Node SDK and Codex app-server over stdio. The workbench uses React, Radix Themes and Vite; its compiled assets and fonts are bundled with the CLI.
 
 ```sh
-# macOS：安装或卸载自动启动，保留配置和数据
-pnpm run service:install
-pnpm run service:uninstall
-
-# 本地状态和验证
-pnpm run status
 pnpm test
+pnpm run smoke:codex          # Protocol handshake; no inference
+pnpm run smoke:codex -- --run # Explicit real inference test
 ```
 
-自动启动不会继承终端中临时导出的 Secret。配置可在 `namo ui` 中保存，再单独确认应用；仅支持兼容新版服务且队列空闲。旧服务升级须安排维护窗口与备份，见运维说明；不要删除 `data/`。
+Detailed engineering and operations documents are currently in Chinese:
 
-技术栈：TypeScript、Node.js 内置 SQLite、飞书官方 Node SDK、Codex app-server（stdio JSON-RPC）。测试覆盖真实 SQLite 与子进程协议，以及去重、并发、恢复、取消和发送异常。
+- [First-time setup and frontend development](docs/getting-started.md)
+- [Configuration and operations](docs/operations.md)
+- [Architecture](docs/architecture.md) and [development plan](docs/development-plan.md)
+- [Execution evidence](docs/result-evidence.md), [independent runners](docs/runner.md), [waiting and resuming](docs/waits.md)
+- [Release isolation](docs/release-isolation.md) and [brand assets](docs/brand.md)
 
-更多说明：[首次使用](docs/getting-started.md) · [配置与运维](docs/operations.md) · [品牌与 Logo](docs/brand.md)
-
-设计与进度：[架构说明](docs/architecture.md) · [开发计划](docs/development-plan.md)。
-
-参考：[Codex app-server](https://learn.chatgpt.com/docs/app-server) · [飞书官方 Node SDK](https://github.com/larksuite/node-sdk)
+Project: [github.com/dofy/namo](https://github.com/dofy/namo). Report reproducible issues without credentials, private configuration or raw conversation data.

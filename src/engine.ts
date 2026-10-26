@@ -9,8 +9,10 @@ import { randomUUID } from 'node:crypto';
 import { Recovery, RecoveryError } from './recovery.js';
 import { Cards, type CardEvent } from './cards.js';
 import { Profiles, ProfileError } from './profiles.js';
-import { EvidenceRecorder, evidenceSummary, readEvidence } from './evidence.js';
+import { EvidenceRecorder, readEvidence } from './evidence.js';
 import { runnerJob } from './runner-store.js';
+import { evidenceBrief, taskStateLabel, taskStatus } from './presentation.js';
+import { Waits, WaitInputError } from './waits.js';
 
 export interface Sender { send(chatId: string, content: string, uuid: string): Promise<string>; sendCard?(chatId: string, card: object, uuid: string): Promise<string>; }
 export class SendError extends Error {
@@ -82,16 +84,18 @@ export class Engine {
         } catch(e) {if(!(e instanceof RecoveryError))throw e;reply=e.message;}
       }
       else if (command === '/whoami') reply = `用户 open_id：${m.senderId}\n会话 chat_id：${m.chatId}`;
-      else if (command === '/tasks') reply = this.tasks.list(m).map(t => `${t.id} · ${t.state} · ${t.project ?? '隔离目录'} · ${t.workstreamId}`).join('\n') || '尚无任务记录。';
-      else if (command === '/task') { const t = this.tasks.owned(m.text.trim().split(/\s+/)[1] ?? '', m); reply = t ? JSON.stringify(this.tasks.detail(t), null, 2) : '未找到可访问的任务。用 /tasks 查看任务编号。'; }
+      else if (command === '/tasks') reply = this.tasks.list(m).map(t => `${taskStateLabel(t.state)}${t.project ? ` · ${t.project}` : ''}\n/task ${t.id}`).join('\n\n') || '尚无任务记录。';
+      else if (command === '/task') { const id = m.text.trim().split(/\s+/)[1]; const t = id ? this.tasks.owned(id, m) : this.tasks.latest(m); reply = t ? taskStatus(this.store, t) : '未找到可访问的任务。用 /tasks 查看任务编号。'; }
       else if (command === '/session') {
         const wid = m.text.trim().split(/\s+/)[1];
         if (wid && this.store.hasPending(m.chatKey, m.key)) reply = '仍有未完成请求，暂不能切换工作线。';
         else if (wid) reply = this.tasks.selectStream(m, wid) ? `已选择工作线 ${wid.toUpperCase()}；下一项任务续接其上下文。` : '未找到可访问的工作线。';
         else reply = `当前工作线：${this.tasks.binding(m)?.id ?? '尚未创建'}\n${this.tasks.streams(m).map(w => `${w.id} · ${w.project ?? '隔离目录'}`).join('\n')}\n切换：/session W-编号；新开：/new`;
       }
-      else if (command === '/status') reply = JSON.stringify({ queue: this.store.status(m.chatKey), workspace: this.workspaceLabel(m), workstream: this.tasks.binding(m)?.id, sandbox: this.config.codex?.sandbox, network: this.config.codex?.networkAccess,
-        localCommits: this.config.codex?.allowLocalCommits ?? false, pushAndDeploy: '需单独确认目标和内容' }, null, 2);
+      else if (command === '/status') {
+        const pending = this.tasks.pending(m);
+        reply = `服务可用\n当前项目：${this.tasks.binding(m)?.project ?? this.store.project(this.projectScope(m)) ?? this.config.codex?.defaultProject ?? '隔离工作区'}\n正在处理 ${pending.filter(t => t.state === 'running').length} 项，排队 ${pending.filter(t => t.state === 'queued').length} 项，等待补充 ${pending.filter(t => t.state === 'waiting').length} 项。\n用 /tasks 查看本人的任务。`;
+      }
       else if (command === '/project') {
         const name = m.text.trim().split(/\s+/)[1];
         const projects = this.config.codex?.projects ?? {};
@@ -104,7 +108,7 @@ export class Engine {
       else if (command === '/too-long') reply = '这条消息超过 16000 字符，尚未交给模型。请拆成较短的消息。';
       else if (command === '/help') reply = '支持文字和富文本；独立附件 / 转发只保存描述、等待说明。/material 内容 暂存材料；/run 要求 开工并关联材料；/tasks 列表；/task N-编号 详情；/amend N-编号 补充要求；/cancel [N-编号] 取消本人任务；/session [W-编号] 查看或续接工作线；/new 或 /reset 新上下文；/project 选择项目；/status 查看状态。尚无附件解析、后台派工或定时功能。';
       else if (command === '/reset' || command === '/new') {
-        if (this.active.has(m.chatKey) || this.tasks.pending(m).some(t => t.state === 'running')) reply = '本会话仍在执行。请先 /cancel，等执行停止后再 /reset。';
+        if (this.active.has(m.chatKey) || this.tasks.pending(m).some(t => ['running','waiting'].includes(t.state))) reply = '本会话仍有执行或等待补充的任务。请先完成或 /cancel，再 /reset。';
         else { this.store.clearThread(m.chatKey); this.tasks.reset(m); reply = '已开始新的工作线。下一条任务使用新上下文；历史任务和代码仍保留。'; }
       } else {
         const target = m.text.trim().split(/\s+/)[1];
@@ -113,7 +117,7 @@ export class Engine {
         reply = cancelled ? `已请求停止 ${cancelled} 条本人任务。已发生的操作不会自动撤销。` : '当前没有可取消的本人任务；可用 /tasks 核对任务编号。';
         if (cancelled < rows.length) reply += '\n部分运行已结束或失联，没有再发出停止请求；请查看任务状态，失联运行需在本机核对。';
       }
-      if(command==='/help') reply+=' 私聊 /profile 查看或修改本人称呼、语言、时区。异常处理：/issues 列表，/issue 编号 查看核对指引；本机 namo ui 管理配置与任务。';
+      if(command==='/help') reply+=' 任务等待补充时，引用问题回复或 /resume WAIT-编号 回答 恢复原任务；等待不代表批准外部操作，新工作线支持此能力。私聊 /profile 查看或修改本人称呼、语言、时区。异常处理：/issues 列表，/issue 编号 查看核对指引；本机 namo ui 管理配置与任务。';
       this.store.finish(m.key, reply);
       return true;
     }
@@ -227,19 +231,23 @@ export class Engine {
       if (!this.runtime.persistent) evidence = new EvidenceRecorder(this.store, run, cwd, this.config.codex?.denyPaths, this.redact);
       const result = await this.runtime.run({
         taskId: task.id, runId: run,
-        threadId: this.store.thread(sessionKey(task.workstreamId)), cwd, signal,
+        threadId: this.tasks.thread(task), cwd, signal,
         prompt: this.tasks.prompt(task),
         onThread: threadId => { this.store.saveThread(sessionKey(task.workstreamId), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
         onTurn: turnId => { const threadId = this.store.thread(sessionKey(task.workstreamId)); if (threadId) { this.store.saveRun(m.key, threadId, turnId); this.tasks.saveRun(run, threadId, turnId); } },
         onReady: controls => { const slot = this.active.get(m.chatKey); if (slot?.task.id === task.id) { slot.controls = controls; void this.steer(slot).catch(() => this.fatal('revision_storage_error')); } },
         onEvidence: item => evidence!.observe(item),
+        onWait: request => new Waits(this.store).request(task.id, run, { ...request, question: this.redact(request.question), choices: request.choices?.map(value => this.redact(value)) }),
       });
       await this.active.get(m.chatKey)?.steering;
       if (signal.aborted && !this.runtime.persistent) throw new RuntimeError('cancelled');
       this.store.transaction(() => {
         evidence?.finish(true);
         const report = evidence?.report ?? readEvidence(this.store, task.id).find(r => r.runId === run);
-        this.tasks.finish(task, run, this.redact(result.text) + (report ? evidenceSummary(report) : ''));
+        if (result.waiting) {
+          new Waits(this.store).park(task, run, result.waiting);
+          this.tasks.progress();
+        } else this.tasks.finish(task, run, this.redact(result.text) + (report ? evidenceBrief(report) : ''));
       });
       this.log('turn_completed', { messageId: m.messageId });
     } catch (e) {
@@ -254,13 +262,22 @@ export class Engine {
       this.store.transaction(() => {
         evidence?.finish(false);
         const report = evidence?.report ?? readEvidence(this.store, task.id).find(r => r.runId === run);
-        this.tasks.finish(task, run, text + (report ? evidenceSummary(report) : ''), code);
+        this.tasks.finish(task, run, text + (report ? evidenceBrief(report) : ''), code);
       });
       this.log('turn_failed', { messageId: m.messageId, code });
     }
   }
   private route(m: Inbox): void {
     try {
+      const waits = new Waits(this.store);
+      const resume = /^\/resume\s+(WAIT-[A-Fa-f0-9]{12})\s+([\s\S]+)$/.exec(m.text.trim());
+      const quotedWait = waits.referenced(m);
+      if (/^\/resume(?:\s|$)/.test(m.text.trim()) || quotedWait) {
+        const w = resume ? waits.get(resume[1].toUpperCase()) : quotedWait;
+        if (!w || m.envelope?.kind === 'material') { this.reply(m, '请引用当前等待问题回复，或使用 /resume WAIT-等待编号 你的回答。'); return; }
+        waits.answer(w, m, resume ? resume[2] : m.text);
+        this.reply(m, '回答已保存，将继续原任务。'); return;
+      }
       if (/^\/(?:material|run)\s*$/.test(m.text)) { this.reply(m, '请在 /material 后填写材料，或在 /run 后填写处理要求。尚未开工。'); return; }
       const explicit = /^\/amend\s+(N-[A-Fa-f0-9]{12})\s+\S/.exec(m.text);
       if (m.text.startsWith('/amend') && !explicit) { this.reply(m, '用法：/amend N-任务编号 补充要求'); return; }
@@ -272,13 +289,15 @@ export class Engine {
         this.reply(m, '引用材料属于另一项目或权限版本，尚未开工。请先选择对应项目，或重新提交材料和要求。'); return;
       }
       if (m.envelope?.kind === 'material') { this.tasks.material(m, project); return; }
+      if (ref?.state === 'waiting') { this.reply(m, '任务正在等待补充，请引用它的问题回复，或用 /task 查看恢复方式。'); return; }
       if (ref && ['queued', 'running'].includes(ref.state)) {
         this.tasks.amend(ref, m); this.reply(m, `补充已保存到 ${ref.id}。${ref.state === 'running' ? '正在尝试追加给执行器；提交结果会另行提示，不表示此前操作已撤销。' : '将在开工时一并处理。'}`); return;
       }
-      const t = this.tasks.create(m, project, ref);
-      this.store.addOutput(m.key, 'progress', `已收到任务 ${t.id} · ${t.project ?? '隔离目录'}\n工作线 ${t.workstreamId}；/task ${t.id} 查看，/amend ${t.id} 补充，/cancel ${t.id} 停止。`);
+      this.tasks.create(m, project, ref);
+      this.store.addOutput(m.key, 'progress', '正在处理，完成后会在这里回复。');
+      this.store.db.prepare("UPDATE outbox SET state='deferred' WHERE inboxKey=? AND kind='progress' AND state='pending'").run(m.key);
     } catch (e) {
-      if (e instanceof TaskInputError) { this.reply(m, e.message); return; }
+      if (e instanceof TaskInputError || e instanceof WaitInputError) { this.reply(m, e.message); return; }
       if (!(e instanceof RuntimeError)) throw e;
       this.reply(m, `项目不可用（${e.code}），尚未执行。请用 /project 选择已配置项目。`);
     }
@@ -310,8 +329,12 @@ export class Engine {
     while (!this.stopped) {
       if (this.nextSendAt > Date.now()) await new Promise(r => setTimeout(r, this.nextSendAt - Date.now()));
       if (this.stopped) return;
-      const output = this.store.nextOutput();
-      if (!output || !this.store.sending(output.id)) return;
+      const output = this.store.transaction(() => {
+        this.tasks.progress();
+        const next = this.store.nextOutput();
+        return next && this.store.sending(next.id) ? next : undefined;
+      });
+      if (!output) return;
       this.nextSendAt = Date.now() + 300;
       let platformId: string;
       let card: object|undefined;

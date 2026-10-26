@@ -1,7 +1,8 @@
+import { t as tr, currentLocale } from './locale.js';
 import { Writable } from 'node:stream';
 import { createInterface } from 'node:readline/promises';
 
-export class Cancelled extends Error { constructor() { super('初始化已取消；已保存的步骤可通过 namo init 继续'); } }
+export class Cancelled extends Error { constructor() { super(tr("初始化已取消；已保存的步骤可通过 namo init 继续")); } }
 export interface Prompter {
   signal?: AbortSignal;
   text(label: string, initial?: string, secret?: boolean): Promise<string>;
@@ -18,13 +19,14 @@ export class TerminalPrompter implements Prompter {
   constructor() { this.rl.on('SIGINT', () => { this.abort.abort(); this.rl.close(); }); }
   info(message: string): void { process.stdout.write(message + '\n'); }
   async text(label: string, initial = '', secret = false): Promise<string> {
+    const separator = currentLocale() === 'en' ? ': ' : '：';
     if (secret) {
       // Readline still handles editing; its echo goes to a muted stream.
-      process.stdout.write(`${label}${initial ? '（回车保留已有值）' : ''}：`);
+      process.stdout.write(`${label}${initial ? tr("（回车保留已有值）") : ''}${separator}`);
       this.muted = true;
     }
     try {
-      const value = await this.rl.question(secret ? '' : `${label}${initial ? ` [${initial}]` : ''}：`);
+      const value = await this.rl.question(secret ? '' : `${label}${initial ? ` [${initial}]` : ''}${separator}`);
       return value.trim() || initial;
     } catch { throw new Cancelled(); }
     finally { if (secret) { this.muted = false; process.stdout.write('\n'); } }
@@ -35,7 +37,7 @@ export class TerminalPrompter implements Prompter {
       if (!v) return initial;
       if (['y', 'yes', '是'].includes(v)) return true;
       if (['n', 'no', '否'].includes(v)) return false;
-      this.info('请输入 y 或 n。');
+      this.info(tr("请输入 y 或 n。"));
     }
   }
   close(): void { this.rl.close(); }

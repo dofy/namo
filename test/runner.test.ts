@@ -78,6 +78,7 @@ test('detached worker finishes while receiver is stopped; restart consumes one s
   const f = fixture(t), first = f.receiver(); first.start(); first.accept(message('first'));
   await wait(() => f.calls() === 1 && !!f.job()?.runtimePid);
   const before = f.job(), taskId = f.store.get('first')!.taskId!;
+  assert.equal(f.store.db.prepare("SELECT state FROM outbox WHERE inboxKey='first' AND kind='progress'").get()?.state,'deferred');
   await first.stop(); assert.equal(f.tasks.get(taskId)?.state, 'running');
   assert.equal(processState(before.pid), 'alive');
   writeFileSync(join(f.project, 'release'), 'release');
@@ -86,6 +87,7 @@ test('detached worker finishes while receiver is stopped; restart consumes one s
   assert.equal(f.deliveries.filter(x => x.includes('saved answer')).length, 0);
   const second = f.receiver(); second.start(); await wait(() => f.store.get('first')?.state === 'replied');
   assert.equal(f.calls(), 1); assert.equal(f.job().owner, before.owner);
+  assert.equal(f.store.db.prepare("SELECT state FROM outbox WHERE inboxKey='first' AND kind='progress'").get()?.state,'suppressed');
   assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM task_runs').get()?.n, 1);
   const detail = f.tasks.detail(f.tasks.get(taskId)!) as any;
   assert.equal(detail.evidence[0].state, 'finished'); assert.equal(detail.evidence[0].items[0].exitCode, 0);
@@ -161,6 +163,7 @@ test('cancellation committed before the final worker transaction wins even after
 test('stale card cannot cancel a terminal worker before task archival', async t => {
   const f=fixture(t),receiver=f.receiver();receiver.start();receiver.accept(message('a'));
   await wait(()=>f.calls()===1);await receiver.stop();
+  f.tasks.progress(Date.now()+12_000);
   const out=f.store.db.prepare("SELECT * FROM outbox WHERE inboxKey='a' AND kind='progress'").get() as any;
   const cards=new Cards(f.store);cards.prepare(out);
   f.store.db.prepare('UPDATE outbox SET platformId=? WHERE id=?').run('platform',out.id);

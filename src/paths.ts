@@ -1,3 +1,4 @@
+import { t as tr } from './locale.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, chmodSync, openSync, closeSync, fsyncSync, unlinkSync, lstatSync, linkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -19,7 +20,7 @@ export function readJson(file: string): any { return JSON.parse(readFileSync(fil
 export function digest(value: string): string { return createHash('sha256').update(value).digest('hex'); }
 export function atomicJson(file: string, value: unknown, exclusive = false): void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  if (existsSync(file) && lstatSync(file).isSymbolicLink()) throw new Error('拒绝覆盖符号链接配置，请指定真实配置文件');
+  if (existsSync(file) && lstatSync(file).isSymbolicLink()) throw new Error(tr("拒绝覆盖符号链接配置，请指定真实配置文件"));
   const temp = `${file}.${randomUUID()}.tmp`;
   try {
     writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
@@ -39,7 +40,7 @@ export class ConfigEditor {
   save(next: any): void {
     if (this.fingerprint !== undefined) {
       const current = readFileSync(this.file, 'utf8');
-      if (digest(current) !== this.fingerprint) throw new Error('配置被其他程序修改，请退出并重新运行 namo init');
+      if (digest(current) !== this.fingerprint) throw new Error(tr("配置被其他程序修改，请退出并重新运行 namo init"));
       if (JSON.stringify(this.value) === JSON.stringify(next)) return;
       if (!this.backedUp) {
         const configured = this.value?.dataDir ?? './data';
