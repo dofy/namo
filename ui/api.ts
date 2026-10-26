@@ -1,4 +1,4 @@
-import type { ApplyResult, ConfigValues, ConfigView, Diagnostic, Issue, ManagementState, ResolutionAction, TaskDetail } from '../src/ui-contract';
+import type { ApplyResult, ConfigValues, ConfigView, Diagnostic, Issue, ManagementState, ProfileValues, ResolutionAction, TaskDetail, UserProfile } from '../src/ui-contract';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -24,5 +24,6 @@ export const api = {
     subject: issue.subject, stamp: issue.stamp, action, note, requestId: crypto.randomUUID(), acknowledgeDuplicate: action === 'retry',
   }),
   diagnose: () => request<Diagnostic[]>('/api/diagnose', {}),
+  saveProfile: (configRevision: string, profile: UserProfile, patch: ProfileValues) => request<UserProfile>('/api/profiles', { configRevision, userId: profile.userId, version: profile.version, patch }),
 };
 export const message = (error: unknown) => error instanceof Error ? error.message : '操作未完成，请重试';

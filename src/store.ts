@@ -14,7 +14,7 @@ export interface Outbox {
   content: string; uuid: string; state: string; platformId: string | null;
   payload?: string | null;
 }
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export class Store {
   readonly db: DatabaseSync;
@@ -90,7 +90,19 @@ export class Store {
           taskId TEXT NOT NULL REFERENCES tasks(id), action TEXT NOT NULL,
           inputVersion INTEGER NOT NULL, expiresAt INTEGER NOT NULL, usedAt INTEGER
         );
-        PRAGMA user_version=2;
+        CREATE TABLE IF NOT EXISTS user_profiles (
+          channel TEXT NOT NULL, appId TEXT NOT NULL, userId TEXT NOT NULL,
+          name TEXT NOT NULL, language TEXT NOT NULL, timezone TEXT NOT NULL,
+          version INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
+          PRIMARY KEY(channel,appId,userId)
+        );
+        CREATE TABLE IF NOT EXISTS profile_changes (
+          channel TEXT NOT NULL, appId TEXT NOT NULL, userId TEXT NOT NULL,
+          version INTEGER NOT NULL, fields TEXT NOT NULL, source TEXT NOT NULL,
+          sourceRef TEXT, createdAt INTEGER NOT NULL,
+          PRIMARY KEY(channel,appId,userId,version)
+        );
+        PRAGMA user_version=3;
       `);
       const outputColumns = new Set((this.db.prepare('PRAGMA table_info(outbox)').all() as { name: string }[]).map(x => x.name));
       if (!outputColumns.has('payload')) this.db.exec('ALTER TABLE outbox ADD COLUMN payload TEXT');

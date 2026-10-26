@@ -49,3 +49,40 @@ test('UI serves bundled assets with strict CSP and never exposes source files or
  assert.equal((await fetch(ui.url+'/src/management.ts')).status,401);assert.equal((await fetch(ui.url+'/api/state')).status,401);
  const second=await (await fetch(ui.url)).text();assert.ok(!second.includes(nonce));
 });
+
+test('profile management uses configured identity and cannot change pairing, permissions or config',t=>{
+ const f=fixture(t),before=readFileSync(f.file,'utf8'),state=f.manager.profiles();
+ assert.equal(state.available,true);assert.equal(state.entries[0].userId,'alice');assert.equal(state.entries[0].version,0);
+ const saved=f.manager.saveProfile(state.configRevision,'alice',0,{name:'小七',language:'zh-cn',timezone:'UTC'});
+ assert.equal(saved.language,'zh-CN');assert.equal(saved.changes[0].source,'local-owner');
+ assert.equal(readFileSync(f.file,'utf8'),before);
+ assert.throws(()=>f.manager.saveProfile(state.configRevision,'unknown',0,{name:'x'}),/已配对/);
+ assert.throws(()=>f.manager.saveProfile(state.configRevision,'alice',1,{allowedUserIds:['attacker']}),/只能修改/);
+ assert.throws(()=>f.manager.saveProfile(state.configRevision,'alice',1,{name:f.raw.feishu.appSecret}),/凭据/);
+ assert.throws(()=>f.manager.saveProfile(state.configRevision,'alice',0,{name:'stale'}),/已被修改/);
+ assert.equal(f.manager.profiles().entries[0].name,'小七');
+ f.manager.save(f.manager.config().revision,{model:'changed'});
+ assert.throws(()=>f.manager.saveProfile(state.configRevision,'alice',1,{name:'wrong-config'}),/应用配置已变化/);
+});
+
+test('profile UI reads old schemas without migrating and refuses data from another app',t=>{
+ const f=fixture(t),s=new Store(join(f.data,'bot.sqlite'));s.bindAccount('another-app');s.close();
+ assert.equal(f.manager.profiles().available,false);assert.deepEqual(f.manager.profiles().entries,[]);
+ assert.throws(()=>f.manager.saveProfile(f.manager.config().revision,'alice',0,{name:'x'}),/不匹配/);
+ const old=new Store(join(f.data,'bot.sqlite'));old.db.exec('DROP TABLE user_profiles; DROP TABLE profile_changes; PRAGMA user_version=2');old.close();
+ const before=readFileSync(join(f.data,'bot.sqlite'));assert.equal(f.manager.profiles().available,false);
+ assert.throws(()=>f.manager.saveProfile(f.manager.config().revision,'alice',0,{name:'x'}),/尚未升级/);
+ assert.deepEqual(readFileSync(join(f.data,'bot.sqlite')),before);
+});
+
+test('profile endpoint retains authentication, origin and conflict guards',async t=>{
+ const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());const rev=f.manager.config().revision;
+ const post=(path:string,input:unknown,cookie='',origin=ui.url)=>fetch(ui.url+path,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify(input)});
+ const patch={configRevision:rev,userId:'alice',version:0,patch:{name:'小七'}};
+ assert.equal((await post('/api/profiles',patch)).status,401);
+ const login=await post('/api/session',{code:new URL(ui.entryUrl).hash.slice(1)}),cookie=login.headers.get('set-cookie')!;
+ assert.equal((await post('/api/profiles',patch,cookie,'https://attacker.invalid')).status,403);
+ assert.equal((await post('/api/profiles',patch,cookie)).status,200);
+ assert.equal((await post('/api/profiles',{...patch,patch:{name:'stale'}},cookie)).status,409);
+ assert.equal(f.manager.profiles().entries[0].name,'小七');
+});

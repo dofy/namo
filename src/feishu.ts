@@ -59,6 +59,7 @@ export function normalizeEvent(event: FeishuEvent, config: Config['feishu'], bot
   return { key: `${config.appId}:${m.message_id}`, messageId: m.message_id,
     chatKey, chatId: m.chat_id, senderId, text,
     envelope: { version: 1, type: m.message_type ?? 'unknown', kind: !text && materials.length ? 'material' : 'instruction', scopeKey,
+      chatType: m.chat_type === 'p2p' ? 'p2p' : m.chat_type === 'group' ? 'group' : undefined,
       threadId: m.thread_id, parentId: m.parent_id, rootId: m.root_id,
       sentAt: m.create_time && /^\d+$/.test(m.create_time) ? Number(m.create_time) : undefined,
       materials: materials.slice(0, 30), limitations } };

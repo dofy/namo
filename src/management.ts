@@ -10,6 +10,8 @@ import { Recovery, RecoveryError, type Resolution } from './recovery.js';
 import { serviceAction, serviceStatus, activeData, waitForService } from './service.js';
 import { doctor } from './doctor.js';
 import { acquireLock, makeRedactor } from './safety.js';
+import { Profiles, ProfileError } from './profiles.js';
+import type { ProfileState, UserProfile } from './ui-contract.js';
 
 export class ManagementError extends Error {}
 export interface ManagementDeps {
@@ -63,7 +65,29 @@ export class Management {
         workstreams:s.db.prepare('SELECT id,project,createdAt FROM workstreams ORDER BY createdAt DESC LIMIT 30').all(),
         issues:schema===SCHEMA_VERSION?new Recovery(s).list():[],queue:s.status()};
     });
-    return {service:this.status(),config:this.config(),database:db??{schema:0,tasks:[],issues:[],workstreams:[]},recoveryAvailable:db?.schema===SCHEMA_VERSION};
+    return {service:this.status(),config:this.config(),database:db??{schema:0,tasks:[],issues:[],workstreams:[]},recoveryAvailable:db?.schema===SCHEMA_VERSION,profiles:this.profiles()};
+  }
+  profiles(): ProfileState {
+    const {raw,revision}=this.source(),f=raw.feishu??{};
+    const unavailable=(reason:string):ProfileState=>({available:false,reason,configRevision:revision,entries:[]});
+    if(typeof f.appId!=='string'||!f.appId||!['feishu','lark'].includes(f.domain??'feishu')||!Array.isArray(f.allowedUserIds)||f.allowedUserIds.some((id:unknown)=>typeof id!=='string'||!id))return unavailable('请先完成应用配置和用户配对');
+    try{return this.read(s=>{
+      if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)return unavailable('在线数据尚未升级，档案暂不可编辑；请在维护窗口升级接收服务');
+      return {available:true,configRevision:revision,entries:[...new Set<string>(f.allowedUserIds)].map(userId=>new Profiles(s,{channel:f.domain??'feishu',appId:f.appId,userId}).get())};
+    })??unavailable('尚无服务数据库，请先完成初始化');}
+    catch(e){if(e instanceof ProfileError)return unavailable(e.message);throw e;}
+  }
+  saveProfile(configRevision:string,userId:string,version:number,patch:unknown):UserProfile {
+    const release=acquireLock(join(this.dataDir,'config-edit.lock'));
+    try{
+      const {raw,revision}=this.source(),f=raw.feishu??{};
+      if(configRevision!==revision)throw new ManagementError('应用配置已变化，请刷新并重新选择用户');
+      if(typeof userId!=='string'||!Array.isArray(f.allowedUserIds)||!f.allowedUserIds.includes(userId))throw new ManagementError('只能管理当前应用中已配对用户的档案');
+      if(typeof f.appId!=='string'||!f.appId||!['feishu','lark'].includes(f.domain??'feishu'))throw new ManagementError('应用身份无效');
+      const redact=makeRedactor([typeof f.appSecret==='string'?f.appSecret:'',process.env[f.appSecretEnv??'FEISHU_APP_SECRET']??''].filter(Boolean));
+      if(JSON.stringify(patch)!==redact(JSON.stringify(patch)??''))throw new ManagementError('档案不能包含凭据，请移除后重试');
+      return this.write(s=>new Profiles(s,{channel:f.domain??'feishu',appId:f.appId,userId}).update(version,patch,{source:'local-owner'}));
+    }catch(e){if(e instanceof ProfileError)throw new ManagementError(e.message);throw e;}finally{release();}
   }
   save(revision:string,patch:any):any {
     const release=acquireLock(join(this.dataDir,'config-edit.lock'));

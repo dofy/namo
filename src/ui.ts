@@ -70,6 +70,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/config')return send(200,manager.save(input.revision,input.patch));
         if(path==='/api/apply')return send(200,await manager.apply(input.revision,input.confirmed===true));
         if(path==='/api/diagnose')return send(200,await manager.diagnose());
+        if(path==='/api/profiles')return send(200,manager.saveProfile(input.configRevision,input.userId,input.version,input.patch));
         if(path==='/api/resolve')return send(200,manager.reconcile(input));
         if(path==='/api/cancel')return send(200,manager.cancel(input.id,input.inputVersion,input.requestId));
         return send(404,{error:'操作不存在'});

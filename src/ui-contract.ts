@@ -41,7 +41,17 @@ export interface ManagementState {
     workstreams: { id: string; project: string | null; createdAt: number }[];
   };
   recoveryAvailable: boolean;
+  profiles: ProfileState;
 }
+export interface ProfileIdentity { channel: 'feishu' | 'lark'; appId: string; userId: string }
+export interface ProfileValues { name: string; language: string; timezone: string }
+export interface ProfileChange {
+  version: number; fields: (keyof ProfileValues)[]; source: 'self' | 'local-owner'; sourceRef: string | null; createdAt: number;
+}
+export interface UserProfile extends ProfileIdentity, ProfileValues {
+  version: number; updatedAt: number | null; changes: ProfileChange[];
+}
+export interface ProfileState { available: boolean; reason?: string; configRevision: string; entries: UserProfile[] }
 export interface TaskDetail {
   id: string; workstream: string; project: string | null; cwd: string; execution: string; inputVersion: number;
   startedAt: number | null; finishedAt: number | null; error: string | null;

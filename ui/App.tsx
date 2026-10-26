@@ -7,8 +7,9 @@ import { Details } from './Details';
 import { TasksPage, type DetailTarget } from './pages/TasksPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
+import { ProfilesPage } from './pages/ProfilesPage';
 
-const pages = { tasks: '任务与工作线', settings: '项目与权限', connections: 'Agent 与飞书' };
+const pages = { tasks: '任务与工作线', settings: '项目与权限', profiles: '用户档案', connections: 'Agent 与飞书' };
 type Page = keyof typeof pages;
 export function App({ initial, startupError }: { initial?: ManagementState; startupError?: string }) {
   const [state, setState] = useState(initial), [view, setView] = useState<Page>('tasks'), [target, setTarget] = useState<DetailTarget | null>(null);
@@ -44,7 +45,7 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
       </div>
     </aside>
     <main>
-      <header><div><Text as="p" size="2" color="gray">{view === 'tasks' ? '让每一件事，都有着落。' : view === 'settings' ? '决定它在哪里工作，能做哪些事。' : '把本地 Agent 和飞书连接起来。'}</Text>
+      <header><div><Text as="p" size="2" color="gray">{view === 'tasks' ? '让每一件事，都有着落。' : view === 'settings' ? '决定它在哪里工作，能做哪些事。' : view === 'profiles' ? '保存称呼、语言与时区。' : '把本地 Agent 和飞书连接起来。'}</Text>
         <Heading as="h1" size="7">{pages[view]}</Heading></div>
         <Button variant="outline" color="gray" disabled={!state || expired} loading={refreshing} onClick={async () => {
           setRefreshing(true); try { await refresh(); } catch (e) { notify(message(e), true); } finally { setRefreshing(false); }
@@ -55,6 +56,7 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
         <section hidden={view !== 'tasks'} aria-label="任务与工作线内容"><TasksPage state={state} onOpen={next => { opener.current = document.activeElement as HTMLElement; setTarget(next); }} /></section>
         <section hidden={view !== 'settings'} aria-label="项目与权限内容"><SettingsPage config={state.config} recoveryAvailable={state.recoveryAvailable && !expired} refresh={refresh} notify={notify} /></section>
         <section hidden={view !== 'connections'} aria-label="Agent 与飞书内容"><ConnectionsPage config={state.config} /></section>
+        <section hidden={view !== 'profiles'} aria-label="用户档案内容"><ProfilesPage profiles={state.profiles ?? { available: false, configRevision: state.config.revision, entries: [], reason: '当前工作台进程尚未支持用户档案，请关闭并重新运行 namo ui。' }} expired={expired} refresh={refresh} /></section>
       </>}
       <footer>Namo 把消息交给 Agent，也把执行状态交还给你。</footer>
     </main>

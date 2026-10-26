@@ -8,6 +8,7 @@ import { Tasks, TaskInputError, policyHash, scopeOf, sessionKey, type Task, type
 import { randomUUID } from 'node:crypto';
 import { Recovery, RecoveryError } from './recovery.js';
 import { Cards, type CardEvent } from './cards.js';
+import { Profiles, ProfileError } from './profiles.js';
 
 export interface Sender { send(chatId: string, content: string, uuid: string): Promise<string>; sendCard?(chatId: string, card: object, uuid: string): Promise<string>; }
 export class SendError extends Error {
@@ -30,7 +31,7 @@ export class Engine {
   private pumping = false;
   private nextSendAt = 0;
   constructor(readonly store: Store, private runtime: Runtime, private sender: Sender,
-    private config: Pick<Config, 'dataDir' | 'concurrency'> & { codex?: Config['codex']; feishu?: Pick<Config['feishu'],'cards'> },
+    private config: Pick<Config, 'dataDir' | 'concurrency'> & { codex?: Config['codex']; feishu?: Partial<Pick<Config['feishu'],'cards' | 'appId' | 'domain' | 'allowedUserIds'>> },
     private redact: (s: string) => string = s => s,
     private log: Log = () => {},
     private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); }
@@ -60,10 +61,11 @@ export class Engine {
   private handleControl(m: Incoming): boolean {
     if (m.envelope?.kind === 'material') return false;
     const command = m.text.trim().split(/\s/)[0];
-    if (['/issues','/issue','/resolve','/status', '/whoami', '/cancel', '/reset', '/new', '/session', '/tasks', '/task', '/help', '/project', '/unsupported', '/too-long'].includes(command)) {
+    if (['/profile','/issues','/issue','/resolve','/status', '/whoami', '/cancel', '/reset', '/new', '/session', '/tasks', '/task', '/help', '/project', '/unsupported', '/too-long'].includes(command)) {
       if (!this.store.claim(m.key)) return true;
       let reply: string;
-      if (['/issues','/issue','/resolve'].includes(command)) {
+      if (command === '/profile') reply = this.profileCommand(m);
+      else if (['/issues','/issue','/resolve'].includes(command)) {
         const recovery=new Recovery(this.store), actor={id:m.senderId,chatKey:m.chatKey};
         const parts=m.text.trim().split(/\s+/);
         try {
@@ -108,11 +110,33 @@ export class Engine {
         for (const t of rows) this.tasks.cancel(t);
         reply = rows.length ? `已请求停止 ${rows.length} 条本人任务。已发生的操作不会自动撤销。` : '当前没有可取消的本人任务；可用 /tasks 核对任务编号。';
       }
-      if(command==='/help') reply+=' 异常处理：/issues 列表，/issue 编号 查看核对指引；本机 namo ui 管理配置与任务。';
+      if(command==='/help') reply+=' 私聊 /profile 查看或修改本人称呼、语言、时区。异常处理：/issues 列表，/issue 编号 查看核对指引；本机 namo ui 管理配置与任务。';
       this.store.finish(m.key, reply);
       return true;
     }
     return false;
+  }
+  private profileCommand(m: Incoming): string {
+    // Unknown/legacy chat types fail closed, and group replies never include a profile.
+    if (m.envelope?.chatType !== 'p2p') return '用户档案仅在机器人私聊中查看和修改，请私聊发送 /profile。';
+    if (m.envelope.type !== 'text' || m.envelope.parentId || m.envelope.rootId || m.envelope.materials.length) return '请单独发送 /profile 文字命令；引用、转发和材料不会修改档案。';
+    const f = this.config.feishu;
+    if (!f?.appId || !f.domain || !f.allowedUserIds?.includes(m.senderId)) return '当前身份未获准访问档案，请先通过本机初始化完成配对。';
+    try {
+      const profiles = new Profiles(this.store, { channel: f.domain, appId: f.appId, userId: m.senderId });
+      const parts = m.text.trim().split(/\s+/);
+      if (parts.length > 1) {
+        if (parts[1] === 'clear' && parts.length === 3 && /^\d+$/.test(parts[2])) {
+          profiles.update(Number(parts[2]), { name: '', language: '', timezone: '' }, { source: 'self', sourceRef: m.key });
+        } else if (parts[1] === 'set' && parts.length >= 5 && /^\d+$/.test(parts[2])) {
+          profiles.update(Number(parts[2]), { [parts[3]]: parts.slice(4).join(' ') === '-' ? '' : parts.slice(4).join(' ') }, { source: 'self', sourceRef: m.key });
+        } else return '用法：先 /profile 查看版本，再 /profile set 版本 name 称呼；language 语言；timezone 时区。值用 - 清空单项，/profile clear 版本 清空全部。';
+      }
+      const p = profiles.get();
+      return `${parts.length > 1 ? '档案已保存' : '本人档案'} · 版本 ${p.version}\n称呼：${p.name || '未设置'}\n语言：${p.language || '未设置'}\n时区：${p.timezone || '未设置'}\n`
+        + `修改示例（每次保存后使用新版本）：\n/profile set ${p.version} name 小七\n/profile set ${p.version} language zh-CN\n/profile set ${p.version} timezone Asia/Shanghai\n/profile clear ${p.version}\n`
+        + '只向本人私聊及本机管理入口展示，不改变配对或权限；当前尚未用于 Agent 回答或调度。清空不删除历史聊天和备份。';
+    } catch (e) { if (!(e instanceof ProfileError)) throw e; return e.message; }
   }
   private projectScope(m: Incoming): string { return m.envelope ? `${scopeOf(m)}:user:${m.senderId}` : m.chatKey; }
   private project(m: Incoming, reference?: Task): ProjectBinding {
