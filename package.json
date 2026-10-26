@@ -1,0 +1,28 @@
+{
+  "name": "namo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.15"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/cli.js start",
+    "check": "node dist/src/cli.js check",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "smoke:codex": "npm run build && node dist/scripts/smoke-codex.js",
+    "login": "node dist/src/cli.js login",
+    "status": "node dist/src/cli.js status",
+    "service:install": "node dist/scripts/launchd.js install",
+    "service:uninstall": "node dist/scripts/launchd.js uninstall"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.76.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2"
+  },
+  "description": "A local-first coding agent gateway, starting with Feishu and Codex."
+}

@@ -1,0 +1,25 @@
+{
+  "dataDir": "./data",
+  "concurrency": 2,
+  "feishu": {
+    "appId": "",
+    "appSecret": "",
+    "appSecretEnv": "FEISHU_APP_SECRET",
+    "allowedUserIds": [],
+    "allowedChatIds": [],
+    "requireMention": true,
+    "domain": "feishu"
+  },
+  "codex": {
+    "bin": "codex",
+    "home": "./data/codex-home",
+    "model": "",
+    "sandbox": "read-only",
+    "timeoutMs": 600000,
+    "projects": {},
+    "networkAccess": false,
+    "readPaths": [],
+    "denyPaths": [],
+    "allowLocalCommits": false
+  }
+}
