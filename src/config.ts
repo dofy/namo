@@ -9,6 +9,7 @@ export interface Config {
   feishu: {
     appId: string; appSecret: string; allowedUserIds: string[];
     allowedChatIds: string[]; requireMention: boolean; domain: 'feishu' | 'lark';
+    cards?: boolean;
   };
   codex: {
     bin: string; home: string; model?: string; timeoutMs: number;
@@ -23,6 +24,9 @@ export interface Config {
 export function loadConfig(file?: string): Config {
   const absolute = configFile(file);
   const d = JSON.parse(readFileSync(absolute, 'utf8'));
+  return parseConfig(d, absolute);
+}
+export function parseConfig(d: any, absolute: string): Config {
   if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error('配置必须是 JSON 对象');
   if (d.version !== undefined && d.version !== 1) throw new Error('配置版本不受支持，请使用对应版本的 Namo；没有自动覆盖配置');
   const path = (p: string) => p.startsWith('~/') ? resolve(homedir(), p.slice(2)) : resolve(dirname(absolute), p);
@@ -40,6 +44,7 @@ export function loadConfig(file?: string): Config {
   }
   if (f.domain !== undefined && !['feishu', 'lark'].includes(f.domain)) throw new Error('feishu.domain 只能是 feishu 或 lark');
   if (f.requireMention !== undefined && typeof f.requireMention !== 'boolean') throw new Error('feishu.requireMention 必须是布尔值');
+  if (f.cards !== undefined && typeof f.cards !== 'boolean') throw new Error('feishu.cards 必须是布尔值');
   if (d.dataDir === '' || c.home === '' || c.bin === '') throw new Error('dataDir、codex.home、codex.bin 不能是空字符串');
   const concurrency = d.concurrency ?? 2;
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error('concurrency 必须在 1–8 之间');
@@ -68,6 +73,7 @@ export function loadConfig(file?: string): Config {
       allowedUserIds: list(f.allowedUserIds ?? [], 'feishu.allowedUserIds'),
       allowedChatIds: list(f.allowedChatIds ?? [], 'feishu.allowedChatIds'),
       requireMention: f.requireMention !== false,
+      cards: f.cards === true,
       domain: f.domain === 'lark' ? 'lark' : 'feishu',
     },
     codex: {

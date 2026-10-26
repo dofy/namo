@@ -3,7 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
-import { loadConfig, validateFeishu } from './config.js';
+import { loadConfig, validateFeishu, parseConfig } from './config.js';
 import { ConfigEditor, atomicJson, readJson, digest, receiverDir } from './paths.js';
 import { acquireLock } from './safety.js';
 import { probeAgent, loginAgent, liveAgentTest, detectAgents, toolchainPaths, type Check } from './agents.js';
@@ -108,7 +108,7 @@ export async function onboard(file: string, ui: Prompter, overrides: Partial<Ini
       }
       raw.feishu.appSecret = await ui.text('App Secret（隐藏输入）', raw.feishu.appSecret ?? '', true);
     }
-    editor.save(raw); checkpoint('agent');
+    parseConfig(raw,file); editor.save(raw); checkpoint('agent');
     let config = loadConfig(file);
     let checks = await deps.probe(config);
     for (const check of checks) ui.info(`${check.status === 'ok' ? '✓' : '!'} ${check.message}${check.next ? `\n  ${check.next}` : ''}`);
@@ -133,7 +133,7 @@ export async function onboard(file: string, ui: Prompter, overrides: Partial<Ini
       const candidate = await waitForPairing(subscribe, ui);
       if (!await ui.confirm(`收到私聊验证，用户标识末尾 ${candidate.senderId.slice(-6)}。允许此用户使用本地 Agent？`)) { ui.info('没有新增授权用户。'); return result; }
       raw.feishu.allowedUserIds = [...new Set([...(raw.feishu.allowedUserIds ?? []), candidate.senderId])];
-      editor.save(raw); config = loadConfig(file); checkpoint('verification');
+      parseConfig(raw,file); editor.save(raw); config = loadConfig(file); checkpoint('verification');
     }
     validateFeishu(config); result.configured = true;
     checkpoint('verification');

@@ -12,7 +12,9 @@ export interface Inbox extends Incoming { seq: number; state: string; cancelRequ
 export interface Outbox {
   id: number; inboxKey: string; chatId: string; kind: string; part: number;
   content: string; uuid: string; state: string; platformId: string | null;
+  payload?: string | null;
 }
+export const SCHEMA_VERSION = 2;
 
 export class Store {
   readonly db: DatabaseSync;
@@ -22,7 +24,7 @@ export class Store {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(file);
     chmodSync(file, 0o600);
-    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) > 1) { this.db.close(); throw new Error('数据库版本较新，请使用对应版本的 Namo'); }
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) > SCHEMA_VERSION) { this.db.close(); throw new Error('数据库版本较新，请使用对应版本的 Namo'); }
     this.db.exec(`
       PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
       PRAGMA foreign_keys=ON;
@@ -78,8 +80,20 @@ export class Store {
           id TEXT PRIMARY KEY, taskId TEXT NOT NULL REFERENCES tasks(id), inputVersion INTEGER NOT NULL,
           state TEXT NOT NULL, threadId TEXT, turnId TEXT, startedAt INTEGER NOT NULL, finishedAt INTEGER, error TEXT
         );
-        PRAGMA user_version=1;
+        CREATE TABLE IF NOT EXISTS reconciliations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, requestId TEXT NOT NULL UNIQUE,
+          subject TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, note TEXT NOT NULL,
+          beforeState TEXT NOT NULL, createdAt INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS card_actions (
+          token TEXT PRIMARY KEY, outboxId INTEGER NOT NULL REFERENCES outbox(id),
+          taskId TEXT NOT NULL REFERENCES tasks(id), action TEXT NOT NULL,
+          inputVersion INTEGER NOT NULL, expiresAt INTEGER NOT NULL, usedAt INTEGER
+        );
+        PRAGMA user_version=2;
       `);
+      const outputColumns = new Set((this.db.prepare('PRAGMA table_info(outbox)').all() as { name: string }[]).map(x => x.name));
+      if (!outputColumns.has('payload')) this.db.exec('ALTER TABLE outbox ADD COLUMN payload TEXT');
     });
   }
   transaction<T>(fn: () => T): T {
@@ -153,17 +167,24 @@ export class Store {
   }
   nextOutput(): Outbox | undefined {
     return this.db.prepare(`SELECT o.* FROM outbox o WHERE o.state='pending'
-      AND NOT EXISTS (SELECT 1 FROM outbox p WHERE p.inboxKey=o.inboxKey AND p.kind=o.kind AND p.id<o.id AND p.state!='sent')
+      AND NOT EXISTS (SELECT 1 FROM outbox p WHERE p.inboxKey=o.inboxKey AND p.kind=o.kind AND p.id<o.id AND p.state NOT IN ('sent','confirmed','dismissed'))
       ORDER BY o.id LIMIT 1`).get() as unknown as Outbox | undefined;
   }
   sending(id: number): boolean { return this.db.prepare("UPDATE outbox SET state='sending' WHERE id=? AND state='pending'").run(id).changes === 1; }
   sent(id: number, platformId: string): void {
     this.transaction(() => {
       this.db.prepare("UPDATE outbox SET state='sent',platformId=? WHERE id=? AND state='sending'").run(platformId, id);
-      this.db.prepare(`UPDATE inbox SET state=CASE WHEN error IS NULL THEN 'replied' ELSE 'failed' END
-        WHERE state='awaiting_reply' AND key=(SELECT inboxKey FROM outbox WHERE id=?)
-        AND NOT EXISTS (SELECT 1 FROM outbox WHERE inboxKey=inbox.key AND kind='result' AND state!='sent')`).run(id);
+      const row = this.db.prepare('SELECT inboxKey FROM outbox WHERE id=?').get(id) as { inboxKey: string };
+      this.completeDelivery(row.inboxKey);
     });
+  }
+  completeDelivery(key: string): void {
+    this.db.prepare(`UPDATE inbox SET state=CASE
+      WHEN EXISTS(SELECT 1 FROM outbox WHERE inboxKey=inbox.key AND kind='result' AND state='dismissed') THEN 'delivery_closed'
+      WHEN error='legacy_execution_unverified' THEN 'delivery_closed'
+      WHEN error IS NULL THEN 'replied' ELSE 'failed' END
+      WHERE key=? AND state='awaiting_reply'
+      AND NOT EXISTS(SELECT 1 FROM outbox WHERE inboxKey=inbox.key AND kind='result' AND state NOT IN ('sent','confirmed','dismissed'))`).run(key);
   }
   deliveryFailed(id: number, unknown: boolean, reason: string): void {
     this.transaction(() => {

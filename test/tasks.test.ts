@@ -43,7 +43,7 @@ test('legacy database migration preserves rows, settings and session ids and is 
     const s = new Store(file);
     assert.equal(s.get('old')?.text, '原话'); assert.equal(s.get('old')?.state, 'replied'); assert.equal(s.get('old')?.envelope, undefined);
     assert.equal(s.thread('chat'), 'legacy-thread'); assert.equal(s.project('chat'), 'one');
-    assert.equal(s.db.prepare('PRAGMA user_version').get()?.user_version, 1); s.close();
+    assert.equal(s.db.prepare('PRAGMA user_version').get()?.user_version, 2); s.close();
   }
 });
 
@@ -221,4 +221,12 @@ test('a cancellation with failed durable acceptance does not interrupt the execu
   assert.throws(() => f.engine.accept(msg('stop', '/cancel')), /disk_error/);
   assert.equal(aborted, false); assert.equal(f.store.get('first')?.cancelRequested, 0);
   f.store.db.exec('DROP TRIGGER fail_cancel'); f.engine.accept(msg('stop', '/cancel')); await wait(() => aborted);
+});
+
+test('maintenance prevents claiming tasks and durable local cancellation is observed without a new Feishu message',async t=>{
+ let starts=0;const f=setup(t,{run(r){starts++;return new Promise((_resolve,reject)=>r.signal.addEventListener('abort',()=>reject(new RuntimeError('cancelled')),{once:true}));}});
+ f.engine.start();f.store.db.prepare("INSERT INTO settings VALUES('maintenance','test')").run();f.engine.accept(msg('held'));
+ await new Promise(r=>setTimeout(r,80));assert.equal(starts,0);assert.equal(f.tasks.get(f.store.get('held')!.taskId!)?.state,'queued');
+ f.store.db.prepare("DELETE FROM settings WHERE key='maintenance'").run();await wait(()=>starts===1);
+ const task=f.tasks.get(f.store.get('held')!.taskId!)!;f.tasks.cancel(task);await wait(()=>f.tasks.get(task.id)?.state==='cancelled');assert.equal(starts,1);
 });

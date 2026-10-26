@@ -5,8 +5,11 @@ import { chatWorkspace } from './safety.js';
 import { Store, type Incoming, type Inbox } from './store.js';
 import { RuntimeError, type Runtime, type RunControls } from './runtime.js';
 import { Tasks, TaskInputError, policyHash, scopeOf, sessionKey, type Task, type ProjectBinding } from './tasks.js';
+import { randomUUID } from 'node:crypto';
+import { Recovery, RecoveryError } from './recovery.js';
+import { Cards, type CardEvent } from './cards.js';
 
-export interface Sender { send(chatId: string, content: string, uuid: string): Promise<string>; }
+export interface Sender { send(chatId: string, content: string, uuid: string): Promise<string>; sendCard?(chatId: string, card: object, uuid: string): Promise<string>; }
 export class SendError extends Error {
   constructor(readonly unknown: boolean, readonly code: string) { super(code); }
 }
@@ -27,7 +30,7 @@ export class Engine {
   private pumping = false;
   private nextSendAt = 0;
   constructor(readonly store: Store, private runtime: Runtime, private sender: Sender,
-    private config: Pick<Config, 'dataDir' | 'concurrency'> & { codex?: Config['codex'] },
+    private config: Pick<Config, 'dataDir' | 'concurrency'> & { codex?: Config['codex']; feishu?: Pick<Config['feishu'],'cards'> },
     private redact: (s: string) => string = s => s,
     private log: Log = () => {},
     private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); }
@@ -57,10 +60,24 @@ export class Engine {
   private handleControl(m: Incoming): boolean {
     if (m.envelope?.kind === 'material') return false;
     const command = m.text.trim().split(/\s/)[0];
-    if (['/status', '/whoami', '/cancel', '/reset', '/new', '/session', '/tasks', '/task', '/help', '/project', '/unsupported', '/too-long'].includes(command)) {
+    if (['/issues','/issue','/resolve','/status', '/whoami', '/cancel', '/reset', '/new', '/session', '/tasks', '/task', '/help', '/project', '/unsupported', '/too-long'].includes(command)) {
       if (!this.store.claim(m.key)) return true;
       let reply: string;
-      if (command === '/whoami') reply = `用户 open_id：${m.senderId}\n会话 chat_id：${m.chatId}`;
+      if (['/issues','/issue','/resolve'].includes(command)) {
+        const recovery=new Recovery(this.store), actor={id:m.senderId,chatKey:m.chatKey};
+        const parts=m.text.trim().split(/\s+/);
+        try {
+          if(command==='/issues') reply=recovery.list(actor).map(x=>`${x.subject} · ${x.state} · /issue ${x.subject}`).join('\n')||'暂无待核对异常。';
+          else if(command==='/issue') {
+            const x=recovery.inspect(parts[1]?.toUpperCase()??'',actor);
+            reply=`${x.subject} · ${x.state}\n${x.guidance}\n${x.content??''}\n${x.actions.map((a:string)=>`/resolve ${x.subject} ${x.stamp} ${a} 核对依据`).join('\n')}\nreceived=确认收到；retry=明确重发（可能重复）；dismiss=放弃发送；reviewed=已核对执行。`;
+          } else {
+            recovery.resolve({subject:parts[1]?.toUpperCase()??'',stamp:parts[2],action:parts[3],note:parts.slice(4).join(' '),requestId:m.key,acknowledgeDuplicate:parts[3]==='retry'},actor);
+            reply='核对操作已记录。没有重新调用模型；重发仅处理已保存的结果。';
+          }
+        } catch(e) {if(!(e instanceof RecoveryError))throw e;reply=e.message;}
+      }
+      else if (command === '/whoami') reply = `用户 open_id：${m.senderId}\n会话 chat_id：${m.chatId}`;
       else if (command === '/tasks') reply = this.tasks.list(m).map(t => `${t.id} · ${t.state} · ${t.project ?? '隔离目录'} · ${t.workstreamId}`).join('\n') || '尚无任务记录。';
       else if (command === '/task') { const t = this.tasks.owned(m.text.trim().split(/\s+/)[1] ?? '', m); reply = t ? JSON.stringify(this.tasks.detail(t), null, 2) : '未找到可访问的任务。用 /tasks 查看任务编号。'; }
       else if (command === '/session') {
@@ -91,6 +108,7 @@ export class Engine {
         for (const t of rows) this.tasks.cancel(t);
         reply = rows.length ? `已请求停止 ${rows.length} 条本人任务。已发生的操作不会自动撤销。` : '当前没有可取消的本人任务；可用 /tasks 核对任务编号。';
       }
+      if(command==='/help') reply+=' 异常处理：/issues 列表，/issue 编号 查看核对指引；本机 namo ui 管理配置与任务。';
       this.store.finish(m.key, reply);
       return true;
     }
@@ -120,6 +138,7 @@ export class Engine {
   start(): void {
     this.log('recovered', this.store.recover());
     this.tasks.recover();
+    this.store.db.prepare("DELETE FROM settings WHERE key='maintenance'").run();
     this.store.transaction(() => {
       const rows = this.store.db.prepare("SELECT key FROM inbox WHERE state='queued' AND taskId IS NULL ORDER BY seq").all() as { key: string }[];
       for (const row of rows) { const m = this.store.get(row.key)!; if (!this.handleControl(m)) this.route(m); }
@@ -132,11 +151,16 @@ export class Engine {
     if (!this.started || this.stopped || this.pumping) return;
     this.pumping = true;
     try {
+      for(const active of this.active.values()) if(this.store.get(active.key)?.cancelRequested) active.abort.abort();
       this.tasks.expireMaterials();
       while (this.active.size < this.config.concurrency) {
-        const next = this.tasks.candidates().find(t => !this.active.has(t.chatKey) && ![...this.active.values()].some(a => pathsOverlap(a.cwd, t.cwd)));
-        if (!next) break;
-        const run = this.tasks.start(next);
+        const claimed=this.store.transaction(()=>{
+          if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
+          const next=this.tasks.candidates().find(t=>!this.active.has(t.chatKey)&&![...this.active.values()].some(a=>pathsOverlap(a.cwd,t.cwd)));
+          return next?{next,run:this.tasks.start(next)}:undefined;
+        });
+        if (!claimed) break;
+        const {next,run}=claimed;
         const abort = new AbortController();
         // Register the slot before run() starts, including synchronous failures.
         const promise = Promise.resolve().then(() => this.execute(next, run, abort.signal))
@@ -235,9 +259,19 @@ export class Engine {
       if (!output || !this.store.sending(output.id)) return;
       this.nextSendAt = Date.now() + 300;
       let platformId: string;
-      try { platformId = await this.sender.send(output.chatId, output.content, output.uuid); }
+      let card: object|undefined;
+      if(this.config.feishu?.cards&&this.sender.sendCard) card=new Cards(this.store).prepare(output);
+      try { platformId = card ? await this.sender.sendCard!(output.chatId, card, output.uuid) : await this.sender.send(output.chatId, output.content, output.uuid); }
       catch (e) {
         const error = e instanceof SendError ? e : new SendError(true, 'transport_error');
+        if(card&&!error.unknown&&['feishu_230001','feishu_230099'].includes(error.code)) {
+          // Only explicit card validation rejection permits a new text send.
+          this.store.transaction(()=>{
+            this.store.db.prepare("UPDATE outbox SET state='pending',payload=?,uuid=? WHERE id=? AND state='sending'").run(JSON.stringify({textOnly:true}),randomUUID(),output.id);
+            this.store.db.prepare('DELETE FROM card_actions WHERE outboxId=?').run(output.id);
+          });
+          this.log('card_fallback',{outboxId:output.id,code:error.code});continue;
+        }
         this.store.deliveryFailed(output.id, error.unknown, error.code);
         this.log('delivery_issue', { outboxId: output.id, state: error.unknown ? 'unknown' : 'failed', code: error.code });
         continue;
@@ -254,5 +288,10 @@ export class Engine {
     for (const task of tasks) task.abort.abort();
     await Promise.allSettled(tasks.map(t => t.promise));
     while (this.outputBusy) await new Promise(r => setTimeout(r, 20));
+  }
+  acceptCard(event: CardEvent): ReturnType<Cards['accept']> {
+    const result=new Cards(this.store).accept(event);
+    for(const active of this.active.values()) if(this.store.get(active.key)?.cancelRequested) active.abort.abort();
+    void this.pump();return result;
   }
 }

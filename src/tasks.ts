@@ -193,6 +193,7 @@ export class Tasks {
     return { id: t.id, workstream: t.workstreamId, project: t.project, cwd: t.cwd, execution: t.state, inputVersion: t.inputVersion,
       startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error,
       messages: this.store.db.prepare('SELECT role,version,dispatch FROM task_messages WHERE taskId=? ORDER BY version').all(t.id),
+      runs: this.store.db.prepare('SELECT id,inputVersion,state,startedAt,finishedAt,error FROM task_runs WHERE taskId=? ORDER BY startedAt').all(t.id),
       delivery: this.store.db.prepare("SELECT kind,part,state,error FROM outbox WHERE inboxKey=? ORDER BY id").all(t.inboxKey) };
   }
 }

@@ -3,6 +3,7 @@ import type { Config } from './config.js';
 import type { Incoming } from './store.js';
 import { SendError, type Sender } from './engine.js';
 import type { Material } from './messages.js';
+import type { CardEvent } from './cards.js';
 
 export interface FeishuEvent {
   sender?: { sender_type?: string; sender_id?: { open_id?: string } };
@@ -74,7 +75,7 @@ export class FeishuTransport implements Sender {
     this.client = new lark.Client({ appId: config.appId, appSecret: config.appSecret,
       domain: config.domain === 'lark' ? lark.Domain.Lark : lark.Domain.Feishu, logger });
   }
-  async connect(accept: (message: Incoming) => void): Promise<void> {
+  async connect(accept: (message: Incoming) => void, cardAction?: (event: CardEvent) => unknown): Promise<void> {
     let identity: any;
     try { identity = await this.client.request({ method: 'GET', url: '/open-apis/bot/v3/info' }); }
     catch { throw new Error('飞书身份查询失败：请检查 App ID、Secret、网络和机器人能力'); }
@@ -91,6 +92,11 @@ export class FeishuTransport implements Sender {
       onError: () => this.log('feishu_connection_failed'),
     });
     const dispatcher = new lark.EventDispatcher({ logger: { error: silent, warn: silent, info: silent, debug: silent, trace: silent } }).register({
+      ...(this.config.cards&&cardAction?{'card.action.trigger': async (event: CardEvent) => {
+        if(!event.operator?.open_id||!this.config.allowedUserIds.includes(event.operator.open_id)||
+          (this.config.allowedChatIds.length&&!this.config.allowedChatIds.includes(event.context?.open_chat_id??''))) return {toast:{type:'error',content:'无权操作这项任务'}};
+        try {return cardAction(event);} catch {this.log('card_persistence_failed');throw new Error('durable_card_accept_failed');}
+      }}:{}),
       'im.message.receive_v1': async event => {
         const message = normalizeEvent(event, this.config, botId);
         if (message) {
@@ -117,11 +123,17 @@ export class FeishuTransport implements Sender {
     throw new Error('飞书长连接未就绪，请检查平台已启用长连接接收事件和应用已发布');
   }
   async send(chatId: string, content: string, uuid: string): Promise<string> {
+    return this.createMessage(chatId,'text',JSON.stringify({text:content}),uuid);
+  }
+  async sendCard(chatId: string, card: object, uuid: string): Promise<string> {
+    return this.createMessage(chatId,'interactive',JSON.stringify(card),uuid);
+  }
+  private async createMessage(chatId:string,type:string,content:string,uuid:string):Promise<string> {
     let response: Awaited<ReturnType<typeof this.client.im.message.create>>;
     try {
       response = await this.client.im.message.create({
         params: { receive_id_type: 'chat_id' },
-        data: { receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text: content }), uuid },
+        data: { receive_id: chatId, msg_type: type, content, uuid },
       });
     } catch { throw new SendError(true, 'feishu_transport_unknown'); }
     if (response.code !== 0) throw new SendError(false, `feishu_${response.code ?? 'rejected'}`);
