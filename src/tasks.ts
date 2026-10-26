@@ -1,6 +1,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
 import { Store, type Inbox, type Incoming } from './store.js';
+import { readEvidence } from './evidence.js';
+import { runnerDetails } from './runner-store.js';
 
 export interface ProjectBinding { project?: string; cwd: string; policyHash: string; }
 export interface Workstream extends ProjectBinding { id: string; chatKey: string; scopeKey: string; ownerId: string; }
@@ -161,24 +163,34 @@ export class Tasks {
   finish(t: Task, run: string, text: string, error?: string): void {
     this.store.transaction(() => {
       const unresolved = this.store.db.prepare("SELECT 1 FROM task_messages WHERE taskId=? AND role='revision' AND dispatch NOT IN ('accepted','applied') LIMIT 1").get(t.id);
-      const state = error === 'cancelled' ? 'cancelled' : error === 'interrupted' ? 'interrupted' : error ? 'failed' : unresolved ? 'needs_attention' : 'succeeded';
+      const state = error === 'cancelled' ? 'cancelled' : ['interrupted','runner_lost'].includes(error ?? '') ? 'interrupted' : error ? 'failed' : unresolved ? 'needs_attention' : 'succeeded';
       this.store.finish(t.inboxKey, text + (unresolved ? '\n\n注意：有补充要求尚未确认送入执行器，未自动重送。请用 /task 查看后明确发起后续任务。' : ''), error);
       this.store.db.prepare('UPDATE tasks SET state=?,error=?,finishedAt=? WHERE id=?').run(state, error ?? null, Date.now(), t.id);
       this.store.db.prepare('UPDATE task_runs SET state=?,error=?,finishedAt=? WHERE id=?').run(error ? state : 'succeeded', error ?? null, Date.now(), run);
     });
   }
-  cancel(t: Task): void {
-    this.store.db.prepare('UPDATE inbox SET cancelRequested=1 WHERE key=?').run(t.inboxKey);
-    if (t.state === 'queued') {
-      this.store.claim(t.inboxKey); this.store.finish(t.inboxKey, '这条任务已取消。', 'cancelled');
-      this.store.db.prepare("UPDATE tasks SET state='cancelled',error='cancelled',finishedAt=? WHERE id=?").run(Date.now(), t.id);
-    }
+  cancel(t: Task): boolean {
+    return this.store.transaction(() => {
+      const current = this.get(t.id);
+      if (!current || !['queued','running'].includes(current.state) || current.inputVersion !== t.inputVersion) return false;
+      const job = this.store.db.prepare(`SELECT j.state FROM runner_jobs j JOIN task_runs r ON r.id=j.runId
+        WHERE r.taskId=? AND r.state='running' ORDER BY r.startedAt DESC LIMIT 1`).get(t.id);
+      // Serialize every cancellation channel against the worker's final write.
+      if (job && !['starting','running'].includes(String(job.state))) return false;
+      this.store.db.prepare('UPDATE inbox SET cancelRequested=1 WHERE key=?').run(current.inboxKey);
+      if (current.state === 'queued') {
+        this.store.claim(current.inboxKey); this.store.finish(current.inboxKey, '这条任务已取消。', 'cancelled');
+        this.store.db.prepare("UPDATE tasks SET state='cancelled',error='cancelled',finishedAt=? WHERE id=?").run(Date.now(), current.id);
+      }
+      return true;
+    });
   }
-  recover(): void {
+  recover(preserveRunners = false): void {
     this.store.transaction(() => {
-      this.store.db.prepare("UPDATE task_messages SET dispatch='unknown' WHERE dispatch='submitting'").run();
-      this.store.db.prepare("UPDATE tasks SET state='interrupted',error='interrupted',finishedAt=? WHERE state='running'").run(Date.now());
-      this.store.db.prepare("UPDATE task_runs SET state='interrupted',error='interrupted',finishedAt=? WHERE state='running'").run(Date.now());
+      const taskFilter = preserveRunners ? " AND NOT EXISTS(SELECT 1 FROM task_runs r JOIN runner_jobs j ON j.runId=r.id WHERE r.taskId=tasks.id AND r.state='running')" : '';
+      this.store.db.prepare(`UPDATE task_messages SET dispatch='unknown' WHERE dispatch='submitting' AND taskId IN (SELECT id FROM tasks WHERE 1=1${taskFilter})`).run();
+      this.store.db.prepare(`UPDATE tasks SET state='interrupted',error='interrupted',finishedAt=? WHERE state='running'${taskFilter}`).run(Date.now());
+      this.store.db.prepare(`UPDATE task_runs SET state='interrupted',error='interrupted',finishedAt=? WHERE state='running'${preserveRunners ? ' AND NOT EXISTS(SELECT 1 FROM runner_jobs j WHERE j.runId=task_runs.id)' : ''}`).run(Date.now());
     });
   }
   list(m: Incoming): Task[] {
@@ -192,6 +204,8 @@ export class Tasks {
   detail(t: Task): unknown {
     return { id: t.id, workstream: t.workstreamId, project: t.project, cwd: t.cwd, execution: t.state, inputVersion: t.inputVersion,
       startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error,
+      evidence: readEvidence(this.store, t.id),
+      runners: runnerDetails(this.store, t.id),
       messages: this.store.db.prepare('SELECT role,version,dispatch FROM task_messages WHERE taskId=? ORDER BY version').all(t.id),
       runs: this.store.db.prepare('SELECT id,inputVersion,state,startedAt,finishedAt,error FROM task_runs WHERE taskId=? ORDER BY startedAt').all(t.id),
       delivery: this.store.db.prepare("SELECT kind,part,state,error FROM outbox WHERE inboxKey=? ORDER BY id").all(t.inboxKey) };

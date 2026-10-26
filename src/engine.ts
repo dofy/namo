@@ -9,6 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { Recovery, RecoveryError } from './recovery.js';
 import { Cards, type CardEvent } from './cards.js';
 import { Profiles, ProfileError } from './profiles.js';
+import { EvidenceRecorder, evidenceSummary, readEvidence } from './evidence.js';
+import { runnerJob } from './runner-store.js';
 
 export interface Sender { send(chatId: string, content: string, uuid: string): Promise<string>; sendCard?(chatId: string, card: object, uuid: string): Promise<string>; }
 export class SendError extends Error {
@@ -102,13 +104,14 @@ export class Engine {
       else if (command === '/too-long') reply = '这条消息超过 16000 字符，尚未交给模型。请拆成较短的消息。';
       else if (command === '/help') reply = '支持文字和富文本；独立附件 / 转发只保存描述、等待说明。/material 内容 暂存材料；/run 要求 开工并关联材料；/tasks 列表；/task N-编号 详情；/amend N-编号 补充要求；/cancel [N-编号] 取消本人任务；/session [W-编号] 查看或续接工作线；/new 或 /reset 新上下文；/project 选择项目；/status 查看状态。尚无附件解析、后台派工或定时功能。';
       else if (command === '/reset' || command === '/new') {
-        if (this.active.has(m.chatKey)) reply = '本会话仍在执行。请先 /cancel，等执行停止后再 /reset。';
+        if (this.active.has(m.chatKey) || this.tasks.pending(m).some(t => t.state === 'running')) reply = '本会话仍在执行。请先 /cancel，等执行停止后再 /reset。';
         else { this.store.clearThread(m.chatKey); this.tasks.reset(m); reply = '已开始新的工作线。下一条任务使用新上下文；历史任务和代码仍保留。'; }
       } else {
         const target = m.text.trim().split(/\s+/)[1];
         const rows = this.tasks.pending(m).filter(t => target ? t.id === target.toUpperCase() : t.scopeKey === scopeOf(m));
-        for (const t of rows) this.tasks.cancel(t);
-        reply = rows.length ? `已请求停止 ${rows.length} 条本人任务。已发生的操作不会自动撤销。` : '当前没有可取消的本人任务；可用 /tasks 核对任务编号。';
+        const cancelled = rows.filter(t => this.tasks.cancel(t)).length;
+        reply = cancelled ? `已请求停止 ${cancelled} 条本人任务。已发生的操作不会自动撤销。` : '当前没有可取消的本人任务；可用 /tasks 核对任务编号。';
+        if (cancelled < rows.length) reply += '\n部分运行已结束或失联，没有再发出停止请求；请查看任务状态，失联运行需在本机核对。';
       }
       if(command==='/help') reply+=' 私聊 /profile 查看或修改本人称呼、语言、时区。异常处理：/issues 列表，/issue 编号 查看核对指引；本机 namo ui 管理配置与任务。';
       this.store.finish(m.key, reply);
@@ -160,14 +163,18 @@ export class Engine {
     catch (e) { if (e instanceof RuntimeError) return '当前项目已从配置移除，请用 /project 选择其他项目'; throw e; }
   }
   start(): void {
-    this.log('recovered', this.store.recover());
-    this.tasks.recover();
+    this.log('recovered', this.store.recover(this.runtime.persistent));
+    this.tasks.recover(this.runtime.persistent);
     this.store.db.prepare("DELETE FROM settings WHERE key='maintenance'").run();
     this.store.transaction(() => {
       const rows = this.store.db.prepare("SELECT key FROM inbox WHERE state='queued' AND taskId IS NULL ORDER BY seq").all() as { key: string }[];
       for (const row of rows) { const m = this.store.get(row.key)!; if (!this.handleControl(m)) this.route(m); }
     });
     this.started = true;
+    if (this.runtime.persistent) {
+      const runs = this.store.db.prepare(`SELECT r.id,r.taskId FROM task_runs r JOIN runner_jobs j ON j.runId=r.id WHERE r.state='running'`).all();
+      for (const run of runs) this.track(this.tasks.get(String(run.taskId))!, String(run.id));
+    }
     this.interval = setInterval(() => void this.pump(), 250);
     void this.pump();
   }
@@ -177,20 +184,18 @@ export class Engine {
     try {
       for(const active of this.active.values()) if(this.store.get(active.key)?.cancelRequested) active.abort.abort();
       this.tasks.expireMaterials();
-      while (this.active.size < this.config.concurrency) {
+      for (;;) {
+        const activeRuns = new Set([...this.active.values()].map(a => a.run));
+        const reservations = (this.runtime.reservations?.() ?? []).filter(r => !activeRuns.has(r.runId));
+        if (this.active.size + reservations.length >= this.config.concurrency) break;
         const claimed=this.store.transaction(()=>{
           if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
-          const next=this.tasks.candidates().find(t=>!this.active.has(t.chatKey)&&![...this.active.values()].some(a=>pathsOverlap(a.cwd,t.cwd)));
+          const next=this.tasks.candidates().find(t=>!this.active.has(t.chatKey)&&![...this.active.values(), ...reservations].some(a=>('chatKey' in a && a.chatKey===t.chatKey)||pathsOverlap(a.cwd,t.cwd)));
           return next?{next,run:this.tasks.start(next)}:undefined;
         });
         if (!claimed) break;
         const {next,run}=claimed;
-        const abort = new AbortController();
-        // Register the slot before run() starts, including synchronous failures.
-        const promise = Promise.resolve().then(() => this.execute(next, run, abort.signal))
-          .catch(() => this.fatal('execution_storage_error'))
-          .finally(() => { this.active.delete(next.chatKey); void this.pump(); });
-        this.active.set(next.chatKey, { key: next.inboxKey, task: next, run, cwd: next.cwd, abort, promise });
+        this.track(next, run);
       }
       if (!this.outputBusy) {
         this.outputBusy = true;
@@ -199,32 +204,58 @@ export class Engine {
     } catch { this.fatal('queue_storage_error'); }
     finally { this.pumping = false; }
   }
+  private track(task: Task, run: string): void {
+    if (this.active.has(task.chatKey)) throw new Error('duplicate_running_chat');
+    const abort = new AbortController();
+    const promise = Promise.resolve().then(() => this.execute(task, run, abort.signal))
+      .catch(() => this.fatal('execution_storage_error'))
+      .finally(() => { this.active.delete(task.chatKey); void this.pump(); });
+    this.active.set(task.chatKey, { key: task.inboxKey, task, run, cwd: task.cwd, abort, promise });
+  }
   private async execute(task: Task, run: string, signal: AbortSignal): Promise<void> {
     const m = this.store.get(task.inboxKey)!;
     this.log('turn_started', { messageId: m.messageId });
+    let evidence: EvidenceRecorder | undefined;
     try {
-      const current = this.project(m, task);
-      if (current.policyHash !== task.policyHash || realpathSync(task.cwd) !== task.cwd) throw new RuntimeError('task_configuration_changed');
+      const reattaching = this.runtime.persistent && !!runnerJob(this.store, run);
+      if (!reattaching) {
+        const current = this.project(m, task);
+        if (current.policyHash !== task.policyHash || realpathSync(task.cwd) !== task.cwd) throw new RuntimeError('task_configuration_changed');
+      }
       const cwd = task.cwd;
-      mkdirSync(cwd, { recursive: true, mode: 0o700 });
+      if (!reattaching) mkdirSync(cwd, { recursive: true, mode: 0o700 });
+      if (!this.runtime.persistent) evidence = new EvidenceRecorder(this.store, run, cwd, this.config.codex?.denyPaths, this.redact);
       const result = await this.runtime.run({
+        taskId: task.id, runId: run,
         threadId: this.store.thread(sessionKey(task.workstreamId)), cwd, signal,
         prompt: this.tasks.prompt(task),
         onThread: threadId => { this.store.saveThread(sessionKey(task.workstreamId), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
         onTurn: turnId => { const threadId = this.store.thread(sessionKey(task.workstreamId)); if (threadId) { this.store.saveRun(m.key, threadId, turnId); this.tasks.saveRun(run, threadId, turnId); } },
         onReady: controls => { const slot = this.active.get(m.chatKey); if (slot?.task.id === task.id) { slot.controls = controls; void this.steer(slot).catch(() => this.fatal('revision_storage_error')); } },
+        onEvidence: item => evidence!.observe(item),
       });
       await this.active.get(m.chatKey)?.steering;
-      if (signal.aborted) throw new RuntimeError('cancelled');
-      this.tasks.finish(task, run, this.redact(result.text));
+      if (signal.aborted && !this.runtime.persistent) throw new RuntimeError('cancelled');
+      this.store.transaction(() => {
+        evidence?.finish(true);
+        const report = evidence?.report ?? readEvidence(this.store, task.id).find(r => r.runId === run);
+        this.tasks.finish(task, run, this.redact(result.text) + (report ? evidenceSummary(report) : ''));
+      });
       this.log('turn_completed', { messageId: m.messageId });
     } catch (e) {
-      const code = signal.aborted ? 'cancelled' : e instanceof RuntimeError ? e.code : 'runtime_error';
+      if (this.runtime.persistent && e instanceof RuntimeError && e.code === 'receiver_detached') return;
+      if (this.runtime.persistent && e instanceof RuntimeError && ['runner_observer_error','runner_record_missing'].includes(e.code)) throw e;
+      const code = signal.aborted && !this.runtime.persistent ? 'cancelled' : e instanceof RuntimeError ? e.code : 'runtime_error';
       const text = code === 'cancelled' ? '这条请求已停止。已发生的操作不会自动撤销。'
+        : code === 'runner_lost' ? '独立执行进程失联，结果未确认，没有自动重跑。可能仍有子进程或外部操作；并发名额与项目占位保留。请在本机核对进程和操作后，通过异常核对入口解除占位。'
         : code === 'turn_timeout' ? '这条请求超时，执行器已停止。执行结果未确认，没有自动重跑。'
         : `这条请求未完成（${code}）。请检查本地 Codex 登录与服务状态；为避免重复操作，没有自动重跑。`;
       await this.active.get(m.chatKey)?.steering;
-      this.tasks.finish(task, run, text, code);
+      this.store.transaction(() => {
+        evidence?.finish(false);
+        const report = evidence?.report ?? readEvidence(this.store, task.id).find(r => r.runId === run);
+        this.tasks.finish(task, run, text + (report ? evidenceSummary(report) : ''), code);
+      });
       this.log('turn_failed', { messageId: m.messageId, code });
     }
   }
@@ -309,7 +340,7 @@ export class Engine {
   async stop(): Promise<void> {
     this.stopped = true; clearInterval(this.interval);
     const tasks = [...this.active.values()];
-    for (const task of tasks) task.abort.abort();
+    for (const task of tasks) task.abort.abort(this.runtime.persistent ? 'receiver_stopped' : undefined);
     await Promise.allSettled(tasks.map(t => t.promise));
     while (this.outputBusy) await new Promise(r => setTimeout(r, 20));
   }

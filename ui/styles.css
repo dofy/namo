@@ -68,6 +68,13 @@ summary { cursor: pointer; font-size: 13px; color: #47657c; }
 .detail-summary { display: flex; align-items: center; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
 .detail-block { white-space: pre-wrap; overflow-wrap: anywhere; background: #f6f8fa; border-radius: 7px; padding: 16px; font-size: 13px; line-height: 1.7; max-height: 45vh; overflow: auto; margin: 10px 0; }
 .result { margin: 18px 0; }
+.evidence { margin: 24px 0; padding: 20px; border: 1px solid #dce3e9; border-radius: 10px; }
+.evidence h3 { margin-top: 22px; }
+.evidence p, .evidence code { overflow-wrap: anywhere; }
+.evidence-run + .evidence-run { margin-top: 20px; border-top: 1px solid #dce3e9; }
+.evidence-entry { padding: 10px 0; border-bottom: 1px solid #e7ecf0; }
+.evidence-command { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.evidence-entry p { margin: 5px 0; }
 .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
 .audit { margin-top: 28px; }
 .audit > div { padding: 8px 0; border-bottom: 1px solid #dce3e9; }

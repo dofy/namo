@@ -62,6 +62,21 @@ export interface TaskDetail {
   runs: { id: string; inputVersion: number; state: string; startedAt: number; finishedAt: number | null; error: string | null }[];
   delivery: { kind: string; part: number; state: string; error: string | null }[];
   results: { content: string; state: string; part: number }[];
+  evidence?: RunEvidence[];
+  runners?: { runId: string; state: string; pid: number | null; createdAt: number; updatedAt: number; error: string | null;
+    events: { kind: string; createdAt: number }[] }[];
+}
+export type EvidenceStatus = 'running' | 'completed' | 'failed' | 'declined' | 'unknown';
+export interface EvidenceFile { path: string; action: 'add' | 'update' | 'delete'; movedTo?: string; existsAtFinish?: boolean }
+export interface EvidenceItem {
+  id: string; kind: 'command' | 'files' | 'artifact' | 'tool'; status: EvidenceStatus;
+  label: string; cwd?: string; exitCode?: number; durationMs?: number;
+  files?: EvidenceFile[]; path?: string; existsAtFinish?: boolean; limited?: boolean;
+}
+export interface RunEvidence {
+  version: 1; runId: string; state: 'collecting' | 'finished' | 'partial'; truncated: boolean;
+  items: EvidenceItem[];
+  git: { before: string | null; after: string | null; status: 'unavailable' | 'unchanged' | 'changed' };
 }
 export interface Diagnostic { id: string; status: 'ok' | 'warn' | 'fail'; message: string; next?: string }
 export interface ApplyResult { ready: boolean; config: ConfigView; message: string }

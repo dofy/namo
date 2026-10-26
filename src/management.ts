@@ -123,6 +123,7 @@ export class Management {
       }
       this.write(s=>s.transaction(()=>{
         if(s.db.prepare("SELECT 1 FROM inbox WHERE state IN ('queued','running','awaiting_reply')").get()||s.db.prepare("SELECT 1 FROM outbox WHERE state IN ('pending','sending')").get())throw new ManagementError('仍有在途任务或待发送消息，请完成后再应用；没有中断任务');
+        if(s.db.prepare("SELECT 1 FROM runner_jobs WHERE state IN ('starting','running','lost')").get())throw new ManagementError('仍有独立运行或失联占位，请完成或在本机核对后再应用配置');
         if(s.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())throw new ManagementError('已有维护操作进行中');
         s.db.prepare("INSERT INTO settings VALUES('maintenance',?)").run(maintenance);paused=true;
       }));
@@ -156,10 +157,14 @@ export class Management {
       if(old){if(old.subject===id&&old.action==='cancel'&&old.actor==='local-owner')return {duplicate:true};throw new ManagementError('操作编号已使用');}
       const tasks=new Tasks(s),t=tasks.get(id);
       if(!t||!['queued','running'].includes(t.state)||t.inputVersion!==inputVersion)throw new ManagementError('任务已变化，请刷新后操作');
-      if(t.state==='running'&&!this.status().running)throw new ManagementError('执行器状态需核对；服务未运行，不能确认已停止');
+      if(t.state==='running') {
+        const job=s.db.prepare(`SELECT j.state FROM runner_jobs j JOIN task_runs r ON r.id=j.runId WHERE r.taskId=? AND r.state='running' ORDER BY r.startedAt DESC LIMIT 1`).get(t.id);
+        if(!job&&!this.status().running)throw new ManagementError('执行器状态需核对；服务未运行，不能确认已停止');
+      }
+      if(!tasks.cancel(t))throw new ManagementError('任务已变化或独立运行已结束或失联，请刷新任务或通过异常入口核对；没有再发出停止请求');
       s.db.prepare('INSERT INTO reconciliations(requestId,subject,actor,action,note,beforeState,createdAt) VALUES(?,?,?,?,?,?,?)')
         .run(requestId,id,'local-owner','cancel','本机用户请求停止',JSON.stringify({state:t.state,inputVersion}),Date.now());
-      tasks.cancel(t);return {duplicate:false};
+      return {duplicate:false};
     }));
   }
   async diagnose():Promise<any> {return this.deps.diagnose(this.file,false);}

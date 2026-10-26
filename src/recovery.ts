@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { digest } from './paths.js';
 import { Store } from './store.js';
+import { processState, runnerEvent } from './runner-store.js';
 
 export class RecoveryError extends Error {}
 export interface Actor { id: string; chatKey?: string; }
@@ -15,8 +16,12 @@ export class Recovery {
     const row = delivery ? this.store.db.prepare(`SELECT o.*,i.senderId,i.chatKey,i.taskId FROM outbox o JOIN inbox i ON i.key=o.inboxKey WHERE o.id=?`).get(Number(subject.slice(2)))
       : /^N-[A-F0-9]{12}$/.test(subject) ? this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(subject) : undefined;
     if (!row || !this.allowed(row as any, actor)) throw new RecoveryError('未找到可访问的记录');
+    const hasRunners = !!this.store.db.prepare("SELECT 1 FROM sqlite_master WHERE name='runner_jobs' AND type='table'").get();
+    const quarantined = !delivery && hasRunners ? this.store.db.prepare(`SELECT j.runId,j.pid,j.runtimePid,j.state FROM runner_jobs j JOIN task_runs r ON r.id=j.runId WHERE r.taskId=? AND j.state IN ('lost','reviewed')`).all(row.id) : [];
+    const lost = quarantined.filter(job => job.state === 'lost');
     const snapshot = delivery ? { id: row.id, state: row.state, uuid: row.uuid, platformId: row.platformId, error: row.error, content: digest(String(row.content)), payload: digest(String(row.payload)) }
-      : { id: row.id, state: row.state, inputVersion: row.inputVersion, finishedAt: row.finishedAt, error: row.error };
+      : { id: row.id, state: row.state, inputVersion: row.inputVersion, finishedAt: row.finishedAt, error: row.error,
+        ...(quarantined.length ? { lostRunners: quarantined.map(({ state: _state, ...job }) => job) } : {}) };
     const stamp = digest(JSON.stringify(snapshot)).slice(0, 24);
     const reviewed = !!this.store.db.prepare("SELECT 1 FROM reconciliations WHERE subject=? AND action='reviewed' AND beforeState=?").get(subject, JSON.stringify(snapshot));
     const actionable = delivery ? ['unknown', 'failed'].includes(String(row.state)) : ['interrupted', 'needs_attention', 'failed'].includes(String(row.state)) && !reviewed;
@@ -24,7 +29,8 @@ export class Recovery {
       error: row.error, kind: row.kind, part: row.part, platformReceipt: delivery ? !!row.platformId : undefined,
       content: delivery ? row.content : undefined, reviewed, actionable,
       actions: actionable ? delivery ? ['received', ...(row.kind === 'result' ? ['retry'] : []), 'dismiss'] : ['reviewed'] : [],
-      guidance: delivery ? '先在飞书核对。确认收到只记账；重发只发送这段已保存结果，可能重复；放弃发送不会删除历史。'
+      guidance: lost.length ? '独立执行进程失联，项目与并发占位保留。必须在本机确认运行进程及其子进程已停止，核对代码和外部操作，再标记已核对以解除占位；不会重跑原任务。'
+        : delivery ? '先在飞书核对。确认收到只记账；重发只发送这段已保存结果，可能重复；放弃发送不会删除历史。'
         : '先核对代码、Git 和外部操作。标记已核对不会改变执行结论或重跑；如需继续，请明确发起后续任务。',
       history: this.store.db.prepare('SELECT action,note,createdAt FROM reconciliations WHERE subject=? ORDER BY id DESC LIMIT 20').all(subject),
       snapshot, inboxKey: row.inboxKey };
@@ -48,6 +54,15 @@ export class Recovery {
       const x = this.inspect(r.subject, local ? undefined : actor);
       if (x.stamp!==r.stamp || !x.actionable || !x.actions.includes(r.action)) throw new RecoveryError('记录已变化或操作不可用，请刷新后重新核对');
       if (r.action==='retry' && x.state==='unknown' && !r.acknowledgeDuplicate) throw new RecoveryError('发送结果不明；重发可能产生重复消息，需明确确认');
+      if (x.snapshot.lostRunners?.length) {
+        if (!local) throw new RecoveryError('独立进程失联必须通过本机核对入口处理，确认进程及子进程均已停止后再解除占位');
+        if (x.snapshot.lostRunners.some((job: { pid: number | null; runtimePid: number | null }) => [job.pid,job.runtimePid].some(pid => pid && processState(pid) !== 'dead')))
+          throw new RecoveryError('原运行或执行器 PID 仍存在或状态不明，不能解除占位；没有向该 PID 发送信号');
+        for (const job of x.snapshot.lostRunners) {
+          this.store.db.prepare("UPDATE runner_jobs SET state='reviewed',updatedAt=? WHERE runId=? AND state='lost'").run(Date.now(), job.runId);
+          runnerEvent(this.store, job.runId, 'locally_reviewed');
+        }
+      }
       this.store.db.prepare('INSERT INTO reconciliations(requestId,subject,actor,action,note,beforeState,createdAt) VALUES(?,?,?,?,?,?,?)')
         .run(r.requestId,r.subject,actor.id,r.action,r.note.trim(),JSON.stringify(x.snapshot),Date.now());
       if (x.type==='delivery') {

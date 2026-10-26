@@ -11,7 +11,7 @@ export function renderTaskCard(t: Task, content: string, kind: string, part: num
   const elapsed=t.startedAt&&t.finishedAt?`${Math.max(0,Math.round((t.finishedAt-t.startedAt)/1000))} 秒`:'尚未结束';
   return {config:{wide_screen_mode:true},header:{title:plain(`${title} · ${t.id}`),template:kind==='progress'?'blue':t.state==='succeeded'?'green':t.state==='cancelled'?'grey':'orange'},
     elements:[{tag:'div',fields:[{is_short:true,text:plain(`项目\n${t.project??'隔离目录'}`)},{is_short:true,text:plain(`输入版本 / 耗时\nv${t.inputVersion} / ${elapsed}`)}]},
-      {tag:'div',text:plain(`${kind==='result'?'结果与验证':'接收记录'}${part?`（续 ${part+1}）`:''}\n${content}`)},
+      {tag:'div',text:plain(`${kind==='result'?'答复与执行记录':'接收记录'}${part?`（续 ${part+1}）`:''}\n${content}`)},
       {tag:'note',elements:[plain(`工作线 ${t.workstreamId} · /task ${t.id} 查看最新状态`)]},
       ...(actions.length?[{tag:'action',actions:actions.map(a=>({tag:'button',text:plain(a.action==='cancel'?'停止任务':'查看状态'),type:'default',value:{namo:a.token},
         ...(a.action==='cancel'?{confirm:{title:plain('停止这项任务？'),text:plain('已发生的操作不会自动撤销。')}}:{})}))}]:[])]};
@@ -45,8 +45,9 @@ export class Cards {
       if(Number(a.expiresAt)<Date.now()) return result('按钮已过期，请用 /task 或 /cancel 命令',true);
       const tasks=new Tasks(this.store),task=tasks.get(String(a.taskId))!;
       if(a.action==='cancel'&&(!['queued','running'].includes(task.state)||a.inputVersion!==a.currentVersion)) return result('任务已变化，请查看最新状态后操作',true);
+      if(a.action==='cancel'&&!tasks.cancel(task)) return result('运行已结束或失联，没有再发出停止请求；请查看任务状态，失联运行需在本机核对',true);
       this.store.db.prepare('UPDATE card_actions SET usedAt=? WHERE token=?').run(Date.now(),token);
-      if(a.action==='cancel') { tasks.cancel(task); return result('已请求停止；已发生的操作不会撤销'); }
+      if(a.action==='cancel') return result('已请求停止；已发生的操作不会撤销');
       this.store.addOutput(task.inboxKey,`card-status:${digest(token).slice(0,16)}`,JSON.stringify(tasks.detail(task),null,2));
       return result('最新任务状态已加入回复队列');
     });

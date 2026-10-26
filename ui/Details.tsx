@@ -4,6 +4,7 @@ import type { Issue, TaskDetail } from '../src/ui-contract';
 import { api, message } from './api';
 import { ConfirmButton, Field, Notice, StatusBadge } from './components';
 import type { DetailTarget } from './pages/TasksPage';
+import { Evidence } from './Evidence';
 
 export function Details({ target, close, changed, notify, restoreFocus }: {
   target: DetailTarget | null; close: () => void; changed: () => Promise<unknown>;
@@ -35,10 +36,20 @@ export function Details({ target, close, changed, notify, restoreFocus }: {
         <div className="detail-summary"><StatusBadge state={data.value.execution} /><Text size="2">{data.value.project || '隔离目录'} · 输入版本 {data.value.inputVersion}</Text></div>
         <Text as="p" size="2" color="gray">工作线 {data.value.workstream}</Text>
         {data.value.error && <Notice error>原因：{data.value.error}</Notice>}
+        {!!data.value.runners?.length && <section>
+          <Heading as="h2" size="4">独立执行</Heading>
+          <Text as="p" size="2" color="gray">接收服务重启不重跑原任务；失联时保留占位，需在本机核对进程和外部操作。</Text>
+          {data.value.runners.map(runner => <Text as="p" size="2" key={runner.runId}>
+            {{ starting: '等待执行进程', running: '执行中', completed: '结果已保存', failed: '执行未完成', lost: '失联，等待核对', reviewed: '已核对并解除占位' }[runner.state] ?? runner.state}
+            {' · PID ' + (runner.pid ?? '尚未登记') + ' · 最后记录 ' + new Date(runner.updatedAt).toLocaleString()}
+          </Text>)}
+        </section>}
+        <Evidence reports={data.value.evidence} />
+        <Heading as="h2" size="4">答复与投递</Heading>
         {data.value.results.map(result => <section className="result" key={result.part}>
           <StatusBadge state={result.state} /><div className="detail-block">{result.content}</div>
         </section>)}
-        <details><summary>输入、运行与投递记录</summary><pre className="detail-block">{JSON.stringify({ messages: data.value.messages, runs: data.value.runs, delivery: data.value.delivery }, null, 2)}</pre></details>
+        <details><summary>输入、运行与投递记录</summary><pre className="detail-block">{JSON.stringify({ messages: data.value.messages, runs: data.value.runs, runners: data.value.runners, delivery: data.value.delivery }, null, 2)}</pre></details>
         {['queued', 'running'].includes(data.value.execution) && <div className="actions">
           <ConfirmButton danger title="停止这项任务？" description="停止不会撤销已发生的操作。请求会先保存，再通知执行器停止。" action="确认停止"
             onConfirm={async () => { await api.cancel(data.value); await completed('停止请求已保存。'); }}>停止这项任务</ConfirmButton>

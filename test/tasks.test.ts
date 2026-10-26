@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { Store, type Incoming } from '../src/store.js';
+import { Store, SCHEMA_VERSION, type Incoming } from '../src/store.js';
 import { Engine, pathsOverlap } from '../src/engine.js';
 import { Tasks } from '../src/tasks.js';
 import { RuntimeError, type RunRequest, type Runtime } from '../src/runtime.js';
@@ -43,7 +43,7 @@ test('legacy database migration preserves rows, settings and session ids and is 
     const s = new Store(file);
     assert.equal(s.get('old')?.text, '原话'); assert.equal(s.get('old')?.state, 'replied'); assert.equal(s.get('old')?.envelope, undefined);
     assert.equal(s.thread('chat'), 'legacy-thread'); assert.equal(s.project('chat'), 'one');
-    assert.equal(s.db.prepare('PRAGMA user_version').get()?.user_version, 3); s.close();
+    assert.equal(s.db.prepare('PRAGMA user_version').get()?.user_version, SCHEMA_VERSION); s.close();
   }
 });
 

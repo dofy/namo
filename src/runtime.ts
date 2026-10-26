@@ -5,16 +5,26 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import type { Config } from './config.js';
 import { codexEnvironment } from './safety.js';
+import { projectEvidenceItem } from './evidence.js';
+import type { EvidenceItem } from './ui-contract.js';
 
 type Obj = Record<string, any>;
 export interface RunRequest {
+  taskId?: string; runId?: string;
   threadId?: string; cwd: string; prompt: string; signal: AbortSignal;
   onThread: (id: string) => void; onTurn: (id: string) => void;
   onReady?: (controls: RunControls) => void;
+  onEvidence?: (item: EvidenceItem) => void;
+  onProcess?: (pid: number) => void;
 }
 export interface RunControls { steer(text: string): Promise<'accepted' | 'not_active' | 'rejected'>; }
 export interface RunResult { text: string; threadId: string; turnId: string; }
-export interface Runtime { run(request: RunRequest): Promise<RunResult>; }
+export interface Runtime {
+  /** Durable runtimes own their evidence and survive receiver detachment. */
+  persistent?: boolean;
+  run(request: RunRequest): Promise<RunResult>;
+  reservations?(): { runId: string; chatKey: string; cwd: string }[];
+}
 export class RuntimeError extends Error {
   constructor(readonly code: string, readonly detail?: string) { super(code); }
 }
@@ -160,6 +170,7 @@ export class CodexRuntime implements Runtime {
     let abort: () => void = () => {};
     let completed = false;
     try {
+      if (rpc.process.pid) r.onProcess?.(rpc.process.pid);
       await rpc.request('initialize', { clientInfo: { name: 'feishu_codex_bot', title: 'Feishu Codex Bot', version: '0.1.0' }, capabilities: { experimentalApi: true } });
       rpc.notify('initialized');
       const agents = join(r.cwd, 'AGENTS.md');
@@ -180,22 +191,47 @@ export class CodexRuntime implements Runtime {
       r.onThread(threadId);
       if (r.signal.aborted) throw new RuntimeError('cancelled');
       const messages = new Map<string, Obj>();
+      type Notice = { turnId: string; status?: string; done: boolean; items: { evidence?: EvidenceItem; message?: Obj }[] };
+      let expectedTurn: string | undefined;
+      const buffered: Notice[] = [];
+      let consume: (notice: Notice) => void = () => {};
       const completion = new Promise<RunResult>((resolve, reject) => {
-        stopListening = rpc.listen((method, params) => {
-          if (method === 'transport/closed') { reject(new RuntimeError('runtime_disconnected')); return; }
-          if (params.threadId !== threadId) return;
-          if (method === 'item/completed' && params.item?.type === 'agentMessage') messages.set(params.item.id, params.item);
-          if (method !== 'turn/completed') return;
+        consume = notice => {
+          if (notice.turnId !== expectedTurn || completed) return;
+          try {
+            for (const item of notice.items) {
+              if (item.evidence) r.onEvidence?.(item.evidence);
+              if (item.message) messages.set(item.message.id, item.message);
+            }
+          } catch {
+            completed = true; rpc.stop(); reject(new RuntimeError('evidence_storage_error')); return;
+          }
+          if (!notice.done) return;
           completed = true;
-          const turn = params.turn;
-          if (turn?.status !== 'completed') { reject(new RuntimeError(turn?.status === 'interrupted' ? 'cancelled' : 'turn_failed')); return; }
-          for (const item of turn.items ?? []) if (item.type === 'agentMessage') messages.set(item.id, item);
-          const items = [...messages.values()].filter(m => m.phase !== 'commentary' && m.delivery !== 'async');
+          if (notice.status !== 'completed') { reject(new RuntimeError(notice.status === 'interrupted' ? 'cancelled' : 'turn_failed')); return; }
+          const items = [...messages.values()];
           const finals = items.filter(m => m.phase === 'final_answer');
           const text = (finals.length ? finals : items.slice(-1)).map(m => m.text).join('\n\n').trim();
           if (!text) { reject(new RuntimeError('empty_reply')); return; }
           if (text.length > 60_000) { reject(new RuntimeError('reply_too_large')); return; }
-          resolve({ text, threadId, turnId: turn.id });
+          resolve({ text, threadId, turnId: notice.turnId });
+        };
+        stopListening = rpc.listen((method, params) => {
+          if (method === 'transport/closed') { reject(new RuntimeError('runtime_disconnected')); return; }
+          if (params.threadId !== threadId || !['item/started', 'item/completed', 'turn/completed'].includes(method)) return;
+          const done = method === 'turn/completed', turnId = done ? params.turn?.id : params.turnId;
+          if (typeof turnId !== 'string' || (expectedTurn && turnId !== expectedTurn)) return;
+          const raw: Obj[] = done ? params.turn?.items ?? [] : [params.item];
+          const items = raw.filter(Boolean).map(item => ({
+            evidence: projectEvidenceItem(item),
+            message: method !== 'item/started' && item.type === 'agentMessage' && item.phase !== 'commentary' && item.delivery !== 'async'
+              ? { id: item.id, phase: item.phase, text: typeof item.text === 'string' ? item.text.slice(0, 60_001) : '' } : undefined,
+          })).filter(item => item.evidence || item.message);
+          if (!done && !items.length) return;
+          const notice: Notice = { turnId, done, status: done ? params.turn?.status : undefined, items };
+          if (expectedTurn) consume(notice);
+          else if (buffered.length < 512) buffered.push(notice);
+          else { completed = true; rpc.stop(); reject(new RuntimeError('event_buffer_overflow')); }
         });
         abort = () => { rpc.stop(); reject(new RuntimeError('cancelled')); };
         r.signal.addEventListener('abort', abort, { once: true });
@@ -206,7 +242,11 @@ export class CodexRuntime implements Runtime {
       // Codex 0.154 rejects legacy readOnly.access despite retaining it in the
       // schema. Select the same restricted profile on both thread and turn.
       const turn = await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: r.prompt }], approvalPolicy: 'never', permissions: 'feishu-bot' });
+      if (typeof turn.turn?.id !== 'string') throw new RuntimeError('turn_missing');
       r.onTurn(turn.turn.id);
+      expectedTurn = turn.turn.id;
+      for (const notice of buffered) consume(notice);
+      buffered.length = 0;
       r.onReady?.({ steer: async text => {
         if (completed || r.signal.aborted) return 'not_active';
         try {

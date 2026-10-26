@@ -8,7 +8,8 @@ import { FeishuTransport } from './feishu.js';
 import { configFile, atomicJson, receiverDir, digest } from './paths.js';
 import { Management } from './management.js';
 import { randomUUID } from 'node:crypto';
-import { detectAgents, loginAgent, runtimeFor, probeAgent, liveAgentTest } from './agents.js';
+import { detectAgents, loginAgent, probeAgent, liveAgentTest } from './agents.js';
+import { RunnerRuntime } from './runner.js';
 import { doctor } from './doctor.js';
 import { TerminalPrompter, Cancelled } from './prompts.js';
 import { onboard } from './onboarding.js';
@@ -31,7 +32,7 @@ const HELP = `Namo · 飞书连接本地 Agent（首版支持 Codex）
   agent list           探测本机执行器，标明尚未支持的后端
   agent test --live     真实 Codex 响应测试（会使用账号额度）
   login                登录 Namo 独立的官方 Codex 环境
-  start                前台运行（Ctrl+C 停止）
+  start                前台接收（Ctrl+C 停止接收，已开工任务继续）
   status               消息队列和后台服务状态
   logs                 最近 80 行日志（自动脱敏）
   service <操作>       install / status / start / stop / restart / uninstall
@@ -149,7 +150,7 @@ async function main(): Promise<void> {
     releaseReceiver = acquireLock(receiverDir(config.feishu.appId));
     store = new Store(dbFile); store.bindAccount(config.feishu.appId);
     transport = new FeishuTransport(config.feishu, log);
-    engine = new Engine(store, runtimeFor(config), transport, config, redact, log, () => void stop(1));
+    engine = new Engine(store, new RunnerRuntime(store, config), transport, config, redact, log, () => void stop(1));
     const service = engine;
     await transport.connect(m => { service.accept(m); },event=>service.acceptCard(event)); if (closing) return;
     engine.start(); log('ready', { dataDir: config.dataDir, concurrency: config.concurrency });

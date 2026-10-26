@@ -14,7 +14,7 @@ export interface Outbox {
   content: string; uuid: string; state: string; platformId: string | null;
   payload?: string | null;
 }
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 5;
 
 export class Store {
   readonly db: DatabaseSync;
@@ -23,6 +23,7 @@ export class Store {
     if (readOnly) { this.db = new DatabaseSync(file, { readOnly: true }); return; }
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(file);
+    this.db.exec('PRAGMA busy_timeout=5000');
     chmodSync(file, 0o600);
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) > SCHEMA_VERSION) { this.db.close(); throw new Error('数据库版本较新，请使用对应版本的 Namo'); }
     this.db.exec(`
@@ -102,7 +103,19 @@ export class Store {
           sourceRef TEXT, createdAt INTEGER NOT NULL,
           PRIMARY KEY(channel,appId,userId,version)
         );
-        PRAGMA user_version=3;
+        CREATE TABLE IF NOT EXISTS run_evidence (
+          runId TEXT PRIMARY KEY REFERENCES task_runs(id), report TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS runner_jobs (
+          runId TEXT PRIMARY KEY REFERENCES task_runs(id), owner TEXT NOT NULL,
+          state TEXT NOT NULL, pid INTEGER, runtimePid INTEGER, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
+          configRevision TEXT NOT NULL, prompt TEXT NOT NULL, result TEXT, error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS runner_events (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT, runId TEXT NOT NULL REFERENCES runner_jobs(runId),
+          kind TEXT NOT NULL, createdAt INTEGER NOT NULL
+        );
+        PRAGMA user_version=5;
       `);
       const outputColumns = new Set((this.db.prepare('PRAGMA table_info(outbox)').all() as { name: string }[]).map(x => x.name));
       if (!outputColumns.has('payload')) this.db.exec('ALTER TABLE outbox ADD COLUMN payload TEXT');
@@ -218,14 +231,14 @@ export class Store {
       return rows;
     });
   }
-  recover(): { interrupted: number; unknown: number } {
+  recover(preserveRunners = false): { interrupted: number; unknown: number } {
     return this.transaction(() => {
       const outputs = this.db.prepare("SELECT id FROM outbox WHERE state='sending'").all() as { id: number }[];
       for (const row of outputs) {
         this.db.prepare("UPDATE outbox SET state='unknown',error='process_stopped_during_send' WHERE id=?").run(row.id);
         this.db.prepare("UPDATE inbox SET state='delivery_unknown',error='process_stopped_during_send' WHERE key=(SELECT inboxKey FROM outbox WHERE id=? AND kind='result')").run(row.id);
       }
-      const rows = this.db.prepare("SELECT key FROM inbox WHERE state='running'").all() as { key: string }[];
+      const rows = this.db.prepare(`SELECT key FROM inbox WHERE state='running' ${preserveRunners ? "AND NOT EXISTS(SELECT 1 FROM task_runs r JOIN runner_jobs j ON j.runId=r.id WHERE r.taskId=inbox.taskId AND r.state='running')" : ''}`).all() as { key: string }[];
       for (const row of rows) {
         this.addOutput(row.key, 'result', '服务在处理这条请求时中断，执行结果未确认。为避免重复执行操作，没有自动重跑；请先查询状态，再决定是否重新提交。');
         this.db.prepare("UPDATE inbox SET state='awaiting_reply',error='interrupted',finishedAt=? WHERE key=?").run(Date.now(), row.key);

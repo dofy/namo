@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexRuntime, RuntimeError } from '../src/runtime.js';
+import type { EvidenceItem } from '../src/ui-contract.js';
 
 const FAKE = `#!/usr/bin/env node
 import { createInterface } from 'node:readline';
@@ -25,9 +26,19 @@ createInterface({input:process.stdin}).on('line', line=>{
   if(prompt==='hang')return write({id:m.id,result:{turn:{id:'turn-one'}}});
   if(prompt==='disconnect')return process.exit(1);
   const threadId=m.params.threadId;
-  write({method:'item/completed',params:{threadId,item:{id:'comment',type:'agentMessage',phase:'commentary',text:'private progress'}}});
+  if(prompt==='evidence'||prompt==='evidence-fail'){
+   const command={id:'cmd',type:'commandExecution',command:'pnpm test --password PRIVATE_ARGUMENT',cwd:process.cwd(),status:'inProgress',aggregatedOutput:'PRIVATE_OUTPUT'};
+   write({method:'item/completed',params:{threadId,turnId:'old-turn',item:{...command,id:'stale'}}});
+   write({method:'turn/completed',params:{threadId,turn:{id:'old-turn',status:'completed',items:[{id:'old',type:'agentMessage',text:'WRONG_ANSWER'}]}}});
+   write({method:'item/started',params:{threadId,turnId:'turn-one',item:command}});
+   write({method:'item/completed',params:{threadId:'another-thread',turnId:'turn-one',item:{...command,id:'foreign'}}});
+   write({method:'item/completed',params:{threadId,turnId:'turn-one',item:{...command,status:'completed',exitCode:1,durationMs:14}}});
+   write({method:'turn/completed',params:{threadId,turn:{id:'turn-one',status:prompt==='evidence-fail'?'failed':'completed',items:[{id:'final',type:'agentMessage',phase:'final_answer',text:'answer'}]}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
+  }
+  write({method:'item/completed',params:{threadId,turnId:'turn-one',item:{id:'comment',type:'agentMessage',phase:'commentary',text:'private progress'}}});
   const item={id:'final',type:'agentMessage',phase:'final_answer',text:'public answer'};
-  write({method:'item/completed',params:{threadId,item}});
+  write({method:'item/completed',params:{threadId,turnId:'turn-one',item}});
   write({method:'turn/completed',params:{threadId,turn:{id:'turn-one',status:prompt==='fail'?'failed':'completed',items:[]}}});
   return write({id:m.id,result:{turn:{id:'turn-one'}}});
  }
@@ -89,4 +100,25 @@ test('a turn completed before readiness never sends a steer to the next turn', a
   await runtime.run({ cwd: dir, prompt: 'hello', signal: new AbortController().signal, onThread() {}, onTurn() {},
     onReady(controls) { receipt = controls.steer('late amendment'); } });
   assert.equal(await receipt, 'not_active');
+});
+
+test('evidence before turn/start response is scoped to the acknowledged turn and strips output and arguments', async t => {
+  const { dir, runtime } = fixture(t), events: EvidenceItem[] = [];
+  const result = await runtime.run({ cwd: dir, prompt: 'evidence', signal: new AbortController().signal,
+    onThread() {}, onTurn() {}, onEvidence: e => events.push(e) });
+  assert.equal(result.text, 'answer'); assert.equal(events.length, 2);
+  assert.deepEqual(events.map(e => e.status), ['running', 'completed']);
+  assert.equal(events[1].exitCode, 1); assert.equal(events[1].label, 'pnpm test');
+  assert.doesNotMatch(JSON.stringify(events), /PRIVATE|stale|foreign|WRONG/);
+});
+
+test('failed turns retain observed operations and evidence storage failure stops the owned runtime', async t => {
+  const { dir, runtime } = fixture(t), events: EvidenceItem[] = [];
+  await assert.rejects(runtime.run({ cwd: dir, prompt: 'evidence-fail', signal: new AbortController().signal,
+    onThread() {}, onTurn() {}, onEvidence: e => events.push(e) }),
+  (e: unknown) => e instanceof RuntimeError && e.code === 'turn_failed');
+  assert.equal(events.length, 2);
+  await assert.rejects(runtime.run({ cwd: dir, prompt: 'evidence', signal: new AbortController().signal,
+    onThread() {}, onTurn() {}, onEvidence() { throw new Error('PRIVATE_STORAGE_ERROR'); } }),
+  (e: unknown) => e instanceof RuntimeError && e.code === 'evidence_storage_error');
 });
