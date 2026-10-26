@@ -1,5 +1,7 @@
 # Namo 运维与配置指南
 
+首次安装请优先使用 `namo init`，见[安装与第一次使用](getting-started.md)。本页保留源码开发、旧配置兼容和高级手工配置说明。
+
 本地飞书机器人：TypeScript + Node.js 内置 SQLite + 官方 Codex app-server。面向个人或少量可信用户，先把消息接收、会话、执行、回复、失败恢复做完整。
 
 ## 已实现

@@ -1,4 +1,6 @@
 {
+  "version": 1,
+  "agent": "codex",
   "dataDir": "./data",
   "concurrency": 2,
   "feishu": {

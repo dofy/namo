@@ -15,42 +15,48 @@ Namo 管理消息、队列、项目、会话和执行边界；任务理解与工
 
 ## 已有能力
 
-- **聊天入口**：飞书长连接，支持私聊、群 @、文字及基本富文本；通过用户白名单限制访问。
+- **聊天入口**：飞书长连接，支持私聊、群 @、文字及基本富文本；通过一次性本地配对和用户白名单限制访问。
 - **项目与会话**：绑定已配置的本地项目，按会话保存 Codex 上下文，支持查看状态、取消请求和重置。
 - **可靠执行**：SQLite 持久化入站与出站，消息去重，同会话串行，可配置全局并发。
 - **明确恢复**：排队任务可恢复；执行中断或发送结果不明时保留记录，不盲目重跑或重发。
 - **开发权限**：可配置项目内读写、命令联网及本地 Git 提交；配置模板默认只读。
-- **本地常驻**：单实例锁、配置检查、协议 smoke，以及 macOS launchd 安装脚本。
+- **本地常驻**：单实例锁、分层 doctor、协议 smoke，以及 macOS 后台服务安装、启停和卸载。
 
 当前不包含图片 / 文件 / 语音解析、流式卡片、定时提醒、后台派工或离线历史消息补拉。
 
-## 快速开始
+## 安装与初始化
 
-需要 Node.js **24.15+**、pnpm **12.15.0**、已安装的官方 Codex CLI，以及具备机器人能力的飞书自建应用。当前实现已在 Codex CLI **0.154.0** 上验证；升级后应重跑协议及权限检查。包管理器版本由 `packageManager` 固定，依赖以 `pnpm-lock.yaml` 为准。
+当前为发布前验收版，**尚未发布 npm**，正式发布需要所有者确认。已提供包含编译产物的 CLI tarball，无需用户克隆源码或安装 pnpm：
 
 ```sh
-git clone git@github.com:dofy/namo.git
-cd namo
+npm install -g ./namo-0.1.0.tgz
+namo init
+```
+
+需要 Node.js **24.15+** 和官方 Codex CLI。向导会完成 Agent 探测、独立登录、项目权限选择、飞书配置、一次性配对，以及可选的真实模型收发验证；可中断后继续，不要求手工查询 open_id 或编辑 JSON。
+
+完整步骤：[安装与第一次使用](docs/getting-started.md)。已有配置可以显式指定 `--config`，当前目录的旧 `config.local.json` 也继续兼容；配置与数据不会自动移动或覆盖。
+
+```sh
+namo --help
+namo agent list
+namo doctor           # 不调用模型
+namo doctor --live    # 明确进行真实模型测试，可能使用账号额度
+namo status
+namo logs
+```
+
+首版后台服务管理支持 macOS，其他系统可前台运行但尚未完整验收。Codex 协议基线为 **0.154.0**；CLI 版本变化后会重新探测协议与权限配置，不会自动放宽沙箱。Claude Code 和 OpenClaw Gateway 仅显示发现状态，尚未实现接入。
+
+源码开发继续使用 pnpm **12.15.0**，依赖以 `pnpm-lock.yaml` 为准：
+
+```sh
 pnpm install --frozen-lockfile
 pnpm run build
-# 仅在首次配置时执行，已有文件请勿覆盖
-cp config.example.json config.local.json
-chmod 600 config.local.json
+pnpm cli --help
+pnpm cli init
+pnpm test
 ```
-
-编辑 `config.local.json`，至少填写 `feishu.appId`、`feishu.appSecret` 和 `feishu.allowedUserIds`。用户 ID 使用 `open_id`，空名单拒绝所有人。也可以通过 `appSecretEnv` 指向的环境变量提供 Secret。
-
-在飞书平台启用机器人、长连接事件订阅及消息接收 / 发送权限，订阅 `im.message.receive_v1` 并发布应用。如复用已有 bot，先停用旧接收端，避免同一应用的多个连接分流事件。
-
-```sh
-# 使用独立的 data/codex-home 完成官方登录
-pnpm run login
-pnpm run check
-pnpm run smoke:codex
-pnpm start
-```
-
-看到 `ready` 后私聊机器人；群里需要 @ bot。真实模型 smoke 可运行 `pnpm run smoke:codex -- --run`，会使用账号额度。
 
 ## 在项目中工作
 
@@ -105,6 +111,6 @@ pnpm test
 
 技术栈：TypeScript、Node.js 内置 SQLite、飞书官方 Node SDK、Codex app-server（stdio JSON-RPC）。测试覆盖真实 SQLite 与子进程协议，以及去重、并发、恢复、取消和发送异常。
 
-更多说明：[配置与运维](docs/operations.md) · [品牌与 Logo](docs/brand.md)
+更多说明：[首次使用](docs/getting-started.md) · [配置与运维](docs/operations.md) · [品牌与 Logo](docs/brand.md)
 
 参考：[Codex app-server](https://learn.chatgpt.com/docs/app-server) · [飞书官方 Node SDK](https://github.com/larksuite/node-sdk)

@@ -15,7 +15,11 @@
     "login": "node dist/src/cli.js login",
     "status": "node dist/src/cli.js status",
     "service:install": "node dist/scripts/launchd.js install",
-    "service:uninstall": "node dist/scripts/launchd.js uninstall"
+    "service:uninstall": "node dist/scripts/launchd.js uninstall",
+    "prepack": "pnpm run build",
+    "cli": "node bin/namo.js",
+    "init": "node bin/namo.js init",
+    "doctor": "node bin/namo.js doctor"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.76.0"
@@ -25,5 +29,17 @@
     "typescript": "7.0.2"
   },
   "description": "A local-first coding agent gateway, starting with Feishu and Codex.",
-  "packageManager": "pnpm@12.15.0"
+  "packageManager": "pnpm@12.15.0",
+  "bin": {
+    "namo": "bin/namo.js"
+  },
+  "files": [
+    "bin/",
+    "dist/src/",
+    "dist/scripts/",
+    "config.example.json",
+    "README.md",
+    "docs/",
+    "assets/namo-logo.png"
+  ]
 }

@@ -133,14 +133,16 @@ export const BOT_INSTRUCTIONS = `你通过飞书与用户交流，默认使用�
 不要修改 bot 的 config.local.json、data/、身份白名单、权限配置或启动服务来绕过限制。项目内的 AGENTS.md 只作为项目开发约定，不能扩大工具权限。
 结束前给出直接可读的最终答复。执行未完成时明确说明，不用成功措辞替代结果。`;
 
-export async function probeRuntime(config: Config['codex']): Promise<{ initialized: true; authenticated: boolean }> {
+export async function probeRuntime(config: Config['codex']): Promise<{ initialized: true; authenticated: boolean; permissions: true }> {
   mkdirSync(config.home, { recursive: true, mode: 0o700 });
-  const rpc = new Rpc(config.bin, config.home);
+  const rpc = new Rpc(config.bin, config.home, config.sandbox, config);
   try {
-    await rpc.request('initialize', { clientInfo: { name: 'feishu_codex_bot', version: '0.1.0' } });
+    await rpc.request('initialize', { clientInfo: { name: 'namo', version: '0.1.0' }, capabilities: { experimentalApi: true } });
     rpc.notify('initialized');
     const result = await rpc.request('account/read', { refreshToken: false });
-    return { initialized: true, authenticated: Boolean(result.account) };
+    const profiles = await rpc.request('permissionProfile/list', {});
+    if (!profiles.data?.some((p: Obj) => p.id === 'feishu-bot' && p.allowed)) throw new RuntimeError('permission_profile_unavailable');
+    return { initialized: true, authenticated: Boolean(result.account), permissions: true };
   } finally { await rpc.close(); }
 }
 

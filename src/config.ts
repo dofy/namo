@@ -1,6 +1,7 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
+import { configFile } from './paths.js';
 
 export interface Config {
   file: string;
@@ -16,12 +17,14 @@ export interface Config {
     networkAccess?: boolean; readPaths?: string[]; denyPaths?: string[]; allowLocalCommits?: boolean;
   };
   concurrency: number;
+  agent?: 'codex';
 }
 
-export function loadConfig(file = 'config.local.json'): Config {
-  const absolute = resolve(file);
+export function loadConfig(file?: string): Config {
+  const absolute = configFile(file);
   const d = JSON.parse(readFileSync(absolute, 'utf8'));
   if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error('配置必须是 JSON 对象');
+  if (d.version !== undefined && d.version !== 1) throw new Error('配置版本不受支持，请使用对应版本的 Namo；没有自动覆盖配置');
   const path = (p: string) => p.startsWith('~/') ? resolve(homedir(), p.slice(2)) : resolve(dirname(absolute), p);
   const list = (v: unknown, name: string): string[] => {
     if (!Array.isArray(v) || v.some(x => typeof x !== 'string' || !x.trim())) throw new Error(`${name} 必须是字符串数组`);
@@ -29,6 +32,7 @@ export function loadConfig(file = 'config.local.json'): Config {
   };
   const f = d.feishu ?? {};
   const c = d.codex ?? {};
+  if (d.agent !== undefined && d.agent !== 'codex') throw new Error('当前版本只支持 codex；Claude Code 和 OpenClaw Gateway 尚未接入');
   for (const [name, value] of Object.entries({ dataDir: d.dataDir, 'feishu.appId': f.appId,
     'feishu.appSecret': f.appSecret, 'feishu.appSecretEnv': f.appSecretEnv, 'codex.bin': c.bin,
     'codex.home': c.home, 'codex.model': c.model })) {
@@ -57,7 +61,7 @@ export function loadConfig(file = 'config.local.json'): Config {
   if (c.defaultProject !== undefined && (typeof c.defaultProject !== 'string' || !Object.hasOwn(projects, c.defaultProject))) throw new Error('codex.defaultProject 必须指向已配置项目');
   if (Object.keys(projects).length && !c.defaultProject) throw new Error('配置项目后必须指定 codex.defaultProject');
   return {
-    file: absolute, dataDir, concurrency,
+    file: absolute, dataDir, concurrency, agent: 'codex',
     feishu: {
       appId: f.appId ?? '',
       appSecret: f.appSecret || process.env[f.appSecretEnv ?? 'FEISHU_APP_SECRET'] || '',
@@ -67,7 +71,7 @@ export function loadConfig(file = 'config.local.json'): Config {
       domain: f.domain === 'lark' ? 'lark' : 'feishu',
     },
     codex: {
-      bin: c.bin ?? 'codex', home: path(c.home ?? `${dataDir}/codex-home`),
+      bin: c.bin && (c.bin.includes('/') || c.bin.includes('\\')) ? path(c.bin) : c.bin ?? 'codex', home: path(c.home ?? `${dataDir}/codex-home`),
       model: c.model || undefined, timeoutMs, sandbox: c.sandbox ?? 'read-only',
       projects, defaultProject: c.defaultProject, networkAccess: c.networkAccess ?? false,
       allowLocalCommits: c.allowLocalCommits ?? false,
