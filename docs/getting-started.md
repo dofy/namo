@@ -25,6 +25,18 @@ pnpm cli --help
 pnpm cli init
 ```
 
+源码开发时，可将当前检出的 CLI 绑定为本机 `namo` 命令。在仓库根目录执行：
+
+```sh
+pnpm run build
+mkdir -p "$HOME/.local/bin"
+ln -s "$PWD/bin/namo.js" "$HOME/.local/bin/namo"
+```
+
+确保 `~/.local/bin` 已在终端的 `PATH` 中。若目标已存在，先检查它指向哪里，不要强制覆盖其他安装。绑定后执行 `namo --help` 验证；修改源码后重新运行 `pnpm run build` 即可使用新代码。
+
+命令绑定不会改变配置查找规则：在本仓库运行会沿用 `config.local.json`；在其他目录操作这份配置时显式使用 `namo ui --config /absolute/path/to/namo/config.local.json`。这只绑定 CLI，不会切换或重启现有接收服务。
+
 后台服务不能绑定到 `npx` / `pnpm dlx` 临时缓存中；需要先持久安装。当前后台服务管理经过设计支持 macOS；其他系统可以前台启动，但尚未经完整平台验收。
 
 ## 初始化向导
