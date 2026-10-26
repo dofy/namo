@@ -88,28 +88,9 @@ NAMO_LANG=zh-CN namo doctor
 
 ## 聊天命令
 
-| 命令 | 作用 |
-| --- | --- |
-| `/project [项目名]` | 列出项目，或切换项目并开始新上下文 |
-| `/status` | 查看队列、目录和权限状态 |
-| `/tasks`、`/task N-编号` | 查看本人在本聊天中的任务 |
-| `/material 内容` | 暂存材料，等待处理说明，最长十分钟，不自动执行 |
-| `/run 要求` | 开工并关联待处理材料；普通文字也可直接开工 |
-| `/run --deliver 相对路径 -- 要求` | 预授权在本任务成功后交付一个确切的项目相对路径 |
-| `/amend N-编号 补充` | 追加任务输入；引用本人任务消息也可追加 |
-| `/cancel [N-编号]` | 停止本人任务；无编号时作用于当前话题 |
-| `/session [W-编号]` | 查看或选择工作线，续接 Agent 上下文 |
-| `/new`、`/reset` | 开始新上下文，保留文件和任务历史 |
-| `/resume WAIT-编号 回答` | 回答等待中的问题；也可引用回复或点击选项 |
-| `/profile` | 在私聊中查看和管理基础档案 |
-| `/deliver N-编号 相对路径` | 核对所有权、任务状态和路径后，交付已完成任务的白名单文件 |
-| `/remember owner\|project\|chat 内容`、`/memories [查询]` | 在已验证私聊中显式保存或列出范围记忆 |
-| `/memory-correct M-编号 版本 内容`、`/memory-disable M-编号 版本`、`/forget M-编号 版本` | 带版本核对地纠正、停用或删除记忆 |
-| `/handoff N-编号` | 从本人任务保存有界交接；不复制 Agent session，也不授予操作权限 |
-| `/push-request N-编号 remote refs/heads/分支` | 为成功任务的一个预配置 Git 目标申请预览 |
-| `/push-approve AP-编号 --confirm`、`/push-reject AP-编号`、`/push-status AP-编号` | 在同一已验证私聊中批准并单次尝试、拒绝或查看审批 |
-| `/issues`、`/issue 编号` | 查看执行或投递异常，按返回的指引核对 |
-| `/whoami`、`/help` | 查看聊天身份或可用命令 |
+常用入口：`/project` 切换项目，`/task` 查看任务，`/cancel` 停止任务，`/new` 开始新上下文，`/profile` 管理本人档案，`/help` 查看命令。
+
+完整用法见[聊天命令](docs/getting-started.md#聊天命令)；文件交付、记忆与审批分别见[文档索引](docs/README.md)。
 
 ## 执行边界
 
@@ -123,7 +104,7 @@ NAMO_LANG=zh-CN namo doctor
 - 主机休眠或断网时无法持续服务；当前没有离线历史消息补拉。
 - 禁止提交 `config.local.json`、`data/`、日志、令牌或认证文件。Namo 不会自动接入个人 MCP、插件或第三方模型网关。
 
-本机管理还提供 `namo migrate`、`namo migrate inspect … --json` 与 `namo approval request|inspect|approve|reject|execute|reconcile …`。迁移不会自动切换接收端；审批目标必须预先写入 `gitApprovals`，批准、执行和核对结果不明状态时按要求显式确认。详见 [OpenClaw 迁移](docs/openclaw-migration-plan.md)与 [Git 审批](docs/approvals.md)。
+本机管理还提供 `namo migrate`、`namo migrate inspect … --json` 与 `namo approval request|inspect|approve|reject|execute|reconcile …`。迁移不会自动切换接收端；审批目标必须预先写入 `gitApprovals`，批准、执行和核对结果不明状态时按要求显式确认。详见 [OpenClaw 迁移](docs/openclaw-migration.md)与 [Git 审批](docs/approvals.md)。
 
 后台服务管理当前支持 macOS；其他平台可前台运行，但尚未完成全部平台验收。Claude Code 与 OpenClaw 只提供发现状态，尚未支持作为执行后端。
 
@@ -137,13 +118,6 @@ pnpm run smoke:codex          # 协议握手，不进行推理
 pnpm run smoke:codex -- --run # 显式真实模型测试
 ```
 
-更多说明：
-
-- [首次使用与前端开发](docs/getting-started.md)
-- [配置与运维](docs/operations.md)
-- [架构说明](docs/architecture.md)与[开发计划](docs/development-plan.md)
-- [执行证据](docs/result-evidence.md)、[独立运行](docs/runner.md)、[等待与恢复](docs/waits.md)
-- [材料与产物交付](docs/materials.md)、[范围记忆](docs/memory.md)、[OpenClaw 迁移](docs/openclaw-migration-plan.md)、[Git 审批](docs/approvals.md)
-- [发布隔离](docs/release-isolation.md)与[品牌资源](docs/brand.md)
+完整文档见[文档索引](docs/README.md)，源码构建与验证见[开发指南](docs/development.md)，待办见[后续计划](docs/development-plan.md)。
 
 项目地址：[github.com/dofy/namo](https://github.com/dofy/namo)。反馈问题时请提供复现步骤，勿附凭据、私有配置或原始会话数据。

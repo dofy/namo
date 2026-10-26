@@ -88,28 +88,9 @@ NAMO_LANG=zh-CN namo doctor
 
 ## Chat commands
 
-| Command | Purpose |
-| --- | --- |
-| `/project [name]` | List projects or switch project and start a new context |
-| `/status` | Show queue, directory and permission status |
-| `/tasks`, `/task N-ID` | View your tasks in the current chat |
-| `/material text` | Hold supporting material for up to ten minutes without executing it |
-| `/run request` | Start work with pending material; ordinary messages can also start tasks |
-| `/run --deliver relative/path -- request` | Pre-authorize delivery of one exact project-relative result when this task succeeds |
-| `/amend N-ID text` | Add input to a task; replying to your task message also works |
-| `/cancel [N-ID]` | Stop your task; without an ID, target your task in the current topic |
-| `/session [W-ID]` | Inspect or select a session and resume its agent context |
-| `/new`, `/reset` | Start a new context while preserving files and task history |
-| `/resume WAIT-ID answer` | Answer a waiting question; a quoted reply or card choice also works |
-| `/profile` | View and manage your basic profile in a direct message |
-| `/deliver N-ID relative/path` | Deliver an allowlisted file from your completed task after ownership and path checks |
-| `/remember owner\|project\|chat text`, `/memories [query]` | Explicitly save or list scoped memory in a verified direct message |
-| `/memory-correct M-ID version text`, `/memory-disable M-ID version`, `/forget M-ID version` | Version-check and change an existing memory |
-| `/handoff N-ID` | Save a bounded, scoped handoff from one of your tasks; it does not copy the agent session or grant authority |
-| `/push-request N-ID remote refs/heads/branch` | Request a preview for one preconfigured Git target from your succeeded task |
-| `/push-approve AP-ID --confirm`, `/push-reject AP-ID`, `/push-status AP-ID` | Approve and attempt once, reject, or inspect your approval in the same verified direct chat |
-| `/issues`, `/issue ID` | Inspect execution or delivery issues and follow the returned review instructions |
-| `/whoami`, `/help` | Show your chat identity or available commands |
+Use `/project` to switch projects, `/task` to inspect a task, `/cancel` to stop it, `/new` for a fresh context, `/profile` for your profile, and `/help` for available commands.
+
+See the [command reference (Chinese)](docs/getting-started.md#聊天命令) and [documentation index (Chinese)](docs/README.md) for delivery, memory and approvals.
 
 ## Execution boundaries
 
@@ -123,7 +104,7 @@ NAMO_LANG=zh-CN namo doctor
 - A sleeping or disconnected host cannot provide continuous service. There is no offline history backfill.
 - Never commit `config.local.json`, `data/`, logs, tokens or authentication files. Namo does not automatically import personal MCP servers, plugins or third-party model gateways.
 
-Local-only administration also provides `namo migrate`, `namo migrate inspect … --json`, and `namo approval request|inspect|approve|reject|execute|reconcile …`. Migration never switches receivers automatically. Approval targets must already exist in `gitApprovals`; approve, execute and reconcile use explicit confirmation where required. See the [OpenClaw migration](docs/openclaw-migration-plan.md) and [Git approval](docs/approvals.md) documents.
+Local-only administration also provides `namo migrate`, `namo migrate inspect … --json`, and `namo approval request|inspect|approve|reject|execute|reconcile …`. Migration never switches receivers automatically. Approval targets must already exist in `gitApprovals`; approve, execute and reconcile use explicit confirmation where required. See the [OpenClaw migration](docs/openclaw-migration.md) and [Git approval](docs/approvals.md) documents.
 
 Background service management currently supports macOS. Other systems can use foreground mode but have not completed full platform acceptance. Claude Code and OpenClaw are detected but are not supported execution backends.
 
@@ -137,13 +118,6 @@ pnpm run smoke:codex          # Protocol handshake; no inference
 pnpm run smoke:codex -- --run # Explicit real inference test
 ```
 
-Detailed engineering and operations documents are currently in Chinese:
-
-- [First-time setup and frontend development](docs/getting-started.md)
-- [Configuration and operations](docs/operations.md)
-- [Architecture](docs/architecture.md) and [development plan](docs/development-plan.md)
-- [Execution evidence](docs/result-evidence.md), [independent runners](docs/runner.md), [waiting and resuming](docs/waits.md)
-- [Materials and artifact delivery](docs/materials.md), [scoped memory](docs/memory.md), [OpenClaw migration](docs/openclaw-migration-plan.md), [Git approval](docs/approvals.md)
-- [Release isolation](docs/release-isolation.md) and [brand assets](docs/brand.md)
+See the [documentation index](docs/README.md), [developer guide](docs/development.md), and [remaining work](docs/development-plan.md). Detailed guides are currently in Chinese.
 
 Project: [github.com/dofy/namo](https://github.com/dofy/namo). Report reproducible issues without credentials, private configuration or raw conversation data.

@@ -1,5 +1,7 @@
 # Roadmap delivery ledger
 
+> 历史记录：以下状态仅代表 2026-10-26 对应验收批次，不代表当前运行状态；本次整理未复验在线服务。当前指引见[文档索引](../README.md)。
+
 This ledger records the autonomous R0–R6 implementation pass requested on
 2026-10-26. It distinguishes source integration, developer verification,
 installed release, and real Feishu acceptance. Those are separate facts.
