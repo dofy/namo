@@ -74,6 +74,7 @@ export const english: Record<string, string> = {
   "保存称呼、语言与时区。": "Manage names, languages and time zones.",
   "设置助手的身份和表达偏好。": "Configure assistant identity and presentation preferences.",
   "管理明确保存的偏好、知识与交接。": "Manage explicitly saved preferences, knowledge, and handoffs.",
+  "查看、纠正和删除对话中积累的长期记忆。": "Review, correct, and delete long-term memories learned from conversations.",
   "把本地 Agent 和飞书连接起来。": "Connect your local agent with Feishu or Lark.",
   "保存的配置已生效": "Saved configuration is active",
   "配置已保存，待应用": "Configuration saved; apply to activate",

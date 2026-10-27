@@ -71,10 +71,11 @@ export interface AssistantValues {
 export interface AssistantView { schema:1; version:number; updatedAt:number|null; active:boolean; values:AssistantValues }
 export type MemoryViewKind = 'preference' | 'user_fact' | 'project_knowledge' | 'task_summary' | 'history_quote' | 'handoff';
 export type MemoryViewStatus = 'active' | 'pending_review' | 'disabled' | 'deleted';
-export interface MemoryViewScope { kind:'owner'|'project'|'chat'; ownerId:string; project:string|null; chatKey:string|null }
+export interface MemoryViewScope { kind:'owner'|'project'|'chat'|'global'|'local'; ownerId:string; project:string|null; chatKey:string|null }
 export interface MemoryViewItem {
   id:string; version:number; kind:MemoryViewKind; status:MemoryViewStatus; scope:MemoryViewScope;
   source:{kind:string;ref:string}; text:string|null; usable:boolean; contentChars:number;
+  visibility?:{privacy:'shared'|'private'|'chat';chatKey:string|null};
   createdAt:number; updatedAt:number; expiresAt:number|null;
 }
 export interface MemoryImportCandidate {
