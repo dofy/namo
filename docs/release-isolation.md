@@ -73,3 +73,9 @@ namo service start
 ## 历史验证
 
 已保存的快照隔离、升级及选项恢复记录见[发布历史](archive/release-history.md)与[交付台账](archive/roadmap-delivery.md)。这些记录不代表当前在线状态；现场核对使用上文的 release 身份字段。
+
+### 升级备份硬前置
+
+`service upgrade` 在服务停止、配置及接收端锁持有期间，先使用 Node SQLite backup 创建一致性副本，再检查非空、完整性、外键、schema 与所有表记录的逻辑指纹，并备份原配置、plist、服务登记和 bootstrap。源文件或数据库在复制期间改变也会中止。全部检查通过才写入 `verified.json`，随后才允许创建发布并修改登记。
+
+任何备份错误返回 `upgrade_backup_failed`，不替换发布、登记或 bootstrap，不自动启动服务；外部 shell 即使继续调用 `service start`，仍使用原登记。部分备份保留为 `.pending`，不能作为成功备份。回执只含摘要与本机路径，不输出配置、凭据或数据库正文；不备份个人认证、不自动恢复旧数据库，也不代表支持跨 schema 降级。

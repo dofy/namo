@@ -14,6 +14,7 @@ import { digest, readJson, atomicJson } from './paths.js';
 import { probeAgent } from './agents.js';
 import { createRuntimeRelease, sourcePackageRoot, verifyRuntimeRelease, type RuntimeRelease } from './release.js';
 import { SCHEMA_VERSION } from './store.js';
+import { createUpgradeBackup } from './upgrade-backup.js';
 import { acquireLock } from './safety.js';
 
 const legacyLabel = 'local.feishu-codex-bot';
@@ -172,6 +173,7 @@ export async function serviceAction(action: string, c: Config): Promise<Record<s
   if (action === 'status') return serviceStatus(c, true);
   if (process.platform !== 'darwin') throw new Error(tr("首版后台服务管理仅支持 macOS；此平台请使用 namo start 前台运行或自行配置系统服务"));
   const label = serviceLabel(c), plist = plistFile(label), target = `${domain()}/${label}`;
+  let upgradeBackup: string | undefined;
   const finishAction = acquireLock(join(c.dataDir, 'service-action.lock'));
   try {
   if (action === 'install') {
@@ -208,6 +210,8 @@ export async function serviceAction(action: string, c: Config): Promise<Record<s
         if (serviceStatus(c, false).registered) throw new Error(tr("服务停止状态已变化，未切换发布"));
         const blockers = releaseUpgradeBlockers(join(c.dataDir, 'bot.sqlite'));
         if (blockers.length) throw new Error(tr("仍有未收敛状态，未切换发布：{0}", blockers.join(', ')));
+        upgradeBackup = await createUpgradeBackup(c, plist);
+        if (serviceStatus(c, false).registered || releaseUpgradeBlockers(join(c.dataDir, 'bot.sqlite')).length) throw new Error('upgrade_state_changed');
         const release = createRuntimeRelease(sourcePackageRoot(import.meta.url), join(c.dataDir, 'releases'));
         if (serviceStatus(c, false).registered) throw new Error(tr("服务停止状态已变化，未切换发布"));
         const record = registration(c, label, release);
@@ -237,7 +241,7 @@ export async function serviceAction(action: string, c: Config): Promise<Record<s
       if (r.status !== 0) throw new Error(tr("服务启动失败，请运行 namo doctor 检查配置"));
     }
   } else throw new Error(tr("服务命令：install / status / start / stop / restart / upgrade / uninstall"));
-  return serviceStatus(c, true);
+  return { ...serviceStatus(c, true), ...(upgradeBackup ? { backup: { path: upgradeBackup, verified: true } } : {}) };
   } finally { finishAction(); }
 }
 export async function waitForService(c: Config, timeout = 90_000): Promise<boolean> {

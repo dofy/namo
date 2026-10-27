@@ -160,3 +160,19 @@ test('isolated install, stopped upgrade and same-schema rollback preserve newer 
   assert.equal(f.bootstrapCount, 2, 'upgrade and rollback never bootstrap or replay work');
   assert.deepEqual(readFileSync(f.calls, 'utf8').trim().split('\n'), ['initialize', 'initialized', 'account/read', 'permissionProfile/list']);
 });
+
+
+test('backup failure aborts upgrade before changing release, bootstrap or registration', { skip: process.platform !== 'darwin' }, async t => {
+  const f = await fixture(t); await f.service.serviceAction('install', f.config); await f.service.serviceAction('stop', f.config);
+  const files = [f.plist, join(f.config.dataDir,'service.json'), join(f.config.dataDir,'service-bootstrap.mjs'), f.file];
+  const before = files.map(path=>readFileSync(path));
+  const release = f.service.verifyServiceRegistration(f.config,f.plist).release.id;
+  // A real filesystem failure, not a mocked success result. A subsequent start must still use the old registration.
+  writeFileSync(join(f.config.dataDir,'backups'),'blocked');
+  await assert.rejects(f.service.serviceAction('upgrade',f.config), /upgrade_backup_failed/);
+  files.forEach((path,i)=>assert.deepEqual(readFileSync(path),before[i]));
+  assert.equal(f.service.verifyServiceRegistration(f.config,f.plist).release.id,release);
+  assert.equal(f.service.serviceStatus(f.config).registered,false);assert.equal(f.bootstrapCount,1);
+  await f.service.serviceAction('start',f.config);
+  assert.equal(f.service.verifyServiceRegistration(f.config,f.plist).release.id,release);
+});
