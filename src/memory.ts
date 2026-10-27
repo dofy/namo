@@ -77,6 +77,7 @@ export interface MemoryChange {
 }
 
 export interface MemoryAuthority {
+  allowedProjects?: readonly string[];
   kind: 'local-owner' | 'verified-user';
   authenticated: boolean;
   ownerId: string;
@@ -574,7 +575,7 @@ export class Memories {
     this.assertIdVersion(id, expectedVersion);
     const actor = validateAuthority(authority);
     return this.store.transaction(() => {
-      const before = this.requireMeta(id); this.assertWriteMeta(before, expectedVersion, actor);
+      const before = this.requireMeta(id); this.assertWriteMeta(before, expectedVersion, actor, true);
       if (before.status === 'deleted') throw new MemoryError('conflict', 'Deleted memory cannot change state');
       if (before.status === status) return before;
       if(before.automatic){
@@ -698,8 +699,16 @@ export class Memories {
     }
   }
 
-  private assertWriteMeta(meta: MemoryMetadata, expectedVersion: number, actor: MemoryAuthority): void {
+  private assertWriteMeta(meta: MemoryMetadata, expectedVersion: number, actor: MemoryAuthority, statusOnly = false): void {
     if (meta.version !== expectedVersion) throw new MemoryError('conflict', 'Memory changed; reload before updating');
+    // Removing an existing classified memory does not create or broaden its audience.
+    // Content edits still require host-side classification.
+    if (statusOnly && actor.kind === 'verified-user' && (meta.scope.kind === 'global' || meta.scope.kind === 'local')) {
+      if (actor.ownerId !== meta.scope.ownerId || actor.chatType !== 'p2p' || !this.authorized(meta, actor)) {
+        throw new MemoryError('forbidden', 'Memory removal requires its owner and an authorized private chat');
+      }
+      return;
+    }
     this.assertWriteScope(meta.scope, actor);
   }
 

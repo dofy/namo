@@ -8,7 +8,7 @@ export function memoryCommand(store:Store,m:Incoming,allowedUsers:string[],proje
   const [command,...args]=m.text.trim().split(/\s+/);
   if(!['/remember','/memories','/memory-correct','/memory-disable','/forget','/handoff'].includes(command))return;
   if(!allowedUsers.includes(m.senderId)||m.envelope?.chatType!=='p2p'||m.envelope.type!=='text'||m.envelope.kind!=='instruction'||m.envelope.materials.length||m.envelope.parentId||m.envelope.rootId)return '记忆操作只接受已配对本人的直接私聊文字命令；引用和材料不会改写记忆。';
-  const authority:MemoryAuthority={kind:'verified-user',authenticated:true,ownerId:m.senderId,chatKey:m.chatKey,chatType:'p2p',project,source:{kind:'message',ref:m.key}};
+  const authority:MemoryAuthority={kind:'verified-user',authenticated:true,ownerId:m.senderId,chatKey:m.chatKey,chatType:'p2p',project,allowedProjects,source:{kind:'message',ref:m.key}};
   const memory=new Memories(store,redact);
   try{
     if(command==='/memories')return memory.search({...authority,allowedProjects},{query:args.join(' ')}).map(row=>`${row.id} · v${row.version} · ${row.scope.kind}\n${row.text}`).join('\n\n')||'没有当前范围内可用的记忆。';

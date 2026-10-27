@@ -345,6 +345,44 @@ test('legacy owner memories remain private and legacy handoffs still invalidate 
 });
 
 const message=(text:string):Incoming=>({key:'app:original',messageId:'original',chatKey:'app:chat',chatId:'chat',senderId:'owner',text,envelope:{version:1,type:'text',kind:'instruction',chatType:'p2p',scopeKey:'app:chat',materials:[],limitations:[]}});
+test('private commands can disable and forget owned automatic memories without reclassifying their audience', t => {
+  const f = fixture(t), actor = authority({ ownerId: 'owner', chatKey: 'app:chat' });
+  const run = (text: string) => memoryCommand(f.store, message(text), ['owner'], 'atlas', x => x, ['atlas'])!;
+  for (const level of ['global', 'local'] as const) for (const privacy of ['shared', 'private'] as const) {
+    const text = `Durable ${level} ${privacy} project fact.`, input = candidate({ key: `project.${level}.${privacy}`, level, privacy, text, evidence: [text] });
+    const saved = f.memory.upsertAutomatic(input, actor)!;
+    assert.match(run(`/memory-correct ${saved.id} 1 unclassified content`), /未完成/);
+    assert.match(run(`/memory-disable ${saved.id} 1`), /v2/);
+    const disabled = f.memory.manage({ ...actor, allowedProjects: ['atlas'] }).find(row => row.id === saved.id)!;
+    assert.equal(disabled.status, 'disabled'); assert.deepEqual(disabled.visibility, saved.visibility);
+    assert.match(run(`/forget ${saved.id} 1`), /未完成/);
+    assert.match(run(`/forget ${saved.id} 2`), /v3/);
+    assert.equal(f.store.db.prepare('SELECT 1 FROM memory_contents WHERE memoryId=?').get(saved.id), undefined);
+    assert.equal(f.memory.upsertAutomatic({ ...input, observedAt: 200 }, actor), undefined, 'deletion must prevent automatic resurrection');
+    assert.deepEqual(f.memory.history(saved.id, actor).map(row => row.action), ['deleted', 'disabled', 'saved']);
+  }
+  assert.deepEqual(f.store.db.prepare('PRAGMA foreign_key_check').all(), []);
+});
+
+test('automatic memory removal rejects other owners, groups, revoked projects and inaccessible chat scopes', t => {
+  const f = fixture(t), actor = authority({ ownerId: 'owner', chatKey: 'app:chat' });
+  const saved = f.memory.upsertAutomatic(candidate({ level: 'local' }), actor)!;
+  const command = message(`/forget ${saved.id} 1`);
+  for (const [incoming, project, allowed] of [
+    [{ ...command, senderId: 'bob' }, 'atlas', ['atlas']],
+    [{ ...command, envelope: { ...command.envelope!, chatType: 'group' as const } }, 'atlas', ['atlas']],
+    [command, 'other', ['atlas', 'other']],
+    [command, 'atlas', []],
+  ] as const) {
+    assert.match(memoryCommand(f.store, incoming, ['owner', 'bob'], project, x => x, allowed)!, /未完成|只接受/);
+    assert.equal(f.store.db.prepare('SELECT status FROM memories WHERE id=?').get(saved.id)?.status, 'active');
+  }
+  const global = f.memory.upsertAutomatic(candidate({ key: 'project.global', text: 'Atlas overview.', evidence: ['Atlas overview.'] }), actor)!;
+  assert.match(memoryCommand(f.store, message(`/forget ${global.id} 1`), ['owner'], 'atlas', x => x, [])!, /未完成/);
+  const chat = f.memory.upsertAutomatic(candidate({ key: 'project.chat', privacy: 'chat', text: 'Chat-specific fact.', evidence: ['Chat-specific fact.'] }), actor)!;
+  assert.match(memoryCommand(f.store, { ...message(`/forget ${chat.id} 1`), chatKey: 'another-chat' }, ['owner'], 'atlas', x => x, ['atlas'])!, /未完成/);
+});
+
 test('explicit private memory commands preserve ownership, version conflicts and deletion',t=>{
  const root=mkdtempSync(join(tmpdir(),'namo-memory-command-')),store=new Store(join(root,'db'));t.after(()=>{store.close();rmSync(root,{recursive:true,force:true});});
  const run=(text:string)=>memoryCommand(store,message(text),['owner'],'project',x=>x)!;
