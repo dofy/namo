@@ -378,6 +378,7 @@ export class CodexRuntime implements Runtime {
                 const done = plan.filter(step => step.status === 'completed').length;
                 const active = plan.filter(step => step.status === 'inProgress').length;
                 r.onProgress?.({ id: 'plan', kind: 'plan', status: done === plan.length ? 'completed' : 'running',
+                  plan: {total:plan.length,completed:done,running:active},
                   text: `计划：已完成 ${done}/${plan.length} 项${active ? `，正在处理 ${active} 项` : ''}`, threadId, turnId: notice.turnId });
               }
             }
@@ -403,12 +404,15 @@ export class CodexRuntime implements Runtime {
                     : ['collabAgentToolCall', 'subAgentActivity'].includes(item.type) ? '协作任务' : undefined;
                   if (label) {
                     const failed = ['failed', 'declined', 'interrupted'].includes(item.status) || item.success === false
+                      || item.type === 'mcpToolCall' && item.error != null
                       || (evidence?.kind === 'command' && evidence.exitCode !== undefined && evidence.exitCode !== 0);
                     const status = failed ? 'failed' : running ? 'running'
                       : item.status === undefined || itemSettled(item) ? 'completed' : undefined;
                     if (!status) continue;
                     const suffix = evidence?.kind === 'command' && evidence.exitCode !== undefined ? `，退出码 ${evidence.exitCode}` : '';
                     r.onProgress({ id: item.id, kind: 'tool', status,
+                      ...(status!=='running'?{outcome:failed?'failure' as const
+                        :evidence?.kind==='command'&&evidence.exitCode===undefined?'unknown' as const:'success' as const}:{}),
                       text: `${label}：${status === 'running' ? '执行中' : status === 'failed' ? '未成功结束' : '已结束'}${suffix}`, threadId, turnId: notice.turnId });
                   }
                 }
