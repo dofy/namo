@@ -17,6 +17,7 @@ import { evidenceBrief, taskStateLabel, taskStatus } from './presentation.js';
 import { Waits, WaitInputError } from './waits.js';
 import { memoryCommand } from './memory-commands.js';
 import { buildTaskRunPrompt } from './task-context.js';
+import { AutoMemories } from './auto-memory.js';
 import { requestWait, pollAndResume } from './external-wait-bridge.js';
 import { ScopedGitHubAdapter } from './github-access.js';
 import { ArtifactDelivery } from './artifact-delivery.js';
@@ -65,12 +66,18 @@ export class Engine {
   private approvals?: ApprovalService;
   private externalPolling?: Promise<unknown>;
   private nextExternalPoll = 0;
+  private autoMemories?: AutoMemories;
+  private memoryRunning?: Promise<void>;
+  private memoryAbort?: AbortController;
   constructor(readonly store: Store, private runtime: Runtime, private sender: Sender,
     private config: Pick<Config, 'dataDir' | 'concurrency' | 'github'> & { file?:string; codex?: Config['codex']; feishu?: Partial<Config['feishu']> },
     private redact: (s: string) => string = s => s,
     private log: Log = () => {},
     private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); this.feedback = new Feedback(store, sender); this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined);
-      if(config.file){const file=config.file;this.approvals=new ApprovalService(store,loadConfig(file),digest(readFileSync(file,'utf8')),()=>digest(readFileSync(file,'utf8')));} }
+      if(config.file){const file=config.file;this.approvals=new ApprovalService(store,loadConfig(file),digest(readFileSync(file,'utf8')),()=>digest(readFileSync(file,'utf8')));}
+      if(runtime.extractMemory&&config.feishu?.allowedUserIds?.length)this.autoMemories=new AutoMemories(store,{
+        allowedUsers:config.feishu.allowedUserIds,redact,extract:(input,signal)=>runtime.extractMemory!(input,signal)});
+    }
 
   private fatal(code: string): void {
     this.stopped = true; clearInterval(this.interval);
@@ -85,6 +92,7 @@ export class Engine {
         kind: 'material', scopeKey: scopeOf(safe), materials: safe.envelope?.materials ?? [], limitations: safe.envelope?.limitations ?? [] };
       if (!this.store.enqueue(safe)) return false;
       if (!this.handleControl(safe)) this.route(this.store.get(safe.key)!);
+      this.autoMemories?.enqueue([safe.key],this.tasks.binding(safe)?.project??null,`message:${safe.key}`);
       if (this.store.get(safe.key)?.taskId && this.config.feishu?.reactions !== false) this.feedback.accepted(safe.key);
       return true;
     });
@@ -246,10 +254,18 @@ export class Engine {
       }
       void this.artifacts.tick().catch(()=>this.fatal('artifact_storage_error'));
       void this.feedback.tick({progress:this.config.feishu?.progressUpdates,cadenceMs:this.config.feishu?.progressIntervalMs,heartbeatMs:this.config.feishu?.progressHeartbeatMs}).catch(()=>this.fatal('feedback_storage_error'));
+      // Extraction is background work: yield its slot when a user task arrives.
+      if(this.memoryRunning){
+        const activeIds=new Set([...this.active.values()].map(a=>a.run));
+        const reservations=(this.runtime.reservations?.()??[]).filter(r=>!activeIds.has(r.runId));
+        const blocked=[...this.active.values(),...reservations];
+        const ready=this.tasks.candidates().some(t=>!this.active.has(t.chatKey)&&!blocked.some(a=>('chatKey' in a&&a.chatKey===t.chatKey)||pathsOverlap(a.cwd,t.cwd)));
+        if(ready&&this.active.size+reservations.length+1>=this.config.concurrency)this.memoryAbort?.abort('foreground_task');
+      }
       for (;;) {
         const activeRuns = new Set([...this.active.values()].map(a => a.run));
         const reservations = (this.runtime.reservations?.() ?? []).filter(r => !activeRuns.has(r.runId));
-        if (this.active.size + reservations.length >= this.config.concurrency) break;
+        if (this.active.size + reservations.length + (this.memoryRunning ? 1 : 0) >= this.config.concurrency) break;
         const claimed=this.store.transaction(()=>{
           if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
           const next=this.tasks.candidates().find(t=>!this.active.has(t.chatKey)&&![...this.active.values(), ...reservations].some(a=>('chatKey' in a && a.chatKey===t.chatKey)||pathsOverlap(a.cwd,t.cwd)));
@@ -258,6 +274,16 @@ export class Engine {
         if (!claimed) break;
         const {next,run}=claimed;
         this.track(next, run);
+      }
+      const reserved=this.runtime.reservations?.()??[];
+      const runs=new Set([...this.active.values()].map(a=>a.run));
+      if(!this.memoryRunning&&this.autoMemories?.pending()
+        &&this.active.size+reserved.filter(r=>!runs.has(r.runId)).length<this.config.concurrency
+        &&!this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get()) {
+        this.memoryAbort=new AbortController();
+        this.memoryRunning=this.autoMemories.tick(this.memoryAbort.signal)
+          .catch(()=>this.log('memory_extraction_failed'))
+          .finally(()=>{this.memoryRunning=undefined;this.memoryAbort=undefined;void this.pump();});
       }
       if (!this.outputBusy) {
         this.outputBusy = true;
@@ -446,12 +472,14 @@ export class Engine {
   }
   async stop(): Promise<void> {
     this.stopped = true; clearInterval(this.interval);
+    this.memoryAbort?.abort();
     const tasks = [...this.active.values()];
     for (const task of tasks) task.abort.abort(this.runtime.persistent ? 'receiver_stopped' : undefined);
     await Promise.allSettled(tasks.map(t => t.promise));
     await this.feedback.settle();
     await this.artifacts.settle();
     await this.externalPolling;
+    await this.memoryRunning;
     await this.approvals?.idle();
     while (this.outputBusy) await new Promise(r => setTimeout(r, 20));
   }
