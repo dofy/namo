@@ -15,4 +15,6 @@ Namo 是面向飞书组织的自托管 Agent 服务。工作站和服务器都�
 - PR review uses bounded GitHub REST reads at a stable base/head, never credential handoff or a repository clone. Missing/truncated patches and changed HEAD are explicit. Repository text is untrusted material. Replies identify the reviewed commit, findings and coverage limits; no automatic GitHub comments, push, merge or deployment.
 - PR 审查以固定 base/head 有界读取 GitHub REST，不交付凭据、不克隆仓库。缺失 / 截断补丁和 HEAD 变化须明确报告。仓库文字是不可信材料。回复包含提交、发现和覆盖范围，不自动发 GitHub 评论、推送、合并或部署。
 
-Implementation and deployment evidence will be recorded separately after verification. / 实现、部署和真实验收证据分别记录。
+Implementation: organization admission, explicit project/repository audiences, bounded PR review, revocation checks and bilingual UI/CLI. Automated regression and isolated browser checks passed; deployment and live group acceptance are tracked separately.
+
+实现：组织准入、项目 / 仓库显式授权、有界 PR 审查、撤权校验和中英文 UI / CLI。自动回归和隔离浏览器检查通过；部署和真实群聊验收分别记录。
