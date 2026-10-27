@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Button, Checkbox, Flex, Heading, Text, TextArea, TextField } from '@radix-ui/themes';
+import { Badge, Button, Checkbox, Flex, Heading, Text, TextField } from '@radix-ui/themes';
 import type { ConfigView, GitHubConfigPatch, ProfileState } from '../src/ui-contract';
 import { api, ApiError, message } from './api';
 import { Choice, ConfirmButton, Field, Notice } from './components';
-import { AudienceFields, emptyAudience } from './AudienceFields';
 import { Icon } from './Icon';
 import { t as tr } from './i18n';
 
-interface Draft { shared:boolean; grants:NonNullable<NonNullable<ConfigView['github']>['grants']>; source:'gh'|'token'|'anonymous'; repositories: string; allowedUserIds: string[]; token: string; clearToken: boolean }
-const fromConfig = (config: ConfigView): Draft => ({ shared:config.github?.grants!==undefined,grants:structuredClone(config.github?.grants??[]),source:config.github?.credentialSource==='gh'?'gh':config.github?.credentialConfigured||config.github?.repositories.length?'token':'anonymous', repositories: (config.github?.repositories ?? []).join('\n'),
-  allowedUserIds: [...(config.github?.allowedUserIds ?? [])], token: '', clearToken: false });
+interface Draft { source:'gh'|'token'|'anonymous'; ownerUserId:string; token:string; clearToken:boolean }
+const fromConfig = (config: ConfigView): Draft => ({
+  source:config.github?.credentialSource==='gh'?'gh':config.github?.credentialConfigured||config.github?.tokenEnv?'token':'anonymous',
+  ownerUserId:config.github?.ownerUserId ?? (config.github?.allowedUserIds.length===1?config.github.allowedUserIds[0]:(config.feishu.allowedUserIds??[]).length===1?(config.feishu.allowedUserIds??[])[0]:''),
+  token:'',clearToken:false,
+});
 
 export function GitHubSettings({ config, profiles, refresh, expired }: {
   config: ConfigView; profiles: ProfileState; refresh: () => Promise<unknown>; expired: boolean;
@@ -20,8 +22,8 @@ export function GitHubSettings({ config, profiles, refresh, expired }: {
   const [error, setError] = useState(''), [notice, setNotice] = useState('');
   const observedRevision = useRef(config.revision);
   const conflict = saveConflict || (dirty && revision !== knownRevision), locked = expired || authExpired;
-  const paired = [...new Map(profiles.entries.map(profile => [profile.userId, profile])).values()];
-  const unpaired = draft.allowedUserIds.filter(userId => !paired.some(profile => profile.userId === userId));
+  const needsMigration = draft.source!=='anonymous' && config.github?.mode!=='simple';
+  const paired = (config.feishu.allowedUserIds??[]).map(userId=>({userId,name:profiles.entries.find(p=>p.userId===userId)?.name}));
 
   function load(next: ConfigView) {
     setDraft(fromConfig(next)); setRevision(next.revision); setKnownRevision(next.revision);
@@ -29,9 +31,6 @@ export function GitHubSettings({ config, profiles, refresh, expired }: {
   }
   function edit(patch: Partial<Draft>) {
     setDraft(current => ({ ...current, ...patch })); setDirty(true); setError(''); setNotice('');
-  }
-  function selectUser(userId: string, checked: boolean) {
-    edit({ allowedUserIds: checked ? [...new Set([...draft.allowedUserIds, userId])] : draft.allowedUserIds.filter(id => id !== userId) });
   }
   useEffect(() => {
     if (observedRevision.current !== config.revision) {
@@ -57,19 +56,15 @@ export function GitHubSettings({ config, profiles, refresh, expired }: {
     }
   }
   async function save() {
-    if (!dirty || busy || locked || conflict) return;
-    const repositories = draft.source==='token'?[...new Set(draft.repositories.split('\n').map(value => value.trim().toLowerCase()).filter(Boolean))]:[];
-    if (repositories.length > 200 || repositories.some(value => !/^[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9_.-]{1,100}$/.test(value)
-      || ['.', '..'].includes(value.split('/')[1]!))) {
-      setError('仓库请按 owner/repo 每行一个填写，不支持网址或通配符。'); return;
-    }
-    if (!draft.shared && draft.source==='gh' && draft.allowedUserIds.length!==1) {setError('本机 GitHub 登录只能绑定一个已配对用户');return;}
-    const patch: GitHubConfigPatch = { github: { source:draft.source, repositories:draft.shared?[]:repositories, allowedUserIds: draft.shared||draft.source==='anonymous'?[]:draft.allowedUserIds,...(draft.shared?{grants:draft.grants}:{}) },
+    if ((!dirty && !needsMigration) || busy || locked || conflict) return;
+    if (draft.source!=='anonymous' && !paired.some(p=>p.userId===draft.ownerUserId)) {setError('请选择已配对的本人飞书账号');return;}
+    const patch: GitHubConfigPatch = { github: { source:draft.source, repositories:[], allowedUserIds:[],
+      ...(draft.source==='anonymous'?{}:{mode:'simple',ownerUserId:draft.ownerUserId}) },
       ...(draft.token ? { newGithubToken: draft.token } : {}), ...(draft.clearToken ? { clearGithubToken: true } : {}) };
     setBusy(true); setError(''); setNotice('');
     try {
       const saved = await api.saveGitHub(revision, patch); load(saved);
-      setNotice('GitHub 配置已保存，从下一次检查轮询开始生效。');
+      setNotice('GitHub 配置已保存，请应用服务配置。新的工作线使用更新后的权限。');
       try { await refresh(); } catch (failure) {
         if (failure instanceof ApiError && failure.status === 401) await handleFailure(failure);
       }
@@ -82,67 +77,32 @@ export function GitHubSettings({ config, profiles, refresh, expired }: {
       <Heading as="h2" size="5" id="github-settings-title">GitHub</Heading>
       <Badge color={config.github?.credentialConfigured ? 'green' : 'gray'}>{config.github?.credentialSource==='gh'?tr('本机登录已配置'):config.github?.credentialConfigured ? tr('凭据已配置') : tr('仅公开仓库')}</Badge>
     </Flex>
-    <Text as="p" size="2" color="gray">{tr('读取 PR 内容并审查代码、等待检查结果。不授权推送、合并、部署或发布评论。')}</Text>
+    <Text as="p" size="2" color="gray">{tr('群聊只读，本人私聊使用 GitHub 账号的全部权限。')}</Text>
     {conflict && <Notice>{tr('GitHub 配置已被修改，当前草稿保留。请核对后重新载入已保存配置。')}</Notice>}
     {locked && <Notice error>{tr('本机授权已过期，请重新打开工作台后再修改 GitHub 配置。')}</Notice>}
     {error && <Notice error>{tr(error)}</Notice>}{notice && <Notice>{tr(notice)}</Notice>}
     <form onSubmit={event => { event.preventDefault(); void save(); }}>
       <fieldset disabled={busy || locked}>
         <Field label={tr('GitHub 登录方式')} htmlFor="github-source">
-          <Choice id="github-source" value={draft.source} disabled={busy||locked} onChange={source=>edit({source:source as Draft['source'],token:'',clearToken:false,
-            allowedUserIds:source==='gh'?(draft.allowedUserIds.length===1?draft.allowedUserIds:paired.length===1?[paired[0].userId]:[]):draft.allowedUserIds})}
+          <Choice id="github-source" value={draft.source} disabled={busy||locked} onChange={source=>edit({source:source as Draft['source'],token:'',clearToken:false})}
             options={[{value:'anonymous',label:tr('仅公开仓库')},{value:'gh',label:tr('本机 GitHub 登录（推荐）')},{value:'token',label:tr('独立令牌（高级）')}]} />
         </Field>
-        <Field label={tr('资源访问模式')} htmlFor="github-access-mode"><Choice id="github-access-mode" value={draft.shared?'shared':'legacy'} onChange={value=>edit({shared:value==='shared'})}
-          options={[{value:'shared',label:tr('服务共享（按仓库授权）')},{value:'legacy',label:tr('个人私聊（兼容模式）')}]}/></Field>
-        {draft.shared && <>
-          <Text as="p" size="2" color="gray">{tr('连接凭据与资源授权分开配置。只开放下面明确列出的仓库。')}</Text>
-          {draft.grants.map((grant,index)=><section className="form-section" key={index}>
-            <Field label={tr('仓库 owner/repo')} htmlFor={`grant-${index}`}><TextField.Root id={`grant-${index}`} placeholder="owner/repository" value={grant.repository} onChange={e=>edit({grants:draft.grants.map((g,i)=>i===index?{...g,repository:e.target.value}:g)})}/></Field>
-            <AudienceFields id={`grant-${index}`} value={grant} onChange={a=>edit({grants:draft.grants.map((g,i)=>i===index?{...a,repository:g.repository}:g)})}/>
-            <Button type="button" variant="soft" color="gray" onClick={()=>edit({grants:draft.grants.filter((_,i)=>i!==index)})}>{tr('移除')}</Button>
-          </section>)}
-          <Button type="button" variant="soft" onClick={()=>edit({grants:[...draft.grants,{...emptyAudience(),repository:''}]})}><Icon name="plus"/>{tr('添加仓库授权')}</Button>
-        </>}
-        {draft.source==='gh' && draft.shared && <Text as="p" size="2" color="gray">{tr('使用服务器上 gh 的登录凭据，仅用于已授权资源。')}{config.github?.localGh?.login?` · ${config.github.localGh.login}`:''}</Text>}
-        {draft.source==='gh' && !draft.shared && <>
-          <Text as="p" size="2" color="gray">{tr('本机登录可读取该账号有权访问的仓库，只对所选用户的私聊生效。')}</Text>
-          <Text as="p" size="1" color="gray">{tr('保存时连接本机 gh 当前账号。无需填写令牌或仓库白名单；退出登录后停止私有读取。')}</Text>
-          {config.github?.localGh && <Text as="p" size="2">{tr('已选择的 GitHub 账号：{0}',config.github.localGh.login)}</Text>}
-          <Field label={tr('允许使用的配对用户')} htmlFor="github-owner">
-            <Choice id="github-owner" value={draft.allowedUserIds[0]??''} disabled={!profiles.available||busy||locked} onChange={id=>edit({allowedUserIds:id?[id]:[]})}
+        {draft.source!=='anonymous' && <>
+          <Field label={tr('本人飞书账号')} htmlFor="github-owner">
+            <Choice id="github-owner" value={draft.ownerUserId} disabled={busy||locked} onChange={ownerUserId=>edit({ownerUserId})}
               options={[{value:'',label:tr('请选择用户')},...paired.map(p=>({value:p.userId,label:p.name||p.userId}))]} />
           </Field>
+          <Text as="p" size="2">{tr('群聊：只读访问该 GitHub 账号有权访问的仓库。')}</Text>
+          <Text as="p" size="2">{tr('本人私聊：可以创建、修改、合并、发布及管理 GitHub 资源，以账号实际权限为准。')}</Text>
+          <Text as="p" size="2" color="gray">{tr('其他人的私聊不使用此账号。无需逐仓库或逐群授权；群聊仍受服务接入范围限制。')}</Text>
+          {config.github?.mode!=='simple' && <Notice>{tr('保存后启用上述简化规则；当前配置仍保留原来的授权范围。')}</Notice>}
+        </>}
+        {draft.source==='gh' && <>
+          <Text as="p" size="1" color="gray">{tr('保存时连接本机 gh 当前账号。无需填写令牌；凭据不会交给 Agent。')}</Text>
+          {config.github?.localGh && <Text as="p" size="2">{tr('已选择的 GitHub 账号：{0}',config.github.localGh.login)}</Text>}
         </>}
         {draft.source==='token' && <>
-        <Text as="p" size="1" color="gray">{tr('请使用仅开放所选仓库的细粒度令牌，授予 Checks、Commit statuses 和 Pull requests 的只读权限。')}</Text>
-        {!draft.shared && <div className="form-grid">
-          <Field label={tr('允许的 GitHub 仓库')} htmlFor="github-repositories">
-            <TextArea id="github-repositories" rows={4} maxLength={28400} placeholder="owner/repository" spellCheck={false}
-              autoComplete="off" value={draft.repositories} onChange={event => edit({ repositories: event.target.value })} />
-            <Text as="p" size="1" color="gray">{tr('每行一个 owner/repo；留空时不使用私有凭据。')}</Text>
-          </Field>
-          <div className="field">
-            <Text as="p" size="2" weight="medium" m="0" id="github-users-label">{tr('允许使用的配对用户')}</Text>
-            {!profiles.available && <Text as="p" size="1" color="gray">{tr('配对用户暂不可用，请刷新后再选择。')}</Text>}
-            {profiles.available && !paired.length && <Text as="p" size="1" color="gray">{tr('尚无已配对用户，请先完成飞书配对。')}</Text>}
-            <Flex direction="column" gap="3" role="group" aria-labelledby="github-users-label">
-              {paired.map(profile => {
-                const sameName = paired.filter(other => other.name === profile.name).length > 1;
-                const label = profile.name && !sameName ? profile.name : `${profile.name || tr('未设置称呼')} · …${profile.userId.slice(-8)}`;
-                return <Text as="label" size="2" key={profile.userId}><Flex align="center" gap="2">
-                  <Checkbox checked={draft.allowedUserIds.includes(profile.userId)} disabled={!profiles.available || busy || locked}
-                    onCheckedChange={checked => selectUser(profile.userId, checked === true)} />{label}
-                </Flex></Text>;
-              })}
-              {unpaired.map(userId => <Text as="label" size="2" key={userId}><Flex align="center" gap="2">
-                <Checkbox checked disabled={busy || locked} onCheckedChange={checked => selectUser(userId, checked === true)} />
-                {tr('已不在配对列表：{0}', `…${userId.slice(-8)}`)}
-              </Flex></Text>)}
-            </Flex>
-            <Text as="p" size="1" color="gray">{tr('只对本人私聊生效，群聊不会使用私有凭据。')}</Text>
-          </div>
-        </div>}
+          <Text as="p" size="1" color="gray">{tr('令牌本身决定可访问的仓库与操作。Namo 不额外限制本人私聊，群聊始终只读。')}</Text>
         <Field label={tr('新 GitHub 令牌（留空保留）')} htmlFor="github-token">
           <TextField.Root id="github-token" type="password" autoComplete="new-password" maxLength={4096} value={draft.token}
             disabled={draft.clearToken} onChange={event => edit({ token: event.target.value })} />
@@ -156,7 +116,7 @@ export function GitHubSettings({ config, profiles, refresh, expired }: {
         </>}
       </fieldset>
       <Flex gap="3" mt="5" wrap="wrap" align="center">
-        <Button type="submit" loading={busy} disabled={!dirty || locked || conflict}><Icon name="save" />{tr('保存 GitHub 配置')}</Button>
+        <Button type="submit" loading={busy} disabled={(!dirty && !needsMigration) || locked || conflict}><Icon name="save" />{tr('保存 GitHub 配置')}</Button>
         <ConfirmButton title={tr('重新载入 GitHub 配置？')} description={tr('当前 GitHub 草稿和未保存的令牌将被丢弃。')}
           action={tr('重新载入')} disabled={busy || locked} onConfirm={async () => {
             setBusy(true);

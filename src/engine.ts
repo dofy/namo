@@ -236,7 +236,7 @@ export class Engine {
       name=undefined;
     }
     let policy=c;
-    try { if (c && f?.access) policy=executionPolicy(c,f,m,name,this.config.github); } catch { throw new RuntimeError('organization_access_denied'); }
+    try { if (c && f && (f.access || this.config.github?.mode==='simple')) policy=executionPolicy(c,f,m,name,this.config.github); } catch { throw new RuntimeError('organization_access_denied'); }
     let selection: AgentSelection | undefined, hash: string;
     try {
       selection = this.selectedAgent(m, reference);

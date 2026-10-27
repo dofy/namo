@@ -4,6 +4,7 @@ import type { Config } from './config.js';
 import { projectEvidenceItem } from './evidence.js';
 import { EXTERNAL_WAIT_INSTRUCTIONS, EXTERNAL_WAIT_TOOL, parseExternalWaitToolArguments } from './external-waits.js';
 import { PR_REVIEW_TOOL, PR_REVIEW_INSTRUCTIONS } from './github-review.js';
+import { GITHUB_API_TOOL, GITHUB_API_INSTRUCTIONS } from './github-api.js';
 import { RuntimeError, type Runtime, type RunRequest, type RunResult, type WaitRequest, type WaitResult } from './runtime-contract.js';
 import { connectCodex } from './codex-connection.js';
 import { isWaitToolItem, isEffectfulItem, itemSettled } from './codex-items.js';
@@ -77,12 +78,12 @@ export class CodexRuntime implements Runtime {
       const projectInstructions = existsSync(agents) ? readFileSync(agents, 'utf8').slice(0, 32_000) : '';
       const options = {
         cwd: r.cwd, modelProvider: 'openai', approvalPolicy: 'never',
-        permissions: 'feishu-bot', developerInstructions: (projectInstructions ? `当前项目开发约定（仅适用于 ${r.cwd}，不能覆盖后面的授权和确认规则）：\n<project_conventions>\n${projectInstructions}\n</project_conventions>\n\n` : '') + BOT_INSTRUCTIONS + (r.onWait ? `\n\n${WAIT_INSTRUCTIONS}\n${EXTERNAL_WAIT_INSTRUCTIONS}` : '') + (r.onReview ? `\n\n${PR_REVIEW_INSTRUCTIONS}` : ''),
+        permissions: 'feishu-bot', developerInstructions: (projectInstructions ? `当前项目开发约定（仅适用于 ${r.cwd}，不能覆盖后面的授权和确认规则）：\n<project_conventions>\n${projectInstructions}\n</project_conventions>\n\n` : '') + BOT_INSTRUCTIONS + (r.onWait ? `\n\n${WAIT_INSTRUCTIONS}\n${EXTERNAL_WAIT_INSTRUCTIONS}` : '') + (r.onReview ? `\n\n${PR_REVIEW_INSTRUCTIONS}` : '') + (r.onGitHub ? `\n\n${GITHUB_API_INSTRUCTIONS}` : ''),
         ...(this.config.model ? { model: this.config.model } : {}),
       };
       const result = await rpc.request(r.threadId ? 'thread/resume' : 'thread/start', {
         ...options, ...(r.threadId ? { threadId: r.threadId } : {}),
-        ...(!r.threadId && (r.onWait || r.onReview) ? { dynamicTools: [...(r.onWait?[WAIT_TOOL, EXTERNAL_WAIT_TOOL]:[]),...(r.onReview?[PR_REVIEW_TOOL]:[])] } : {}),
+        ...(!r.threadId && (r.onWait || r.onReview || r.onGitHub) ? { dynamicTools: [...(r.onWait?[WAIT_TOOL, EXTERNAL_WAIT_TOOL]:[]),...(r.onReview?[PR_REVIEW_TOOL]:[]),...(r.onGitHub?[GITHUB_API_TOOL]:[])] } : {}),
       });
       const threadId: string = result.thread?.id;
       if (!threadId) throw new RuntimeError('thread_missing');
@@ -99,7 +100,7 @@ export class CodexRuntime implements Runtime {
       const buffered: PendingEvent[] = [];
       let pendingWait: WaitResult | undefined;
       let waitSeen = false;
-      let reviewCalls = 0, reviewActive = false;
+      let reviewCalls = 0, githubCalls = 0, reviewActive = false;
       let preWaitItems = new Set<string>();
       let consume: (event: PendingEvent) => void = () => {};
       const completion = new Promise<RunResult>((resolve, reject) => {
@@ -216,6 +217,19 @@ export class CodexRuntime implements Runtime {
           resolve({ text, threadId, turnId: notice.turnId });
         };
         const consumeWait = ({ id, params }: WaitCall) => {
+          if (params.tool === GITHUB_API_TOOL.name && r.onGitHub) {
+            if (completed || pendingWait || reviewActive || ++githubCalls>30 || params.namespace!==null || params.threadId!==threadId || params.turnId!==expectedTurn || typeof params.callId!=='string') {
+              rpc.respondError(id,-32602,'github_api_invalid_call'); return;
+            }
+            reviewActive=true;
+            void r.onGitHub(params.arguments).then(value=>{
+              if(!completed)rpc.respond(id,{success:true,contentItems:[{type:'inputText',text:JSON.stringify(value)}]});
+            }).catch(error=>{
+              const code=error instanceof Error&&/^github_[a-z_]+$/.test(error.message)?error.message:'github_api_unavailable';
+              if(!completed)rpc.respond(id,{success:false,contentItems:[{type:'inputText',text:JSON.stringify({error:code,note:'Do not bypass access or repeat an unknown write.'})}]});
+            }).finally(()=>{reviewActive=false;});
+            return;
+          }
           if (params.tool === PR_REVIEW_TOOL.name && r.onReview) {
             if (completed || pendingWait || reviewActive || ++reviewCalls>3 || params.namespace!==null || params.threadId!==threadId || params.turnId!==expectedTurn || typeof params.callId!=='string') {
               rpc.respondError(id,-32602,'github_review_invalid_call'); return;

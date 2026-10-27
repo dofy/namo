@@ -32,9 +32,9 @@ export interface ConfigView {
   file: string;
   feishu: { appId: string; domain: string; secretConfigured: boolean; pairedUsers: number; restrictedChats: number; access?:OrganizationAccess|null; allowedUserIds?:string[]; allowedChatIds?:string[] };
   agents: AgentRegistryView;
-  github?: { credentialConfigured:boolean; credentialSource:string; localGh?:{login:string}; tokenEnv?:string; repositories:string[]; allowedUserIds:string[]; grants?:Array<Audience & {repository:string}> };
+  github?: { mode?:'simple';ownerUserId?:string;credentialConfigured:boolean; credentialSource:string; localGh?:{login:string}; tokenEnv?:string; repositories:string[]; allowedUserIds:string[]; grants?:Array<Audience & {repository:string}> };
 }
-export interface GitHubConfigPatch { github: {source?:'gh'|'token'|'anonymous';repositories:string[];allowedUserIds:string[];grants?:Array<Audience & {repository:string}>};newGithubToken?:string;clearGithubToken?:boolean }
+export interface GitHubConfigPatch { github: {mode?:'simple';ownerUserId?:string;source?:'gh'|'token'|'anonymous';repositories:string[];allowedUserIds:string[];grants?:Array<Audience & {repository:string}>};newGithubToken?:string;clearGithubToken?:boolean }
 export type AgentAdapter = 'codex' | 'claude' | 'cursor';
 export interface AgentProfileSpecView {
   adapter: AgentAdapter;

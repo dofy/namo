@@ -9,6 +9,8 @@ import { GitHubReadError, GitHubRestAdapter, type GitHubObservation, type GitHub
 
 /** Explicit protected configuration; resolved credentials must never enter a prompt or public view. */
 export interface GitHubAccessConfig {
+  mode?: 'simple';
+  ownerUserId?: string;
   source?: 'token' | 'gh' | 'anonymous';
   localGh?: LocalGhConfig;
   token?: string;
@@ -59,20 +61,24 @@ export function parseGitHubAccessConfig(raw: unknown, env: Readonly<Record<strin
   if (raw === undefined) return undefined;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new GitHubAccessError('github_access_invalid_config');
   const value = raw as Record<string, unknown>;
-  if (Object.keys(value).some(key => !['source','localGh','token', 'tokenEnv', 'repositories', 'allowedUserIds','grants'].includes(key)))
+  if (Object.keys(value).some(key => !['mode','ownerUserId','source','localGh','token', 'tokenEnv', 'repositories', 'allowedUserIds','grants'].includes(key)))
     throw new GitHubAccessError('github_access_invalid_config');
   if (value.token !== undefined && value.tokenEnv !== undefined) throw new GitHubAccessError('github_access_ambiguous_credential');
   const repositories = list(value.repositories, 'repository'), allowedUserIds = list(value.allowedUserIds, 'user');
+  if (value.mode !== undefined && value.mode !== 'simple') throw new GitHubAccessError('github_access_invalid_config');
+  if (value.mode === 'simple' ? typeof value.ownerUserId !== 'string' || !USER.test(value.ownerUserId) || value.ownerUserId === '*'
+    || repositories.length > 0 || allowedUserIds.length > 0 || value.grants !== undefined || value.source === 'anonymous'
+    : value.ownerUserId !== undefined) throw new GitHubAccessError('github_access_invalid_scope');
   let grants: GitHubAccessConfig['grants'];
   if (value.grants !== undefined) {
     if (!Array.isArray(value.grants) || value.grants.length>200 || repositories.length || allowedUserIds.length) throw new GitHubAccessError('github_access_invalid_scope');
     grants = value.grants.map(v=>({...parseAudience(v),repository:repository(v.repository)}));
     if (new Set(grants.map(g=>g.repository)).size!==grants.length) throw new GitHubAccessError('github_access_invalid_scope');
   }
-  const shared = grants === undefined ? {} : {grants};
+  const shared = value.mode === 'simple' ? {mode:'simple' as const,ownerUserId:value.ownerUserId as string} : grants === undefined ? {} : {grants};
   if (value.source !== undefined && (typeof value.source!=='string' || !['token','gh','anonymous'].includes(value.source))) throw new GitHubAccessError('github_access_invalid_config');
   if (value.source === 'gh') {
-    if (value.token !== undefined || value.tokenEnv !== undefined || repositories.length || grants===undefined && allowedUserIds.length !== 1)
+    if (value.token !== undefined || value.tokenEnv !== undefined || repositories.length || value.mode !== 'simple' && grants===undefined && allowedUserIds.length !== 1)
       throw new GitHubAccessError('github_access_invalid_config');
     try { return { source:'gh', localGh:parseLocalGh(value.localGh), repositories, allowedUserIds, ...shared }; }
     catch { throw new GitHubAccessError('github_access_invalid_config'); }
@@ -92,6 +98,7 @@ export function parseGitHubAccessConfig(raw: unknown, env: Readonly<Record<strin
 
 export function publicGitHubAccess(config?: GitHubAccessConfig) {
   return { credentialConfigured: config?.source==='gh' || !!config?.token, credentialSource: config?.source==='gh' ? 'gh' : config?.tokenEnv ? 'environment' : config?.token ? 'token' : 'none',
+    ...(config?.mode ? {mode:config.mode,ownerUserId:config.ownerUserId} : {}),
     ...(config?.localGh ? { localGh:{login:config.localGh.login} } : {}),
     ...(config?.tokenEnv ? { tokenEnv: config.tokenEnv } : {}),
     repositories: [...(config?.repositories ?? [])], allowedUserIds: [...(config?.allowedUserIds ?? [])],
@@ -110,8 +117,8 @@ export class ScopedGitHubAdapter implements GitHubObservationAdapter {
 
   authorize(target: Readonly<GitHubTarget>, context?: GitHubAccessContext): string | undefined {
     const selected = repository(`${target.owner}/${target.repo}`);
-    if (!this.config?.grants && this.config?.source!=='gh' && !this.config?.repositories.includes(selected)) return undefined;
-    if (!context || !this.config || !this.config.grants && !this.config.allowedUserIds.includes(context.ownerId)) throw new GitHubAccessError('github_access_denied');
+    if (this.config?.mode !== 'simple' && !this.config?.grants && this.config?.source!=='gh' && !this.config?.repositories.includes(selected)) return undefined;
+    if (!context || !this.config || this.config.mode !== 'simple' && !this.config.grants && !this.config.allowedUserIds.includes(context.ownerId)) throw new GitHubAccessError('github_access_denied');
     const row = this.store.db.prepare(`SELECT t.ownerId,t.chatKey,i.senderId,i.chatId,i.chatKey AS inboxChatKey,i.envelope
       FROM tasks t JOIN inbox i ON i.key=t.inboxKey WHERE t.id=?`).get(context.taskId);
     if (!row || row.ownerId !== context.ownerId || row.senderId !== context.ownerId || row.chatId !== context.chatId
@@ -119,7 +126,14 @@ export class ScopedGitHubAdapter implements GitHubObservationAdapter {
     let envelope: unknown;
     try { envelope = typeof row.envelope === 'string' ? JSON.parse(row.envelope) : undefined; } catch { /* Fail closed below. */ }
     if (!envelope || typeof envelope !== 'object') throw new GitHubAccessError('github_access_denied');
-    if (this.config.grants) {
+    if (this.config.mode === 'simple') {
+      const m = {senderId:context.ownerId,chatId:context.chatId,envelope} as Incoming;
+      if (!this.feishu || row.chatKey!==`${this.feishu.appId}:${context.chatId}`
+        || !admitted(this.feishu,m.senderId,m.chatId,m.envelope?.tenantKey)
+        || !this.feishu.allowedUserIds.includes(this.config.ownerUserId!)
+        || !(m.envelope?.chatType==='group' || m.envelope?.chatType==='p2p' && m.senderId===this.config.ownerUserId))
+        throw new GitHubAccessError('github_access_denied');
+    } else if (this.config.grants) {
       const m = {senderId:context.ownerId,chatId:context.chatId,envelope} as Incoming;
       const grant = this.config.grants.find(g=>g.repository===selected);
       if (!this.feishu || row.chatKey!==`${this.feishu.appId}:${context.chatId}` || !admitted(this.feishu,m.senderId,m.chatId,m.envelope?.tenantKey)
@@ -129,6 +143,7 @@ export class ScopedGitHubAdapter implements GitHubObservationAdapter {
     return createHash('sha256').update(JSON.stringify({ version: 1, token: this.config.token,
       ...(this.config.localGh ? {localGh:this.config.localGh} : {}),
       repositories: this.config.repositories, allowedUserIds: this.config.allowedUserIds, repository: selected,
+      mode:this.config.mode,ownerUserId:this.config.ownerUserId,
       grants:this.config.grants, access:this.feishu?.access, chats:this.feishu?.allowedChatIds,
       taskId: context.taskId, ownerId: context.ownerId, chatId: context.chatId })).digest('hex');
   }

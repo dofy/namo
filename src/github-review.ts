@@ -1,5 +1,6 @@
 import { loadConfig, type Config } from './config.js';
 import { ScopedGitHubAdapter } from './github-access.js';
+import { assertGitHubApiDelivery } from './github-api.js';
 import { admitted } from './access.js';
 import type { Store } from './store.js';
 import type { Task } from './tasks.js';
@@ -37,6 +38,7 @@ export async function readReview(store:Store, file:string, task:Task, args:unkno
   return result.snapshot;
 }
 export function assertReviewDelivery(store:Store,config:Config,task:Task):void {
+  assertGitHubApiDelivery(store,config,task);
   const saved=store.db.prepare('SELECT value FROM settings WHERE key=?').get(key(task.workstreamId));
   if (!saved) return;
   const m=store.get(task.inboxKey)!;
