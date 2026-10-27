@@ -19,7 +19,7 @@ Namo manages messages, queues, projects, sessions and execution boundaries. The 
 ## What it does
 
 - **Feishu / Lark chat:** persistent connection, direct messages, group mentions, text and basic rich text; organization membership or a selected-member allowlist controls admission.
-- **Organization access:** detect the Feishu tenant, admit members without individual pairing, and grant local projects or GitHub repositories to an organization, selected groups, or selected members in direct messages. Members start in isolated workspaces.
+- **Organization access:** detect the Feishu tenant, admit members without individual pairing, and grant local projects to an organization, selected groups, or selected members in direct messages. Members start in isolated workspaces.
 - **Group PR review:** read bounded PR patches with a fixed base/head through a service-side GitHub connection and return findings to the authorized conversation. Missing patches and review limits are explicit; no automatic GitHub comments.
 - **Projects and sessions:** work in configured directories, preserve conversation context, switch projects and explicitly resume sessions.
 - **Durable tasks:** SQLite inbox and outbox, message deduplication, input revisions, per-chat and per-project serialization, and a global concurrency limit.
@@ -37,7 +37,7 @@ The workbench and CLI support **English and Simplified Chinese**. They follow th
 
 Schema 8 includes the roadmap integrations above and has passed review and deployment on the maintained local instance. Existing installations require an explicit service upgrade. PDF/Office/audio material interpretation, reminders, background delegation and offline message backfill remain unsupported. See the [development plan](docs/development-plan.md) for deployment status and outstanding real-world acceptance checks.
 
-Organization setup: use `namo access configure`, then configure shared repositories with `namo github configure`, or use **Connections** in the workbench. Existing installations retain their access rules until an administrator changes them. See [organization access](docs/organization-access.md).
+Organization setup: use `namo access configure`, then select a GitHub account and paired owner with `namo github configure`, or use **Connections** in the workbench. Existing installations retain their access rules until an administrator changes them. See [organization access](docs/organization-access.md).
 
 ## Get started
 
@@ -104,7 +104,7 @@ See the [command reference (Chinese)](docs/getting-started.md#聊天命令) and 
 - Write permission also permits file deletion. Cancellation, timeout or context reset does not undo completed actions.
 - Git push approvals bind an exact task, owner/chat, project, configured remote, branch, HEAD SHA, configuration revision and expiry, then allow a single execution attempt. This is **limited protection**, not complete enforcement: a generally networked agent or another credential path could bypass the approval entrypoint. Deployment is not implemented as a generic target.
 - OpenClaw import requires an explicitly selected source file, supported version and application. It never imports provider authentication, gateways, plugins or tasks, and it cannot automatically take over a receiver; cutover and rollback remain an explicit, verified manual gate.
-- GitHub waits default to anonymous public access. In **Connections → GitHub** or `namo github configure`, opt into the local `gh` login for one paired user's direct messages; no separate token or repository allowlist is needed. A separate scoped token remains available. Check access never authorizes Git pushes. See [private GitHub setup](docs/private-github.md).
+- GitHub waits default to anonymous public access. In **Connections → GitHub** or `namo github configure`, select a local `gh` login and one paired owner: admitted groups get read-only repository access; the owner's private chat can use all account API permissions. Other private chats cannot borrow the account. No repository grant lists are needed; a separate token remains available. CI waits never trigger writes. See [private GitHub setup](docs/private-github.md).
 - A platform send receipt means the platform accepted the message, not that the user read it. Ambiguous sends are retained for review.
 - A sleeping or disconnected host cannot provide continuous service. There is no offline history backfill.
 - Never commit `config.local.json`, `data/`, logs, tokens or authentication files. Namo does not automatically import personal MCP servers, plugins or third-party model gateways.

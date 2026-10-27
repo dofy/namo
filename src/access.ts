@@ -35,9 +35,10 @@ export function projectAllowed(c: Config['codex'], f: Config['feishu'], m: Incom
   return !f.access || !!c.projectAccess?.[name] && audienceAllows(c.projectAccess[name], m);
 }
 export function executionPolicy(c: Config['codex'], f: Config['feishu'], m: Incoming, project?: string, github?: Config['github']): Config['codex'] {
-  if (!f.access) return c;
+  if (!f.access && github?.mode!=='simple') return c;
   if (!admitted(f, m.senderId, m.chatId, m.envelope?.tenantKey) || project && !projectAllowed(c,f,m,project)) throw new Error('organization_access_denied');
-  return { ...c, sandbox: project ? c.projectAccess![project].permission : 'read-only', networkAccess: false,
-    allowLocalCommits: false, readPaths: [],
+  const group = github?.mode==='simple' && m.envelope?.chatType==='group';
+  return { ...c, ...(f.access ? {sandbox:project ? c.projectAccess![project].permission : 'read-only',networkAccess:false,allowLocalCommits:false,readPaths:[]} : {}),
+    ...(group ? {sandbox:'read-only',networkAccess:false,allowLocalCommits:false,readPaths:[]} : {}),
     accessScope: createHash('sha256').update(JSON.stringify({feishu:{appId:f.appId,access:f.access,chats:f.allowedChatIds},projects:c.projectAccess,github})).digest('hex') };
 }

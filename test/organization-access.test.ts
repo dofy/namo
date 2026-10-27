@@ -81,16 +81,16 @@ test('management saves shared credentials without a paired owner, detects revisi
   assert.equal(manager.config().feishu.access,null);
 });
 
-test('organization CLI configures admission and a shared repository without pairing each member',async t=>{
-  const{dir}=fixture(t),file=join(dir,'config.json');writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{...f,access:undefined,allowedUserIds:[]},codex:{}}));
+test('organization CLI retains admission and configures one owner without repository grants',async t=>{
+  const{dir}=fixture(t),file=join(dir,'config.json');writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{...f,access:undefined,allowedUserIds:['alice']},codex:{}}));
   const manager=new Management(file,{localGh:async()=>github.localGh});manager.organization=async()=>({tenantKey:'tenant',name:'Fixture organization'});
   const {configureAccess}=await import('../src/access-cli.js'),{configureGitHub}=await import('../src/github-cli.js'),{withLocale}=await import('../src/locale.js');
   const lines:string[]=[];
   await withLocale('en',()=>configureAccess(file,{async confirm(){return true;},async text(){return '';},info(s){lines.push(s);},close(){}},manager));
   assert.equal(manager.config().feishu.access.tenantKey,'tenant');
-  const answers=[true,false,true],inputs=['org/private','group',''];
+  const answers=[true,true],inputs:string[]=[];
   await withLocale('en',()=>configureGitHub(file,{async confirm(){return answers.shift()!;},async text(){return inputs.shift()!;},info(s){lines.push(s);},close(){}},manager));
-  assert.deepEqual(manager.config().github.grants,[{repository:'org/private',organization:false,userIds:[],chatIds:['group']}]);
+  assert.equal(manager.config().github.mode,'simple');assert.equal(manager.config().github.ownerUserId,'alice');assert.equal(manager.config().github.grants,undefined);
   assert.doesNotMatch(lines.join('\n'),/[\u4e00-\u9fff]/);
 });
 

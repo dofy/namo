@@ -10,7 +10,7 @@ import type { PublicProgressEvent } from '../src/public-progress.js';
 const FAKE = `#!/usr/bin/env node
 import { createInterface } from 'node:readline';
 const write = m => process.stdout.write(JSON.stringify(m)+'\\n');
-let waitAfterLate=false;
+let waitAfterLate=false,apiRegistered=false;
 createInterface({input:process.stdin}).on('line', line=>{
  const m=JSON.parse(line);
  if(m.id===99&&!m.method){
@@ -22,6 +22,7 @@ createInterface({input:process.stdin}).on('line', line=>{
  if(m.method==='plugin/list')return write({id:m.id,result:{marketplaces:[]}});
  if(m.method==='skills/list')return write({id:m.id,result:{data:[{cwd:m.params.cwds[0],skills:[],errors:[]}]}});
  if(m.method==='thread/start' && new Set((m.params.dynamicTools??[]).map(t=>Object.hasOwn(t,'type')?'canonical':'legacy')).size>1)return write({id:m.id,error:{code:-32600,message:'mixed dynamic tool formats'}});
+ if(m.method==='thread/start')apiRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='github_api');
  if(m.method==='thread/start'||m.method==='thread/resume')return write({id:m.id,result:{thread:{id:m.params.threadId||'thread-one'}}});
  if(m.method==='turn/interrupt'&&waitAfterLate){
   write({id:m.id,result:{}});
@@ -39,6 +40,11 @@ createInterface({input:process.stdin}).on('line', line=>{
   const prompt=m.params.input[0].text;
   if(prompt==='image-input' && (m.params.input.length!==2 || m.params.input[1].type!=='localImage' || !m.params.input[1].path.endsWith('/accepted.png')))
    return write({id:m.id,error:{code:-32602,message:'image input missing'}});
+  if(prompt==='github-api'||prompt==='github-api-invalid'){
+   if(!apiRegistered)return write({id:m.id,error:{code:-32602,message:'github API not registered'}});
+   write({id:99,method:'item/tool/call',params:{namespace:null,tool:'github_api',threadId:'thread-one',turnId:prompt==='github-api-invalid'?'foreign-turn':'turn-one',callId:'api-call',arguments:{requestId:'owner-write',method:'POST',endpoint:'/repos/org/repo/issues',body:{title:'requested'}}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
+  }
   if(prompt==='review'||prompt==='review-invalid'){
    write({id:99,method:'item/tool/call',params:{namespace:null,tool:'read_pull_request',threadId:'thread-one',turnId:prompt==='review-invalid'?'foreign-turn':'turn-one',callId:'review-call',arguments:{url:'https://github.com/org/private/pull/3'}}});
    return write({id:m.id,result:{turn:{id:'turn-one'}}});
@@ -243,3 +249,11 @@ test('an explicit active or unknown tool status in a terminal snapshot never bec
   assert.equal(progress[0].id, 'active'); assert.equal(progress[0].status, 'running');
   assert.equal(progress[0].text, 'pnpm test：执行中');
 });
+
+ test('GitHub API is registered on new threads and rejects foreign turns without calling the host',async t=>{
+ const {dir,runtime}=fixture(t);let calls=0;
+ const run=(prompt:string,onGitHub:(args:unknown)=>Promise<unknown>)=>runtime.run({cwd:dir,prompt,signal:new AbortController().signal,onThread(){},onTurn(){},onGitHub});
+ assert.equal((await run('github-api',async args=>{calls++;assert.equal((args as any).method,'POST');return {state:'completed'};})).text,'review received');
+ await run('github-api-invalid',async()=>{calls++;throw Error('must not run');});assert.equal(calls,1);
+ const failure=await run('github-api',async()=>{throw Error('PRIVATE_CREDENTIAL');});assert.match(failure.text,/github_api_unavailable/);assert.doesNotMatch(failure.text,/PRIVATE_CREDENTIAL/);
+ });

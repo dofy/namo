@@ -51,6 +51,7 @@ export function parseConfig(d: any, absolute: string): Config {
   const c = d.codex ?? {};
   const github=parseGitHubAccessConfig(d.github,process.env);
   const pairedUserIds=list(f.allowedUserIds??[],'feishu.allowedUserIds');
+  if(github?.mode==='simple' && !pairedUserIds.includes(github.ownerUserId!))throw new Error('github_owner_not_paired');
   const access = parseOrganization(f.access);
   if(!access && github?.allowedUserIds.some(id=>!pairedUserIds.includes(id)))throw new Error('github_access_user_not_paired');
   const g = d.gitApprovals ?? {};

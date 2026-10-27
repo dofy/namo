@@ -71,7 +71,7 @@ for (const wait of waits.ready()) {
 `GitHubRestAdapter`：
 
 - 只向固定的 `https://api.github.com` 发 GET 请求，不接受任意 API base URL，不执行 `gh`，也不读取主机的 GitHub 登录。
-- 默认不认证，适用于公开仓库；ScopedGitHubAdapter 校验所选用户和私聊任务，再使用明确选择的本机 `gh` 登录或独立令牌。令牌模式还要求确切仓库白名单；本机登录固定账号身份，凭据只在服务内存中使用。token 不进入等待记录、错误或日志。配置入口和权限见[私有 GitHub](private-github.md)。
+- 默认不认证，适用于公开仓库；ScopedGitHubAdapter 按当前配置校验持久任务身份：简化模式支持已准入群聊和本人私聊，旧配置保留原授权范围，再使用明确选择的本机 `gh` 登录或独立令牌。本机登录固定账号身份，凭据只在服务内存中使用。token 不进入等待记录、错误或日志。配置入口和权限见[私有 GitHub](private-github.md)。
 - 先读取 PR HEAD，再读取固定 SHA 上的 exact check runs / commit statuses，最后再次读取 PR HEAD，缩小检查期间换 HEAD 的竞态窗口。
 - 单请求 15 秒总期限、响应体默认 2 MB 上限；禁止重定向；HTTP、格式、限流与网络错误只输出有限错误码。
 - check run 同名同 app 返回多条、commit status context 返回多条、检查缺失或平台返回未知状态时全部 fail closed 为 `unknown`。

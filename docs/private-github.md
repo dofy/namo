@@ -1,72 +1,29 @@
-# GitHub service access / GitHub 服务访问
+# GitHub access / GitHub 访问
 
-Namo can wait for checks on a private pull request at one fixed HEAD. This is read-only access for the external-wait feature; it does not clone repositories, grant the model GitHub credentials, or authorize a push, merge or deployment.
+## 简化配置
 
-Namo 可以等待私有 PR 固定 HEAD 的检查结果。本功能只读，不代表支持私有仓库克隆，也不会把凭据交给模型或授予推送、合并、部署权限。
+在 **连接设置 → GitHub** 选择本机 `gh` 登录（推荐）或独立令牌，再选择一个已配对的**本人飞书账号**。无需填写仓库白名单、群 ID 或逐成员授权。CLI 使用 `namo github configure`。
 
-## Shared organization service / 组织共享服务
+- **已准入群聊**：只读访问所选 GitHub 账号可访问的仓库，包括 PR 审查和检查等待。服务接入范围、组织身份和群内提及要求仍生效。群聊运行保持只读目录、关闭 shell 网络及本地提交。
+- **本人私聊**：可使用该 GitHub 账号或令牌具备的全部 API 权限，包括创建/修改 PR、评论、合并、发布、Actions 和仓库管理。实际权限由 GitHub 决定；明确的用户请求决定要执行哪些操作。该设置不扩大本机项目目录或 shell 权限。
+- **其他人的私聊**：不借用该账号。不能靠正文、昵称、引用或工具参数声称“本人”。
 
-Configure **Connections → Organization access** (or `namo access configure`) first. Detect and select the current app’s tenant. Then select **GitHub → Shared service (per repository)** and add exact repositories with an audience: the whole organization, selected groups, or selected users in direct messages. The service can use its local `gh` login or a separate token. Only explicitly listed resources are readable; private user grants never permit disclosure in a group.
+保存后应用服务配置。权限上下文改变后，后续任务采用新工作线，旧历史保留；既有未完成任务不会偷偷更换权限继续执行。未切换的旧工作线缺少新工具时，发送 `/new` 后使用。旧版仓库授权配置仍能读取并按原规则执行，只有明确保存简化配置才改变范围。
 
-先在**连接设置 → 组织接入**（或 `namo access configure`）检测并选择当前应用的组织。再将 **GitHub → 资源访问模式**设为**服务共享（按仓库授权）**，逐项配置仓库和范围：整个组织、指定群或指定成员私聊。服务可使用服务器的 `gh` 登录或独立令牌；只开放明确列出的资源，个人授权不隐含群披露授权。
+本机登录保存 `gh` 路径、配置目录和固定账号身份，凭据只在宿主内存使用；不交给模型，不复制到 Namo 配置。切换本机 `gh` 当前账号不会静默改绑，重新保存才能连接新账号。独立令牌仍支持受保护配置或专用环境变量，令牌本身限制资源与操作；选择“仅公开仓库”可停用账号访问。
 
-Mention Namo in an authorized group and ask it to review a PR URL. The agent calls the read-only `read_pull_request` tool, which checks the durable task identity and resource grant, reads a bounded diff and confirms that base/head did not change. Findings are returned to Feishu, with commit and coverage limits. No GitHub review is posted. This differs from `wait_for_external`, which observes CI status and does not review code.
+## 工具与执行回执
 
-在获授权群里 @Namo 并请求 review PR 链接即可。Agent 调用只读 `read_pull_request` 工具，服务校验任务身份和资源授权，有界读取 diff 并核对 base/head 未变化。回复包含审查提交、发现及覆盖限制，不向 GitHub 发布 review。这与只观察 CI 状态的 `wait_for_external` 是两个能力。
+`read_pull_request` 继续读取固定 base/head 的有界补丁，用于代码审查；`wait_for_external` 继续只读观察固定 HEAD 的检查。两者都不会自动发评论、推送或合并。
 
-Review reads at most 200 files and 120,000 patch characters (24,000 per file), with a 30-second request deadline and three calls per run. Missing, truncated and binary patches are marked as limited coverage. Credentials stay outside model inputs. New tool registration requires a fresh workstream; enabling organization access creates a new permission context for subsequent tasks. Configuration changes invalidate active organization runs; repository grants are rechecked before tool delivery and cached review output.
+`github_api` 提供 `api.github.com` 的 JSON REST 请求；群聊只允许仓库路径的 GET，本人私聊允许 GET / POST / PUT / PATCH / DELETE 和 POST `/graphql`。模型不能传任意主机、认证头、身份或凭据。请求/响应各最多 256 KiB，单次超时 30 秒，每轮最多 30 次调用，不自动跟随重定向；大文件和二进制下载不是该工具的传输能力。
 
-审查最多读取 200 个文件、120,000 字符补丁（单文件 24,000），单次读取限时 30 秒，每轮最多调用三次。缺失、截断和二进制补丁标明覆盖不足，凭据不进入模型。新工具注册需要新工作线；启用组织接入后，后续任务采用新的权限上下文。配置变化会停止正在执行的组织任务；交付工具内容和缓存审查结果前重新核对仓库授权。
+写操作使用 task + requestId 的持久回执。发送前先落库，相同请求复用结果；进程中断、网络超时或不明确的服务端错误保留 unknown，不自动重试。存在未核对的写操作时，同一任务不能换 requestId 再写，可通过只读查询核对 GitHub 实际状态。返回结果不包含凭据；API 中的正文、评论和文件仍是不可信材料，不是授权。交付前重新检查任务身份和当前权限。
 
-## Personal access compatibility / 个人访问兼容模式
+测试写操作使用模拟 HTTP 服务，不向真实仓库发布评论、合并或修改设置。真实操作须对应本人明确请求；API 回执与飞书实际收件分别核对。
 
-The following behavior applies only to legacy personal mode; it is not the organization service model. Upgrades preserve it until an administrator explicitly selects shared access.
+## English
 
-以下行为仅适用于旧版个人模式；升级先保留，管理员明确切换共享范围后才改变。
+Choose a local `gh` login or a separate token and select one paired Feishu owner. Admitted groups get read-only repository access; only that owner's private chat can use all API permissions granted by the selected GitHub account. Other private chats cannot borrow the account. No per-repository or per-group grant list is required. Existing organization admission and local project boundaries remain in force.
 
-### Local GitHub login / 本机 GitHub 登录
-
-In **Connections → GitHub**, choose **Local GitHub login**, select your paired Feishu user and save. The CLI offers the same choice in `namo github configure`. Namo connects the active `github.com` account from the local `gh` installation. If needed, run `gh auth login` first. No separate token or repository allowlist is required; the selected user can read checks in repositories that account can access, in direct messages only.
-
-在**连接设置 → GitHub**选择**本机 GitHub 登录**，选择自己的飞书配对用户后保存；`namo github configure` 提供相同选项。保存时连接本机 `gh` 的当前 GitHub 账号。未登录时先运行 `gh auth login`。无需另建令牌或重复填写仓库白名单；仅所选用户的本人私聊可查询该账号有权访问的仓库。
-
-The executable, gh configuration directory and account identity are saved. Credentials are retrieved for that specific account only into service memory and used with fixed read-only GitHub REST endpoints; they are never copied into Namo configuration or model input. Ambient `GH_TOKEN`, `GITHUB_TOKEN`, debugging and proxy variables are not inherited. Switching gh's active account does not silently switch Namo's selected account; save again to reconnect. Background services must run as the same local user with access to that account's credential store.
-
-保存的信息是 `gh` 路径、配置目录与账号身份。服务仅在内存中取得该账号的凭据，用于固定 GitHub REST 只读接口，不写入 Namo 配置、不交给模型，也不继承环境中的令牌、调试和代理变量。切换 `gh` 当前账号不会静默切换 Namo 已选账号；重新保存可重新连接。后台服务必须以能访问该账号凭据存储的本机用户运行。
-
-Logout, loss of repository access or an account mismatch blocks private reads. Before consuming a saved ready result, Namo reads the fixed HEAD/checks again with current access. Changed or unavailable evidence remains waiting until it can be verified, cancelled or timed out. Choose **Public repositories only** to disable private access. The configured badge records selection, not a guarantee that the login remains valid.
-
-退出所选账号、仓库权限撤销或身份不匹配时停止私有读取。恢复等待任务前，会用当前权限重新读取固定 HEAD 和检查；证据变化或不可访问时保持等待，直至能够核对、取消或超时。选择**仅公开仓库**可停用私有访问。“已配置”标记只表示已保存选择，不代表登录永远有效。
-
-## Separate token (advanced) / 独立令牌（高级）
-
-1. Create a separate **fine-grained personal access token**, limited to the repositories you need. Grant **Checks: read**, **Commit statuses: read**, and **Pull requests: read**. Organization approval may be required.
-2. Open **Connections → GitHub → Separate token**, or choose token configuration in `namo github configure`. Select exact `owner/repo` names and paired users, then enter the token. Do not paste it into chat or command arguments.
-3. Save. Settings take effect on the next wait poll. Run `namo github status` to inspect scopes and credential presence without exposing the token.
-4. Start a new Namo workstream if the existing Codex thread predates the external-wait tool. Request a wait for a specific PR, HEAD and check names; Namo does not infer required checks from branch protection.
-
-创建独立的细粒度令牌，只选所需仓库并授予上述三类读取权限。在**连接设置 → GitHub**或本机 `namo github configure` 中填写确切仓库、选择配对用户并隐藏输入令牌。留空保留原凭据；勾选清除后保存才撤销。凭据不回显、不写入浏览器存储，也不接受命令行参数或管道输入。配置保存后在下次轮询采用，`namo github status` 只显示配置状态与范围。
-
-GitHub permission references: [Checks](https://docs.github.com/en/rest/checks/runs), [Commit statuses](https://docs.github.com/en/rest/commits/statuses), [Pull requests](https://docs.github.com/en/rest/pulls/pulls).
-
-## Boundaries / 边界
-
-- Shared mode requires an admitted user and an explicit repository/audience grant. Legacy personal mode requires a selected user’s direct message; groups cannot use legacy private credentials.
-- Local login is opt-in. Without that selection Namo does not use `gh`; neither mode inherits ambient GitHub tokens, Git credential helpers or browser sessions.
-- Requests go only to `https://api.github.com`, with no redirects. HTTP errors are reduced to stable codes. Credentials stay outside prompts, wait records, public configuration responses and logs.
-- In token mode, local configuration and protected configuration backups contain the token. Replacing or clearing it does not delete historical backups or revoke it at GitHub. Local login stores no token in Namo configuration; protect the host credential store in either case.
-- Each private observation is bound to its task, user, chat and authorization scope. Before resuming, Namo checks current settings again. Revoked access leaves the task waiting until authorized again, cancelled or timed out; it never resumes using the old credential's observation.
-
-共享模式按组织准入和仓库范围授权；旧版个人模式仅限明确选择用户的本人私聊。本机登录需主动选择，独立令牌模式另外限制仓库白名单。令牌模式的配置及备份含凭据，清除配置不会抹除旧备份或撤销 GitHub 上的令牌。权限变化后会重新核对，不直接使用旧观察恢复任务。
-
-For manually managed **foreground** deployments, `github.tokenEnv` may name an explicit `NAMO_GITHUB_*` environment variable instead of `github.token`; the two are mutually exclusive. The variable must exist in the receiving process. The macOS service installer does not copy shell environment variables into launchd. Prefer the local configuration UI or CLI for background services. No GitHub environment variable is forwarded to Codex.
-
-手工管理的**前台**部署可配置 `github.tokenEnv`，仅接受显式 `NAMO_GITHUB_*` 环境变量名，与 `github.token` 二选一。macOS 服务安装不会把终端环境变量复制到 launchd；后台服务建议通过本机 UI/CLI 保存凭据。Codex 子进程不会继承 GitHub 环境凭据。
-
-Configuration, scopes, fake HTTP failures, restart and revocation are covered by local tests. Real private-repository acceptance uses the explicitly selected login or token and is recorded separately from deployment.
-
-本地测试覆盖配置、身份范围、模拟 HTTP 失败、重启与撤销。真实私有仓库验收使用明确选择的本机登录或令牌，并与部署状态分开记录。
-
-On 2026-10-27, local gh login passed real private-PR check-run and commit-status observation, durable wait/resume and Feishu receipt confirmation. See the [delivery record](archive/local-gh-delivery-20261027.md). Separate-token and other live failure scenarios are not implied by that result.
-
-2026-10-27，本机 gh 登录已通过真实私有 PR 的 check run / commit status 读取、持久等待恢复及飞书收件确认。见[交付记录](archive/local-gh-delivery-20261027.md)。这不替代独立令牌或其他真实失败场景的验收。
+Apply saved configuration before using the new permissions. Permission changes create a new context for subsequent tasks while retaining old history. Legacy configuration remains supported until explicitly replaced. Credentials stay on the host. The GitHub API tool supports bounded JSON REST calls and owner-only GraphQL; it never accepts arbitrary hosts or authentication headers. Durable write receipts prevent automatic retries after uncertain outcomes. Read-only PR reviews and CI waits remain distinct from requested GitHub writes.

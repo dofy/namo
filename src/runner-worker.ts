@@ -18,6 +18,7 @@ import { requestWait } from './external-wait-bridge.js';
 import { loadRunImages } from './image-inputs.js';
 import { executionPolicy } from './access.js';
 import { readReview, assertReviewDelivery } from './github-review.js';
+import { githubApi } from './github-api.js';
 
 process.umask(0o077);
 async function main(): Promise<void> {
@@ -110,6 +111,7 @@ async function main(): Promise<void> {
           store.saveRun(task.inboxKey, thread, turn); tasks.saveRun(runId, thread, turn); runnerEvent(store, runId, 'turn_bound');
         }),
         onReview: args => readReview(store,file,task,args,abort.signal),
+        ...(config.github?.mode==='simple'?{onGitHub:(args:unknown)=>githubApi(store,file,task,args,abort.signal)}:{}),
         onReady: next => { controls = next; steer(); },
         onActivity: phase => write(() => recordActivity(store, runId, phase)),
         onProgress: event => write(() => recordProgress(store, runId, event, redact)),

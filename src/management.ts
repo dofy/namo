@@ -256,7 +256,8 @@ export class Management {
     const {raw,revision:current}=this.source();
     if (revision!==current) throw new ManagementError(tr('配置已被其他页面或程序修改，请刷新后重试'));
     const owners=patch.github.allowedUserIds;
-    if (patch.github.grants===undefined && (!Array.isArray(owners)||owners.length!==1||!raw.feishu?.allowedUserIds?.includes(owners[0])))
+    if (patch.github.mode==='simple' ? !raw.feishu?.allowedUserIds?.includes(patch.github.ownerUserId)
+      : patch.github.grants===undefined && (!Array.isArray(owners)||owners.length!==1||!raw.feishu?.allowedUserIds?.includes(owners[0])))
       throw new ManagementError(tr('本机 GitHub 登录只能绑定一个已配对用户'),400);
     let local:LocalGhConfig;
     try {local=await this.deps.localGh();}
@@ -290,12 +291,13 @@ export class Management {
         if(patch.newSecret)next.feishu.appSecret=patch.newSecret;
       }
       if(patch.github!==undefined){
-        if(!patch.github||typeof patch.github!=='object'||Array.isArray(patch.github)||Object.keys(patch.github).some(k=>!['source','repositories','allowedUserIds','grants'].includes(k)))throw new ManagementError(tr('GitHub 配置无效'),400);
+        if(!patch.github||typeof patch.github!=='object'||Array.isArray(patch.github)||Object.keys(patch.github).some(k=>!['mode','ownerUserId','source','repositories','allowedUserIds','grants'].includes(k)))throw new ManagementError(tr('GitHub 配置无效'),400);
         next.github={...next.github,...patch.github};
         if(patch.github.grants===undefined)delete next.github.grants;
+        if(patch.github.mode===undefined){delete next.github.mode;delete next.github.ownerUserId;}
         if (patch.github.source==='gh') {
           if (!localGh || patch.newGithubToken || patch.clearGithubToken || patch.github.repositories?.length) throw new ManagementError(tr('GitHub 配置无效'),400);
-          next.github={source:'gh',localGh,repositories:[],allowedUserIds:patch.github.allowedUserIds,...(patch.github.grants===undefined?{}:{grants:patch.github.grants})};
+          next.github={source:'gh',localGh,repositories:[],allowedUserIds:patch.github.allowedUserIds,...(patch.github.mode==='simple'?{mode:'simple',ownerUserId:patch.github.ownerUserId}:{}),...(patch.github.grants===undefined?{}:{grants:patch.github.grants})};
         } else if (patch.github.source==='anonymous') {
           if (patch.newGithubToken) throw new ManagementError(tr('GitHub 配置无效'),400);
           next.github={source:'anonymous',repositories:[],allowedUserIds:[],...(patch.github.grants===undefined?{}:{grants:patch.github.grants})};

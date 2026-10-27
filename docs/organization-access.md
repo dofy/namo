@@ -1,3 +1,5 @@
+> GitHub 默认使用简化规则：选择一个本人账号，群聊只读、本人私聊使用账号全部 API 权限，无需逐仓库授权。以下按资源范围描述的 GitHub grant 属于旧配置兼容行为；本机项目授权仍按本文执行。见[GitHub 访问](private-github.md)。
+
 # Organization service / 组织服务
 
 Namo is a self-hosted bridge between a Feishu organization and an agent. The host may be a workstation or server. Connecting a service credential and granting access to its resources are separate decisions.
