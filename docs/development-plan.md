@@ -27,12 +27,12 @@
 - R5 外部等待：本机 gh 登录下的真实私有 PR 固定 HEAD 检查、等待恢复及收件已通过。继续补验运行中 CI 状态变化、超时、取消、HEAD 改变、真实访问撤销和重启后的续接；独立令牌路径仍需另行真实验收。新工具需要新建 Codex 工作线。见[外部等待](external-waits.md)。
 - R6 记忆：自动提取与纠正的真实两用户、群聊隐私、项目切换、新旧 session、停用 / 删除后新运行不再采用，以及迁移候选人工启用。普通对话默认增量提取有证据的长期事实，临时要求留在 session。见[记忆契约](memory.md)。
 
-## R7 多执行器接入与任务路由（R7.1 已实现，合并升级中）
+## R7 多执行器接入与任务路由（R7.1 已合并并升级本机）
 
 2026-10-27 确认需求：预先配置多个 Agent，按工作线 / 项目 / 单次任务选择，后续支持显式规则分配。官方方案可行，建议保留 Codex app-server，Claude 使用官方 Agent SDK，Cursor 优先官方 CLI ACP；Cursor 本地 TypeScript SDK 作为替代评估。当前源码仍只执行 Codex；注册表和探针不等于 Claude/Cursor 已接管任务。本轮已授权 R7.1 合并推送并升级现有服务，保留配置和数据；Claude/Cursor 执行继续关闭，npm 发布仍需另行确认。
 
 - [ ] R7.0 兼容性试验（版本/无推理探针已实现；完整真实验收仍有认证、权限和取消等缺口，见[证据与能力矩阵](agent-compatibility.md)）：固定 SDK / CLI 版本，核实认证与计费范围；验证事件、目录和权限、取消、原生续接、提问与中断恢复，形成能力矩阵。
-- [x] R7.1 通用执行器注册表（源码实现，未部署）：多 profile、独立状态目录、CLI/UI 配置与只读探针、任务选择快照、带后端身份的 session 映射；兼容旧 Codex 配置、数据及未完成任务。Claude/Cursor 支持预登记和只读探针，尚不能执行任务；后台记忆固定 Codex。见[注册表契约](agent-registry.md)及[隔离验证记录](archive/r7-registry-verification-20261027.md)。
+- [x] R7.1 通用执行器注册表（已合并推送并升级现有实例）：多 profile、独立状态目录、CLI/UI 配置与只读探针、任务选择快照、带后端身份的 session 映射；兼容旧 Codex 配置、数据及未完成任务。Claude/Cursor 支持预登记和只读探针，尚不能执行任务；后台记忆固定 Codex。见[注册表契约](agent-registry.md)、[隔离验证记录](archive/r7-registry-verification-20261027.md)及[本机交付记录](archive/r7-registry-delivery-20261027.md)。
 - [ ] R7.2 Claude：独立 SDK worker、进度 / 证据、取消、会话和用户输入桥接；明确回调等待与现有释放运行后续接的差异。保留官方账号登录、官方 API key、显式 router 三种独立认证模式，分别验证并核实公开分发条件，不因 Kaon 接入排除官方登录。
 - [ ] R7.3 Cursor：ACP 会话、权限请求、用户问题和事件适配；不以默认全权限或 `--force` 实现兼容，不因有 CLI / 编辑器就标为可执行。
 - [ ] R7.4 手动路由与交接：UI / 飞书选择默认和单次 Agent；任务固定所选后端，跨 Agent 用有范围的交接包，不复制原生 session；切回旧 Agent 补齐遗漏变更与证据。
