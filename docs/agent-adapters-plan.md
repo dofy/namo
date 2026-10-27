@@ -1,6 +1,8 @@
 # 多执行器接入、切换与任务路由计划
 
-调研日期：2026-10-27。范围为 Codex、Claude 与 Cursor 的本地执行接入。本文维护分期方案。R7.1 注册表已合并推送并升级本机实例，Claude/Cursor 运行适配器仍待 R7.2/R7.3；R7.0 实测及缺口见[兼容性基线](agent-compatibility.md)，配置契约见[执行器注册表](agent-registry.md)。用户已授权 R7.1 合并、推送和现有本机服务升级；Claude/Cursor 执行保持关闭，npm 发布仍需另行确认。此前授权的 Claude-only Kaon 兼容性试验不改变 Codex 官方认证路径。
+调研日期：2026-10-27。状态更新：优先完成官方 Codex 全流程，暂停其他 Agent 接入与新增试验。本文件保留有条件恢复的技术候选方案，历史官方资料与版本届时需重新核实。当前优先级以[开发计划](development-plan.md)为准。
+
+R7.1 注册表已交付，保持 Codex 配置 / session 兼容。Claude 实验保留在 `seven/r7-2-claude`（`073c50d`），其 SDK、worker 和依赖不合入主线；Kaon 部分验证通过、跨 worker 原生续接未通过，官方账号与 API key 未完成真实验收。Cursor 不继续开发。现阶段只保留内部 adapter 边界，不提供插件市场、动态安装加载或公共插件 SDK；Codex 完整闭环通过并有第二执行器需求后再重新评估。
 
 ## 结论与选型
 
@@ -12,7 +14,7 @@
 | Claude | 官方 `@anthropic-ai/claude-agent-sdk`，运行在独立 worker 内 | `claude -p` + JSON 流可做有限能力验证；正式接入优先 SDK 的类型与控制入口 |
 | Cursor | 官方 CLI 的 `agent acp`，通过 stdio JSON-RPC 对接 | 官方 `@cursor/sdk` 的 local 模式作为替代评估；headless JSON 流用于基础诊断，不默认使用 `--force` / `--yolo` |
 
-建议先做适配器契约与 Codex 无行为变化的迁移，再完成 Claude、Cursor，随后提供按任务选择与显式交接。自动按任务类型选 Agent 在手动选择稳定后做；同一任务自动拆分给多个 Agent 不属于首期。
+以下原分期方案已延期：适配器契约与 Codex 兼容迁移已落地，Claude、Cursor 和跨 Agent 显式交接须满足恢复条件后再立项。自动按任务类型选 Agent 在手动选择稳定后做；同一任务自动拆分给多个 Agent 不属于首期。
 
 ## 官方依据与需要验证的差异
 
@@ -25,7 +27,7 @@
 - [配置加载](https://code.claude.com/docs/en/agent-sdk/claude-code-features)：显式限制 `settingSources`，但空列表不代表完全不读宿主配置；托管策略、部分全局配置和记忆另有加载规则。需验证专用配置目录、环境白名单、原生自动记忆和项目 hooks / MCP 的边界，不复制个人认证文件，不尝试绕过组织策略。
 - 认证需区分个人本机使用和公开产品分发。[官方帮助中心](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)在 2026-10-07 更新中说明订阅登录的 SDK / `claude -p` 仍消耗订阅额度，关联 Console 的 API key 使用另一条额度路径；SDK 概览仍提示第三方产品提供 claude.ai 登录 / 额度需要批准。两页的适用范围不能擅自合并为通用授权。公开版先支持用户自带官方 API key；本机已有官方登录作为待核实选项，发布前复核集成方式与届时条款，不承诺所有订阅或部署方式都可用。
 
-### Claude 认证模式（R7.2 待实现）
+### Claude 认证模式（主线暂停，实验保留）
 
 Kaon 是 Claude 执行器的一种显式路由配置，不是另一种 Agent，也不替代官方登录。设计保留三条独立路径：官方账号登录、官方 API key、用户明确配置的第三方 router。每个 profile 独立状态目录和认证来源；环境白名单按模式构建，官方登录模式不能继承 router 地址或 API key，router 模式不能回落到个人订阅。密钥仅本机保存引用，UI 展示模式与认证状态，不展示密钥。
 
