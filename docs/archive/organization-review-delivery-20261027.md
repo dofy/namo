@@ -35,3 +35,11 @@ OpenClaw switch, actual Git push feature acceptance, npm publication and Claude/
 The refusal now explicitly directs the user to `/new`, rather than an empty project selector. A regression verifies that the denied request opens no task, a new session uses an isolated directory/native context, and the old history remains intact. All 33 organization/task checks passed.
 
 Source `c8f20097214abbf54e9bbf051283d72d7b72a9b4` was deployed as `b762715d2e069f49310d618e4d0bdc72f904e221b5b49516beb3741027093ab0`. The existing receiver was replaced while idle, schema stayed at 10, all 920 rows across 23 tables were retained, integrity/foreign-key checks passed, and configuration/credentials/registered Node were unchanged. The new service is ready and connected. Real PR review and group-result confirmation remain pending.
+
+## Dynamic-tool protocol correction
+
+The next real group request correctly started in an isolated workspace, but the official Codex server rejected thread creation before inference or GitHub access. The PR tool lacked the canonical `type: function` discriminator while the existing wait tools used it; mixed formats are invalid. Earlier mocked protocol tests had accepted both formats and missed this combination.
+
+Source `1f6bb09b8cff13a0407aa67478256ea6b23c5372` aligns all three declarations. The regression now rejects mixed formats and exercises PR review together with both wait tools. All 453 tests pass. An official Codex session-start probe and a separate authenticated model turn both passed: exactly one read-only PR tool call, 14 files returned, correct HEAD reported and no command/file actions observed. The snapshot reports incomplete patches, which remain a required review limitation. This isolated model test does not stand in for a delivered group review.
+
+Deployed release `81a799fc00b1a6aa5fe779d7807f839cdb60948434524bb9abbc7a76434f885c` is ready and connected with a verified matching manifest. Schema remains 10; all 949 existing rows across 23 tables, configuration, credentials and registered Node were preserved. SQLite integrity and foreign-key checks passed. The failed task was not silently replayed; the user has been asked to resend the same review request, without another `/new`. Live group review and recipient confirmation remain pending.
