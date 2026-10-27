@@ -71,7 +71,7 @@ for (const wait of waits.ready()) {
 `GitHubRestAdapter`：
 
 - 只向固定的 `https://api.github.com` 发 GET 请求，不接受任意 API base URL，不执行 `gh`，也不读取主机的 GitHub 登录。
-- 默认不认证，适用于公开仓库；产品通过 ScopedGitHubAdapter 对受保护配置中的确切仓库、用户和私聊任务再次鉴权后才注入 token。token 不进入等待记录、错误或日志。配置入口和权限见[私有 GitHub](private-github.md)。
+- 默认不认证，适用于公开仓库；ScopedGitHubAdapter 校验所选用户和私聊任务，再使用明确选择的本机 `gh` 登录或独立令牌。令牌模式还要求确切仓库白名单；本机登录固定账号身份，凭据只在服务内存中使用。token 不进入等待记录、错误或日志。配置入口和权限见[私有 GitHub](private-github.md)。
 - 先读取 PR HEAD，再读取固定 SHA 上的 exact check runs / commit statuses，最后再次读取 PR HEAD，缩小检查期间换 HEAD 的竞态窗口。
 - 单请求 15 秒总期限、响应体默认 2 MB 上限；禁止重定向；HTTP、格式、限流与网络错误只输出有限错误码。
 - check run 同名同 app 返回多条、commit status context 返回多条、检查缺失或平台返回未知状态时全部 fail closed 为 `unknown`。
@@ -79,3 +79,5 @@ for (const wait of waits.ready()) {
 持续离线、GitHub 限流或 token 权限不足时，系统不能保证按时观察到结果；等待只会保持 open 直到下次轮询或超时。平台 API 成功、Namo 已持久化 ready、恢复任务已消费和最终消息已送达仍是四个不同事实。
 
 私有观察在恢复前重新读取配置、校验授权范围。令牌替换、仓库/用户撤销后的旧 ready 结果不会直接恢复；到期仍正常结束。此处代码片段用于说明底层接口，产品应通过 `pollAndResume` 的授权复核路径消费结果。
+
+本机 `gh` 登录的退出和权限变化不一定改变 Namo 配置，因此恢复前还会用当前凭据重新读取固定 HEAD 与检查，确认与原观察一致。此网络核对在 SQLite 事务外进行，结束后再次核对当前配置与任务身份，再原子消费；迟到结果不能恢复已取消或超时任务。

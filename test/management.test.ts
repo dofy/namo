@@ -7,6 +7,31 @@ function fixture(t:any,deps:any={}){
  writeFileSync(file,JSON.stringify(raw));const s=new Store(join(data,'bot.sqlite'));s.close();const manager=new Management(file,{status:()=>({running:false,installed:true,registered:false,mode:'stopped'}),diagnose:async()=>[{id:'test',status:'ok',message:'isolated diagnostic'}],...deps});
  t.after(()=>rmSync(dir,{recursive:true,force:true}));return {dir,data,project,file,raw,manager};
 }
+
+test('local GitHub connection probes before saving, binds one paired owner and never accepts browser-supplied executable paths',async t=>{
+ const local={executable:'/usr/bin/gh',configDir:'/tmp/gh-fixture',login:'owner',userId:42};let probes=0;
+ const f=fixture(t,{localGh:async()=>{probes++;return local;}}),initial=f.manager.config();
+ const patch={github:{source:'gh',repositories:[],allowedUserIds:['alice']}};
+ assert.throws(()=>f.manager.save(initial.revision,patch),/GitHub 配置无效/);
+ await assert.rejects(f.manager.saveGitHub(initial.revision,{github:{...patch.github,allowedUserIds:['alice','bob']}}));assert.equal(probes,0);
+ const saved=await f.manager.saveGitHub(initial.revision,patch);assert.equal(saved.github.localGh.login,'owner');
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));assert.deepEqual(raw.github,{...patch.github,localGh:local});assert.equal(raw.github.token,undefined);
+ assert.equal(raw.custom.keep,'untouched');assert.doesNotMatch(JSON.stringify(saved.github),/executable|configDir/);
+ await assert.rejects(f.manager.saveGitHub(initial.revision,patch));assert.equal(probes,1);
+ assert.throws(()=>f.manager.save(saved.revision,{github:{...patch.github,localGh:local}}));
+ const disabled=f.manager.save(saved.revision,{github:{source:'anonymous',repositories:[],allowedUserIds:[]}});
+ assert.equal(disabled.github.credentialConfigured,false);assert.equal(JSON.parse(readFileSync(f.file,'utf8')).github.localGh,undefined);
+});
+
+test('failed local GitHub discovery and concurrent edits preserve configuration',async t=>{
+ const f=fixture(t,{localGh:async()=>{throw Error('raw secret-bearing child error');}}),before=readFileSync(f.file,'utf8');
+ const patch={github:{source:'gh',repositories:[],allowedUserIds:['alice']}};
+ await assert.rejects(f.manager.saveGitHub(f.manager.config().revision,patch),e=>{assert.doesNotMatch(String(e),/raw secret/);return true;});
+ assert.equal(readFileSync(f.file,'utf8'),before);
+ const race=fixture(t,{localGh:async()=>{race.manager.save(race.manager.config().revision,{model:'concurrent-edit'});return {executable:'/usr/bin/gh',configDir:'/tmp/gh-fixture',login:'owner',userId:42};}});
+ await assert.rejects(race.manager.saveGitHub(race.manager.config().revision,patch),/配置已被/);
+ assert.equal(race.manager.config().values.model,'concurrent-edit');assert.equal(race.manager.config().github.credentialConfigured,false);
+});
 test('HTTP localizes application errors per request while preserving user task text', async t => {
  const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());
  const login=await fetch(ui.url+'/api/session',{method:'POST',headers:{Origin:ui.url,'Content-Type':'application/json'},body:JSON.stringify({code:new URL(ui.entryUrl).hash.slice(1)})});

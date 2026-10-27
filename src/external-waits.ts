@@ -86,6 +86,7 @@ export interface ExternalWaitResume {
 
 export interface GitHubObservationAdapter {
   authorize?(target: Readonly<GitHubTarget>, context: ExternalWaitBinding): string|undefined;
+  validateResume?(observation: GitHubObservation, checks: readonly RequiredCheck[], context: ExternalWaitBinding, deadlineMs: number): Promise<void>;
   observe(target: Readonly<GitHubTarget>, checks: readonly RequiredCheck[], deadlineMs: number, context?:ExternalWaitBinding): Promise<GitHubObservation>;
 }
 
@@ -496,6 +497,13 @@ export class GitHubRestAdapter implements GitHubObservationAdapter {
       if (error instanceof GitHubReadError) throw error;
       throw new GitHubReadError('github_read_unknown');
     } finally { clearTimeout(timer); }
+  }
+
+  async account(deadlineMs: number): Promise<{ login: string; id: number }> {
+    const value = await this.get('/user', deadlineMs);
+    if (typeof value.login !== 'string' || !/^[a-z0-9][a-z0-9-]{0,38}$/i.test(value.login)
+      || !Number.isSafeInteger(value.id) || value.id < 1) throw new GitHubReadError('github_invalid_response');
+    return { login: value.login, id: value.id };
   }
 
   private path(target: GitHubTarget): string {

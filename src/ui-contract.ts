@@ -29,9 +29,9 @@ export interface ConfigView {
   values: ConfigValues;
   file: string;
   feishu: { appId: string; domain: string; secretConfigured: boolean; pairedUsers: number; restrictedChats: number };
-  github?: { credentialConfigured:boolean; credentialSource:string; tokenEnv?:string; repositories:string[]; allowedUserIds:string[] };
+  github?: { credentialConfigured:boolean; credentialSource:string; localGh?:{login:string}; tokenEnv?:string; repositories:string[]; allowedUserIds:string[] };
 }
-export interface GitHubConfigPatch { github: {repositories:string[];allowedUserIds:string[]};newGithubToken?:string;clearGithubToken?:boolean }
+export interface GitHubConfigPatch { github: {source?:'gh'|'token'|'anonymous';repositories:string[];allowedUserIds:string[]};newGithubToken?:string;clearGithubToken?:boolean }
 export interface TaskSummary {
   id: string; workstreamId: string; project: string | null; state: string; inputVersion: number;
   startedAt: number | null; finishedAt: number | null; error: string | null;

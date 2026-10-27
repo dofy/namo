@@ -13,6 +13,7 @@ const target = { owner: 'octo-org', repo: 'private-app', pullNumber: 7, headSha:
 const checks: RequiredCheck[] = [{ kind: 'check_run', context: 'build', appId: 12 }];
 const credential = 'synthetic-private-token-not-a-real-credential';
 const config: GitHubAccessConfig = { token: credential, repositories: ['octo-org/private-app'], allowedUserIds: ['alice'] };
+const localConfig:GitHubAccessConfig={source:'gh',localGh:{executable:'/usr/bin/gh',configDir:'/tmp/gh-test',login:'owner',userId:42},repositories:[],allowedUserIds:['alice']};
 
 function fixture(t: any, chatType?: 'p2p' | 'group') {
   const dir = mkdtempSync(join(tmpdir(), 'namo-github-access-')), store = new Store(join(dir, 'bot.sqlite'));
@@ -46,7 +47,7 @@ test('GitHub configuration resolves only explicit dedicated environment names an
 });
 
 test('GitHub configuration rejects broad targets, inherited credentials and invalid values without echoing inputs', () => {
-  for (const raw of [null, [], { token: credential, tokenEnv: 'NAMO_GITHUB_TOKEN' }, { tokenEnv: 'GH_TOKEN' },
+  for (const raw of [null, [], {source:['token']}, {source:12}, { token: credential, tokenEnv: 'NAMO_GITHUB_TOKEN' }, { tokenEnv: 'GH_TOKEN' },
     { tokenEnv: 'GITHUB_TOKEN' }, { tokenEnv: 'NAMO_GITHUB_' }, { baseUrl: 'https://elsewhere.test' },
     { repositories: ['octo-org/*'] }, { repositories: ['https://github.com/octo-org/app'] }, { repositories: ['octo-org/..'] },
     { repositories: ['octo-org/app/child'] }, { repositories: ['elsewhere.test/octo-org/app'] },
@@ -158,4 +159,34 @@ test('caller mutations during HTTP cannot move an authenticated observation to a
   const result = await adapter.observe(selectedTarget, checks, Date.now() + 5000, f.context);
   assert.equal(result.target.repo, 'private-app');
   assert.ok(requests.every(request => new URL(request.url).pathname.startsWith('/repos/octo-org/private-app/')));
+});
+
+test('local gh allows accessible repositories only for one selected owner in a verified private chat',async t=>{
+  for(const invalid of [{...localConfig,allowedUserIds:[]},{...localConfig,allowedUserIds:['alice','bob']},{...localConfig,token:credential},
+    {...localConfig,repositories:['octo/app']},{...localConfig,localGh:undefined}])assert.throws(()=>parseGitHubAccessConfig(invalid));
+  const view=publicGitHubAccess(localConfig);assert.equal(view.credentialSource,'gh');assert.equal(view.localGh?.login,'owner');
+  assert.doesNotMatch(JSON.stringify(view),/executable|configDir/);
+  for(const chatType of ['group',undefined,'p2p'] as const){
+    const f=fixture(t,chatType);let resolutions=0;const requests:{url:string;options:RequestInit|undefined}[]=[];
+    const base=successfulFetch(requests);
+    const adapter=new ScopedGitHubAdapter(f.store,localConfig,async(url,init)=>String(url).endsWith('/user')?Response.json({login:'owner',id:42}):base(url,init),
+      async()=>{resolutions++;return credential;});
+    if(chatType!=='p2p') {await assert.rejects(adapter.observe(target,checks,Date.now()+5000,f.context),/github_access_denied/);assert.equal(resolutions,0);}
+    else {const output=await adapter.observe({...target,repo:'another-private-repo'},checks,Date.now()+5000,f.context);
+      assert.equal(output.checks[0].result,'passing');assert.equal(resolutions,1);assert.doesNotMatch(JSON.stringify(output),new RegExp(credential));
+      await assert.rejects(adapter.observe(target,checks,Date.now()+5000,{...f.context,ownerId:'bob'}),/github_access_denied/);assert.equal(resolutions,1);}
+  }
+});
+
+test('local gh verifies token identity and rejects stale ready observations after logout, permission or check changes',async t=>{
+  const f=fixture(t,'p2p');let loggedIn=true,permitted=true,identity=42,conclusion='success',tokenValue=credential;
+  const fetcher:typeof fetch=async(url)=>String(url).endsWith('/user')?Response.json({login:'owner',id:identity}):!permitted?new Response('',{status:404}):
+    Response.json(String(url).includes('/check-runs?')?{check_runs:[{name:'build',app:{id:12},status:'completed',conclusion}]}:{head:{sha:target.headSha},state:'open'});
+  const adapter=new ScopedGitHubAdapter(f.store,localConfig,fetcher,async()=>{if(!loggedIn)throw Error('private-error');return tokenValue;});
+  const initial=await adapter.observe(target,checks,Date.now()+5000,f.context);
+  tokenValue='rotated-synthetic-credential';await adapter.validateResume(initial,checks,f.context,Date.now()+5000);
+  for(const failure of ['logout','permission','identity','check']){
+    loggedIn=failure!=='logout';permitted=failure!=='permission';identity=failure==='identity'?43:42;conclusion=failure==='check'?'failure':'success';
+    await assert.rejects(adapter.validateResume(initial,checks,f.context,Date.now()+5000));
+  }
 });

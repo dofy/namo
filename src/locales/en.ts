@@ -1,6 +1,20 @@
 // English translations. Keys are the original Simplified Chinese application messages.
 // Numeric placeholders are substituted once; inserted user data is never translated.
 export const english: Record<string, string> = {
+  "本机 GitHub 登录只能绑定一个已配对用户": "Local GitHub login must be linked to exactly one paired user",
+  "无法使用本机 GitHub 登录，请先在本机运行 gh auth login 后重试": "Local GitHub login is unavailable. Run gh auth login locally, then try again.",
+  "使用本机 gh 登录（无需另建令牌）？": "Use the local gh login (no separate token needed)?",
+  "本机登录可读取该账号有权访问的仓库，只对所选用户的私聊生效。": "Read repositories accessible to this GitHub account, only in the selected user’s direct messages.",
+  "已连接本机 GitHub 账号：{0}": "Connected local GitHub account: {0}",
+  "仅使用公开仓库（停用私有访问）？": "Use public repositories only (disable private access)?",
+  "本机登录已配置": "Local login configured",
+  "读取 GitHub PR 检查结果，不授权推送、合并或部署。": "Read GitHub PR checks. This does not authorize pushes, merges or deployments.",
+  "GitHub 登录方式": "GitHub authentication",
+  "本机 GitHub 登录（推荐）": "Local GitHub login (recommended)",
+  "独立令牌（高级）": "Separate token (advanced)",
+  "保存时连接本机 gh 当前账号。无需填写令牌或仓库白名单；退出登录后停止私有读取。": "Connect the current local gh account on save. No token or repository allowlist needed; private reads stop after logout.",
+  "已选择的 GitHub 账号：{0}": "Selected GitHub account: {0}",
+  "请选择用户": "Select a user",
   "仓库请按 owner/repo 每行一个填写，不支持网址或通配符。": "Enter one owner/repo per line. URLs and wildcards are not supported.",
   "GitHub 配置已保存，从下一次检查轮询开始生效。": "GitHub settings saved. They apply on the next check poll.",
   "仅公开仓库": "Public repositories only",

@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto';
 import type { Store } from './store.js';
+import { localGhToken, parseLocalGh, type LocalGhConfig } from './github-local.js';
 import { GitHubReadError, GitHubRestAdapter, type GitHubObservation, type GitHubObservationAdapter,
   type GitHubTarget, type RequiredCheck } from './external-waits.js';
 
 /** Explicit protected configuration; resolved credentials must never enter a prompt or public view. */
 export interface GitHubAccessConfig {
+  source?: 'token' | 'gh' | 'anonymous';
+  localGh?: LocalGhConfig;
   token?: string;
   tokenEnv?: string;
   repositories: string[];
@@ -52,10 +55,22 @@ export function parseGitHubAccessConfig(raw: unknown, env: Readonly<Record<strin
   if (raw === undefined) return undefined;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new GitHubAccessError('github_access_invalid_config');
   const value = raw as Record<string, unknown>;
-  if (Object.keys(value).some(key => !['token', 'tokenEnv', 'repositories', 'allowedUserIds'].includes(key)))
+  if (Object.keys(value).some(key => !['source','localGh','token', 'tokenEnv', 'repositories', 'allowedUserIds'].includes(key)))
     throw new GitHubAccessError('github_access_invalid_config');
   if (value.token !== undefined && value.tokenEnv !== undefined) throw new GitHubAccessError('github_access_ambiguous_credential');
   const repositories = list(value.repositories, 'repository'), allowedUserIds = list(value.allowedUserIds, 'user');
+  if (value.source !== undefined && (typeof value.source!=='string' || !['token','gh','anonymous'].includes(value.source))) throw new GitHubAccessError('github_access_invalid_config');
+  if (value.source === 'gh') {
+    if (value.token !== undefined || value.tokenEnv !== undefined || repositories.length || allowedUserIds.length !== 1)
+      throw new GitHubAccessError('github_access_invalid_config');
+    try { return { source:'gh', localGh:parseLocalGh(value.localGh), repositories, allowedUserIds }; }
+    catch { throw new GitHubAccessError('github_access_invalid_config'); }
+  }
+  if (value.localGh !== undefined) throw new GitHubAccessError('github_access_invalid_config');
+  if (value.source === 'anonymous') {
+    if (value.token !== undefined || value.tokenEnv !== undefined || repositories.length || allowedUserIds.length) throw new GitHubAccessError('github_access_invalid_config');
+    return { source:'anonymous', repositories, allowedUserIds };
+  }
   if (value.tokenEnv !== undefined) {
     if (typeof value.tokenEnv !== 'string' || !TOKEN_ENV.test(value.tokenEnv)) throw new GitHubAccessError('github_access_invalid_environment');
     const resolved = Object.hasOwn(env, value.tokenEnv) ? env[value.tokenEnv] : undefined;
@@ -65,23 +80,25 @@ export function parseGitHubAccessConfig(raw: unknown, env: Readonly<Record<strin
 }
 
 export function publicGitHubAccess(config?: GitHubAccessConfig) {
-  return { credentialConfigured: !!config?.token, credentialSource: config?.tokenEnv ? 'environment' : config?.token ? 'token' : 'none',
+  return { credentialConfigured: config?.source==='gh' || !!config?.token, credentialSource: config?.source==='gh' ? 'gh' : config?.tokenEnv ? 'environment' : config?.token ? 'token' : 'none',
+    ...(config?.localGh ? { localGh:{login:config.localGh.login} } : {}),
     ...(config?.tokenEnv ? { tokenEnv: config.tokenEnv } : {}),
     repositories: [...(config?.repositories ?? [])], allowedUserIds: [...(config?.allowedUserIds ?? [])] };
 }
 
-/** A private credential is usable only for an exact repository and a verified owner task in a direct message. */
+/** Private access requires a verified owner task in a direct message; token mode also scopes repositories. */
 export class ScopedGitHubAdapter implements GitHubObservationAdapter {
   private readonly config: GitHubAccessConfig | undefined;
-  constructor(private readonly store: Store, config?: GitHubAccessConfig, private readonly fetcher?: typeof globalThis.fetch) {
+  constructor(private readonly store: Store, config?: GitHubAccessConfig, private readonly fetcher?: typeof globalThis.fetch,
+    private readonly ghToken: typeof localGhToken = localGhToken) {
     // Clone the resolved configuration: callers cannot alter scope halfway through an observation.
-    this.config = config ? { repositories: list(config.repositories, 'repository'), allowedUserIds: list(config.allowedUserIds, 'user'),
-      token: token(config.token), ...(config.tokenEnv ? { tokenEnv: config.tokenEnv } : {}) } : undefined;
+    const parsed = config ? parseGitHubAccessConfig({...config,tokenEnv:undefined}) : undefined;
+    this.config = parsed && config?.tokenEnv ? {...parsed,tokenEnv:config.tokenEnv} : parsed;
   }
 
   authorize(target: Readonly<GitHubTarget>, context?: GitHubAccessContext): string | undefined {
     const selected = repository(`${target.owner}/${target.repo}`);
-    if (!this.config?.repositories.includes(selected)) return undefined;
+    if (this.config?.source!=='gh' && !this.config?.repositories.includes(selected)) return undefined;
     if (!context || !this.config.allowedUserIds.includes(context.ownerId)) throw new GitHubAccessError('github_access_denied');
     const row = this.store.db.prepare(`SELECT t.ownerId,t.chatKey,i.senderId,i.chatId,i.chatKey AS inboxChatKey,i.envelope
       FROM tasks t JOIN inbox i ON i.key=t.inboxKey WHERE t.id=?`).get(context.taskId);
@@ -91,8 +108,9 @@ export class ScopedGitHubAdapter implements GitHubObservationAdapter {
     try { envelope = typeof row.envelope === 'string' ? JSON.parse(row.envelope) : undefined; } catch { /* Fail closed below. */ }
     if (!envelope || typeof envelope !== 'object' || (envelope as { chatType?: unknown }).chatType !== 'p2p')
       throw new GitHubAccessError('github_access_denied');
-    if (!this.config.token) throw new GitHubAccessError('github_access_credential_missing');
+    if (this.config.source!=='gh' && !this.config.token) throw new GitHubAccessError('github_access_credential_missing');
     return createHash('sha256').update(JSON.stringify({ version: 1, token: this.config.token,
+      ...(this.config.localGh ? {localGh:this.config.localGh} : {}),
       repositories: this.config.repositories, allowedUserIds: this.config.allowedUserIds, repository: selected,
       taskId: context.taskId, ownerId: context.ownerId, chatId: context.chatId })).digest('hex');
   }
@@ -105,13 +123,27 @@ export class ScopedGitHubAdapter implements GitHubObservationAdapter {
     const authorizationScope = this.authorize(selectedTarget, binding);
     let result: GitHubObservation;
     try {
-      result = await new GitHubRestAdapter({ ...(authorizationScope ? { token: this.config!.token } : {}), fetch: this.fetcher })
-        .observe(selectedTarget, selectedChecks, deadlineMs);
+      const local = this.config?.localGh;
+      const credential = local ? await this.ghToken(local,deadlineMs) : authorizationScope ? this.config!.token : undefined;
+      const adapter = new GitHubRestAdapter({ ...(credential ? {token:credential} : {}), fetch:this.fetcher });
+      if (local) {
+        const account = await adapter.account(deadlineMs);
+        if (account.id!==local.userId || account.login.toLowerCase()!==local.login.toLowerCase()) throw new GitHubAccessError('github_access_changed');
+      }
+      result = await adapter.observe(selectedTarget, selectedChecks, deadlineMs);
     } catch (error) {
       throw new GitHubReadError(error instanceof GitHubReadError && READ_ERRORS.has(error.code) ? error.code : 'github_read_unknown');
     }
     // A task/chat binding may have changed while the HTTP calls were in flight.
     if (this.authorize(selectedTarget, binding) !== authorizationScope) throw new GitHubAccessError('github_access_changed');
     return { ...result, ...(authorizationScope ? { authorizationScope } : {}) };
+  }
+
+  async validateResume(observation: GitHubObservation, checks: readonly RequiredCheck[], context: GitHubAccessContext, deadlineMs: number): Promise<void> {
+    if (this.config?.source!=='gh') return;
+    // Logout or repository access revocation can happen without a config edit.
+    const fresh = await this.observe(observation.target,checks,deadlineMs,context);
+    const snapshot = (o: GitHubObservation) => JSON.stringify({target:o.target,pullState:o.pullState,checks:o.checks,authorizationScope:o.authorizationScope});
+    if (snapshot(fresh)!==snapshot(observation)) throw new GitHubAccessError('github_access_changed');
   }
 }
