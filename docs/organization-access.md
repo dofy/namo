@@ -22,3 +22,7 @@ Implementation: organization admission, explicit project/repository audiences, b
 Deployment: the existing local service was upgraded with schema 10 and preserved records/credentials. Organization admission and one explicitly authorized group/repository grant are active. Live group acceptance remains pending; see [delivery evidence](archive/organization-review-delivery-20261027.md).
 
 部署：现有本机服务已升级，保持 schema 10，历史数据和凭据保留；已启用组织准入和一个明确授权的群 / 仓库范围。真实群聊验收待完成。
+
+Existing sessions retain their project binding. If that project is no longer granted to the chat, Namo refuses continuation; send `/new` and repeat the request to start in an isolated workspace. This does not grant access or copy the old native session.
+
+旧会话保留项目绑定；若该项目已不再向当前聊天授权，Namo 拒绝续接。发送 `/new` 后重发请求，即可开始隔离会话；不会因此扩大权限或复制旧会话上下文。

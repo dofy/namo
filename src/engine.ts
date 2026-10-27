@@ -439,7 +439,9 @@ export class Engine {
       if(e instanceof ArtifactError){this.reply(m,`文件交付指令无效：${e.code}`);return;}
       if (e instanceof TaskInputError || e instanceof WaitInputError) { this.reply(m, e.message); return; }
       if (!(e instanceof RuntimeError)) throw e;
-      this.reply(m, `项目不可用（${e.code}），尚未执行。请用 /project 选择已配置项目。`);
+      this.reply(m, e.code === 'project_access_denied'
+        ? '原会话绑定的项目已不再向本聊天开放，尚未执行。请发送 /new 开启隔离会话，再重新发送请求；原会话和历史记录保留。'
+        : `项目不可用（${e.code}），尚未执行。请用 /project 选择已配置项目。`);
     }
   }
   private taskAccessible(task:Task):boolean {

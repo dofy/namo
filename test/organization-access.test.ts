@@ -106,3 +106,24 @@ test('organization policies remain binding across agent profile selection',t=>{
   const revoked={...c,codex:executionPolicy(c.codex,f,member(),undefined,{...github,grants:[]})};
   assert.notEqual(selectedPolicyHash(effective,selection),selectedPolicyHash(revoked,selection));
 });
+
+
+test('a revoked legacy project gives a safe new-session path without inheriting its workspace or thread',t=>{
+  const{dir,store}=fixture(t),file=join(dir,'config.json');
+  const raw={dataDir:dir,feishu:f,codex:{projects:{host:dir},defaultProject:'host'}};
+  writeFileSync(file,JSON.stringify(raw));const config=parseConfig(raw,file),tasks=new Tasks(store);
+  const original=member();store.enqueue(original);const old=tasks.create(store.get(original.key)!,{project:'host',cwd:dir,policyHash:'legacy'});
+  store.saveThread(tasks.sessionKey(old),'legacy-private-thread');
+  store.db.prepare("UPDATE tasks SET state='succeeded',finishedAt=? WHERE id=?").run(Date.now(),old.id);
+  store.db.prepare("UPDATE inbox SET state='replied' WHERE key=?").run(original.key);
+  const engine=new Engine(store,{async run(){throw Error('not started');}},{async send(){return 'id';}},config);
+  const next=(id:string,text:string)=>({...member(),key:id,messageId:id,text});
+  const denied=next('denied','review PR');engine.accept(denied);
+  assert.equal(store.get(denied.key)?.taskId,null);
+  assert.match(String(store.db.prepare('SELECT content FROM outbox WHERE inboxKey=?').get(denied.key)?.content),/发送 \/new 开启隔离会话/);
+  assert.equal(tasks.binding(denied)?.id,old.workstreamId);
+  engine.accept(next('new','/new'));const fresh=next('review','review PR');engine.accept(fresh);
+  const current=tasks.get(store.get(fresh.key)!.taskId!)!;
+  assert.ok(current);assert.equal(current.project,null);assert.notEqual(current.cwd,old.cwd);assert.notEqual(current.workstreamId,old.workstreamId);
+  assert.equal(tasks.thread(current),undefined);assert.equal(tasks.thread(old),'legacy-private-thread');
+});
