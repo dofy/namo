@@ -3,6 +3,7 @@ import type { Inbox, Store } from './store.js';
 import { Tasks, type Task } from './tasks.js';
 import { AssistantSettings, composeAssistantPrompt } from './assistant.js';
 import { Memories, composeMemoryPrompt } from './memory.js';
+import { admitted } from './access.js';
 import { makeRedactor } from './safety.js';
 
 const DATE_TIME_TASK = /(?:日期|时间|时区|今天|明天|昨天|后天|星期|周[一二三四五六日天]|几点|日程|截止|到期)|\b(?:date|time|timezone|today|tomorrow|yesterday|calendar|schedule|deadline|expiry|expiration)\b/iu;
@@ -20,6 +21,7 @@ export function isDateTimeTask(text: string): boolean {
 export function buildTaskRunPrompt(store: Store, task: Task, inbox: Inbox, config: Pick<Config, 'feishu'>, runId: string): string {
   const tasks = new Tasks(store), base = tasks.prompt(task), continuing = !!tasks.thread(task);
   const paired = new Set(config.feishu.allowedUserIds);
+  if (config.feishu.access && admitted(config.feishu,inbox.senderId,inbox.chatId,inbox.envelope?.tenantKey)) paired.add(inbox.senderId);
   const identity = { channel: config.feishu.domain, appId: config.feishu.appId, userId: inbox.senderId };
   const assistant = new AssistantSettings(store, candidate => candidate.channel === config.feishu.domain
     && candidate.appId === config.feishu.appId && paired.has(candidate.userId));

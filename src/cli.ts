@@ -47,11 +47,12 @@ async function main(): Promise<void> {
   if (args.includes('--help') || args.includes('-h') || ['help', '-h', '--help'].includes(command)) { console.log(help()
     + '\n  migrate              OpenClaw import preview / OpenClaw 导入预览（不会自动接管）'
     + '\n  migrate inspect      Read-only source metadata / 只读来源元数据检查'
+    + '\n  access configure / status  ' + tr('配置组织接入或查看访问范围')
     + '\n  github configure / status  ' + tr('配置私有仓库检查读取，或查看配置状态')
     + '\n  approval             Controlled Git push approval / 受控 Git push 审批'
     + '\n\n' + tr('界面语言：--lang system|en|zh-CN，或设置 NAMO_LANG；默认跟随系统，无法匹配时使用英文。') + '\n' + tr('项目：{0}', PROJECT_URL)); return; }
-  if (!['resolve','migrate','approval'].includes(command)&&positional.length > (['agent', 'service', 'config','issue','github'].includes(command) ? 2 : 1)) throw new Error(tr("命令参数过多，运行 namo --help 查看用法"));
-  const known = ['github','approval','migrate','ui','issues','issue','resolve','init', 'doctor', 'agent', 'login', 'start', 'status', 'logs', 'service', 'config', 'check'];
+  if (!['resolve','migrate','approval'].includes(command)&&positional.length > (['agent', 'service', 'config','issue','github','access'].includes(command) ? 2 : 1)) throw new Error(tr("命令参数过多，运行 namo --help 查看用法"));
+  const known = ['access','github','approval','migrate','ui','issues','issue','resolve','init', 'doctor', 'agent', 'login', 'start', 'status', 'logs', 'service', 'config', 'check'];
   if (!known.includes(command)) throw new Error(tr("未知命令：{0}。运行 namo --help", command));
   const file = configFile(flag('--config'));
   if (command === 'config') { if (positional[1] !== 'path') throw new Error(tr("用法：namo config path")); console.log(file); return; }
@@ -86,6 +87,13 @@ async function main(): Promise<void> {
     return;
   }
   if (!existsSync(file)) throw new Error(tr("尚无配置，请先运行 namo init，或通过 --config 指定现有配置"));
+  if(command==='access') {
+    const {Management}=await import('./management.js'),manager=new Management(file);
+    if(positional[1]==='status'){console.log(JSON.stringify(manager.config().feishu,null,2));return;}
+    if(positional[1]!=='configure')throw new Error('Usage: namo access configure|status');
+    if(!process.stdin.isTTY||!process.stdout.isTTY)throw new Error(tr('请在本机交互终端配置访问范围。'));
+    const ui=new TerminalPrompter();try{await(await import('./access-cli.js')).configureAccess(file,ui,manager);}finally{ui.close();}return;
+  }
   if(command==='github'){
     if(positional[1]==='status'){console.log(JSON.stringify(new Management(file).config().github,null,2));return;}
     if(positional[1]!=='configure')throw new Error(tr('用法：namo github configure / status'));

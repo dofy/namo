@@ -12,6 +12,8 @@ import { recordActivity } from './feedback.js';
 import { Waits } from './waits.js';
 import { requestWait } from './external-wait-bridge.js';
 import { loadRunImages } from './image-inputs.js';
+import { executionPolicy } from './access.js';
+import { readReview, assertReviewDelivery } from './github-review.js';
 
 process.umask(0o077);
 async function main(): Promise<void> {
@@ -44,8 +46,9 @@ async function main(): Promise<void> {
     let result: RunResult | undefined, error: string | undefined;
     try {
       const config = loadConfig(file), revision = digest(readFileSync(file, 'utf8'));
+      const policy = executionPolicy(config.codex,config.feishu,store.get(task.inboxKey)!,task.project??undefined,config.github);
       if (resolve(database) !== join(config.dataDir, 'bot.sqlite') || revision !== runnerJob(store, runId)!.configRevision
-        || task.policyHash !== policyHash(config.codex) || realpathSync(task.cwd) !== task.cwd
+        || task.policyHash !== policyHash(policy) || realpathSync(task.cwd) !== task.cwd
         || (task.project && config.codex.projects?.[task.project] !== task.cwd)) throw new RuntimeError('task_configuration_changed');
       const redact = makeRedactor([config.feishu.appSecret,config.github?.token??'']);
       if (store.get(task.inboxKey)?.cancelRequested || abort.signal.aborted) throw new RuntimeError('cancelled');
@@ -73,11 +76,12 @@ async function main(): Promise<void> {
       timer = setInterval(() => {
         try {
           write(() => { store.db.prepare('UPDATE runner_jobs SET updatedAt=? WHERE runId=?').run(Date.now(), runId); });
+          if (config.feishu.access && digest(readFileSync(file,'utf8'))!==revision) abort.abort('access_configuration_changed');
           if (store.get(task.inboxKey)?.cancelRequested) abort.abort('user_cancelled');
           steer();
         } catch { storageFailed = true; abort.abort('storage_failed'); }
       }, 200);
-      const raw = await new CodexRuntime(config.codex).run({ taskId: task.id, runId,
+      const raw = await new CodexRuntime(policy).run({ taskId: task.id, runId,
         cwd: task.cwd, prompt: runnerJob(store, runId)!.prompt, images:loadRunImages(store,config.dataDir,runId),
         threadId: tasks.thread(task), signal: abort.signal,
         onProcess: pid => write(() => { store.db.prepare('UPDATE runner_jobs SET runtimePid=? WHERE runId=?').run(pid, runId); runnerEvent(store, runId, 'runtime_started'); }),
@@ -89,6 +93,7 @@ async function main(): Promise<void> {
           const thread = store.thread(sessionKey(task.workstreamId))!;
           store.saveRun(task.inboxKey, thread, turn); tasks.saveRun(runId, thread, turn); runnerEvent(store, runId, 'turn_bound');
         }),
+        onReview: args => readReview(store,file,task,args,abort.signal),
         onReady: next => { controls = next; steer(); },
         onActivity: phase => write(() => recordActivity(store, runId, phase)),
         onEvidence: item => write(() => evidence!.observe(item)),
@@ -100,6 +105,7 @@ async function main(): Promise<void> {
           runnerEvent(store, runId, 'wait_requested'); return id;
         }),
       });
+      assertReviewDelivery(store,loadConfig(file),task);
       result = { ...raw, text: redact(raw.text), ...(raw.waiting ? { waiting: { ...raw.waiting, question: redact(raw.waiting.question), choices: raw.waiting.choices?.map(redact) } } : {}) };
     } catch (e) {
       error = abort.signal.reason === 'worker_stopped' ? 'interrupted'

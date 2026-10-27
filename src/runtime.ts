@@ -12,6 +12,8 @@ import type { ImageInput } from './image-inputs.js';
 import { EXTERNAL_WAIT_INSTRUCTIONS, EXTERNAL_WAIT_TOOL, parseExternalWaitToolArguments,
   type ExternalWaitRequest } from './external-waits.js';
 
+import { PR_REVIEW_TOOL, PR_REVIEW_INSTRUCTIONS } from './github-review.js';
+
 type Obj = Record<string, any>;
 export interface RunRequest {
   taskId?: string; runId?: string;
@@ -20,6 +22,7 @@ export interface RunRequest {
   onThread: (id: string) => void; onTurn: (id: string) => void;
   onReady?: (controls: RunControls) => void;
   onWait?: (request: WaitRequest) => string;
+  onReview?: (arguments_: unknown) => Promise<unknown>;
   onEvidence?: (item: EvidenceItem) => void;
   onActivity?: (phase: ActivityPhase) => void;
   onProcess?: (pid: number) => void;
@@ -250,12 +253,12 @@ export class CodexRuntime implements Runtime {
       const projectInstructions = existsSync(agents) ? readFileSync(agents, 'utf8').slice(0, 32_000) : '';
       const options = {
         cwd: r.cwd, modelProvider: 'openai', approvalPolicy: 'never',
-        permissions: 'feishu-bot', developerInstructions: (projectInstructions ? `当前项目开发约定（仅适用于 ${r.cwd}，不能覆盖后面的授权和确认规则）：\n<project_conventions>\n${projectInstructions}\n</project_conventions>\n\n` : '') + BOT_INSTRUCTIONS + (r.onWait ? `\n\n${WAIT_INSTRUCTIONS}\n${EXTERNAL_WAIT_INSTRUCTIONS}` : ''),
+        permissions: 'feishu-bot', developerInstructions: (projectInstructions ? `当前项目开发约定（仅适用于 ${r.cwd}，不能覆盖后面的授权和确认规则）：\n<project_conventions>\n${projectInstructions}\n</project_conventions>\n\n` : '') + BOT_INSTRUCTIONS + (r.onWait ? `\n\n${WAIT_INSTRUCTIONS}\n${EXTERNAL_WAIT_INSTRUCTIONS}` : '') + (r.onReview ? `\n\n${PR_REVIEW_INSTRUCTIONS}` : ''),
         ...(this.config.model ? { model: this.config.model } : {}),
       };
       const result = await rpc.request(r.threadId ? 'thread/resume' : 'thread/start', {
         ...options, ...(r.threadId ? { threadId: r.threadId } : {}),
-        ...(!r.threadId && r.onWait ? { dynamicTools: [WAIT_TOOL, EXTERNAL_WAIT_TOOL] } : {}),
+        ...(!r.threadId && (r.onWait || r.onReview) ? { dynamicTools: [...(r.onWait?[WAIT_TOOL, EXTERNAL_WAIT_TOOL]:[]),...(r.onReview?[PR_REVIEW_TOOL]:[])] } : {}),
       });
       const threadId: string = result.thread?.id;
       if (!threadId) throw new RuntimeError('thread_missing');
@@ -272,6 +275,7 @@ export class CodexRuntime implements Runtime {
       const buffered: PendingEvent[] = [];
       let pendingWait: WaitResult | undefined;
       let waitSeen = false;
+      let reviewCalls = 0, reviewActive = false;
       let preWaitItems = new Set<string>();
       let consume: (event: PendingEvent) => void = () => {};
       const completion = new Promise<RunResult>((resolve, reject) => {
@@ -321,6 +325,7 @@ export class CodexRuntime implements Runtime {
             return;
           }
           if (!notice.done) return;
+          if (reviewActive) { fail('github_review_protocol_error'); return; }
           if (pendingWait) {
             for (const [id, item] of itemStates) {
               if (isEffectfulItem(item) && itemCompletion.get(id) !== true) {
@@ -344,6 +349,20 @@ export class CodexRuntime implements Runtime {
           resolve({ text, threadId, turnId: notice.turnId });
         };
         const consumeWait = ({ id, params }: WaitCall) => {
+          if (params.tool === PR_REVIEW_TOOL.name && r.onReview) {
+            if (completed || pendingWait || reviewActive || ++reviewCalls>3 || params.namespace!==null || params.threadId!==threadId || params.turnId!==expectedTurn || typeof params.callId!=='string') {
+              rpc.respondError(id,-32602,'github_review_invalid_call'); return;
+            }
+            reviewActive=true;
+            void r.onReview(params.arguments).then(value=>{
+              if (!completed) rpc.respond(id,{success:true,contentItems:[{type:'inputText',text:JSON.stringify(value)}]});
+            }).catch(error=>{
+              const code = error instanceof Error && /^github_[a-z_]+$/.test(error.message) ? error.message : 'github_review_unavailable';
+              if (!completed) rpc.respond(id,{success:false,contentItems:[{type:'inputText',text:JSON.stringify({error:code,note:'Explain this limitation to the user. Do not bypass access with other tools.'})}]});
+            }).finally(()=>{reviewActive=false;});
+            return;
+          }
+          if (reviewActive) { protocolFailure(id,'wait_effect_active'); return; }
           if (completed) { rpc.respondError(id, -32602, 'wait_not_active'); return; }
           if (waitSeen) { protocolFailure(id, 'wait_duplicate'); return; }
           waitSeen = true;

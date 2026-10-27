@@ -7,9 +7,10 @@ import type { CardEvent } from './cards.js';
 import { plainMessage } from './richtext.js';
 import type { MaterialReadAdapter } from './materials.js';
 import type { PreparedArtifact } from './artifacts.js';
+import { admitted } from './access.js';
 
 export interface FeishuEvent {
-  sender?: { sender_type?: string; sender_id?: { open_id?: string } };
+  sender?: { sender_type?: string; sender_id?: { open_id?: string }; tenant_key?: string };
   message?: {
     message_id?: string; chat_id?: string; chat_type?: string; message_type?: string;
     thread_id?: string; parent_id?: string; root_id?: string; create_time?: string;
@@ -21,8 +22,8 @@ export function normalizeEvent(event: FeishuEvent, config: Config['feishu'], bot
   const m = event.message;
   const senderId = event.sender?.sender_id?.open_id;
   if (event.sender?.sender_type !== 'user' || !senderId || !m?.message_id || !m.chat_id) return;
-  if (!config.allowedUserIds.includes(senderId)) return;
-  if (config.allowedChatIds.length && !config.allowedChatIds.includes(m.chat_id)) return;
+  if (!admitted(config,senderId,m.chat_id,event.sender?.tenant_key)) return;
+  if (config.access && !['p2p','group'].includes(m.chat_type??'')) return;
   const mentioned = m.mentions?.filter(x => x.id?.open_id === botId) ?? [];
   if (m.chat_type !== 'p2p' && config.requireMention && !mentioned.length) return;
   let text = '';
@@ -63,6 +64,7 @@ export function normalizeEvent(event: FeishuEvent, config: Config['feishu'], bot
     chatKey, chatId: m.chat_id, senderId, text,
     envelope: { version: 1, type: m.message_type ?? 'unknown', kind: !text && materials.length ? 'material' : 'instruction', scopeKey,
       chatType: m.chat_type === 'p2p' ? 'p2p' : m.chat_type === 'group' ? 'group' : undefined,
+      tenantKey: event.sender?.tenant_key,
       threadId: m.thread_id, parentId: m.parent_id, rootId: m.root_id,
       sentAt: m.create_time && /^\d+$/.test(m.create_time) ? Number(m.create_time) : undefined,
       materials: materials.slice(0, 30), limitations } };
@@ -78,6 +80,13 @@ export class FeishuTransport implements Sender {
     const logger = { error: silent, warn: silent, info: silent, debug: silent, trace: silent };
     this.client = new lark.Client({ appId: config.appId, appSecret: config.appSecret,
       domain: config.domain === 'lark' ? lark.Domain.Lark : lark.Domain.Feishu, logger });
+  }
+  async organization(): Promise<{tenantKey:string;name:string}> {
+    try {
+      const result=await this.client.tenant.v2.tenant.query();
+      if (result.code!==0 || !result.data?.tenant?.tenant_key) throw new Error();
+      return {tenantKey:result.data.tenant.tenant_key,name:result.data.tenant.name};
+    } catch { throw new Error('feishu_organization_unavailable'); }
   }
   async connect(accept: (message: Incoming) => void, cardAction?: (event: CardEvent) => unknown): Promise<void> {
     let identity: any;
@@ -97,8 +106,9 @@ export class FeishuTransport implements Sender {
     });
     const dispatcher = new lark.EventDispatcher({ logger: { error: silent, warn: silent, info: silent, debug: silent, trace: silent } }).register({
       ...(this.config.cards&&cardAction?{'card.action.trigger': async (event: CardEvent) => {
-        if(!event.operator?.open_id||!this.config.allowedUserIds.includes(event.operator.open_id)||
-          (this.config.allowedChatIds.length&&!this.config.allowedChatIds.includes(event.context?.open_chat_id??''))) return {toast:{type:'error',content:'无权操作这项任务'}};
+        // Cards additionally verify the operator against the original durable
+        // task and its admitted tenant. Some card schemas omit tenant_key.
+        if(!event.operator?.open_id || !this.config.access && !admitted(this.config,event.operator.open_id,event.context?.open_chat_id??'')) return {toast:{type:'error',content:'无权操作这项任务'}};
         try {return cardAction(event);} catch {this.log('card_persistence_failed');throw new Error('durable_card_accept_failed');}
       }}:{}),
       'im.message.receive_v1': async event => {

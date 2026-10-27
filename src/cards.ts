@@ -8,7 +8,7 @@ import { progressState } from './feedback.js';
 import { cardMarkdown, hasMarkdown, openFence } from './richtext.js';
 import { Waits, WaitInputError, linkedExternalWait } from './waits.js';
 
-export interface CardEvent { operator?: { open_id?: string }; context?: { open_chat_id?: string; open_message_id?: string }; action?: { value?: { namo?: string } }; }
+export interface CardEvent { operator?: { open_id?: string; tenant_key?: string }; context?: { open_chat_id?: string; open_message_id?: string }; action?: { value?: { namo?: string } }; }
 const plain=(content:string)=>({tag:'plain_text',content});
 export function renderTaskCard(t: Task, content: string, kind: string, part: number, actions: { action:string; token:string; label?: string }[] = []): object {
   const title=part?'回复（续）':kind==='external-wait'?'等待外部检查':taskStateLabel(t.state);
@@ -23,7 +23,7 @@ export function renderTaskCard(t: Task, content: string, kind: string, part: num
       ...(controls.length?[buttons(controls)]:[])]};
 }
 export class Cards {
-  constructor(private store: Store) {}
+  constructor(private store: Store, private canAccess: (task:Task)=>boolean = ()=>true) {}
   prepare(output: Outbox): object | undefined {
     if(output.payload) {const p=JSON.parse(output.payload);return p.textOnly||p.noCard?undefined:p;}
     if(!['progress','result'].includes(output.kind) && !output.kind.startsWith('wait:')) return;
@@ -61,6 +61,7 @@ export class Cards {
       if(a.usedAt) return result('这次操作已经处理，请用 /task 查看最新状态');
       if(Number(a.expiresAt)<Date.now()) return result('按钮已过期，请用 /task 或 /cancel 命令',true);
       const tasks=new Tasks(this.store),task=tasks.get(String(a.taskId))!;
+      if (!this.canAccess(task)) return result('任务访问权限已变化，请联系管理员。',true);
       if(String(a.action).startsWith('answer:')) {
         const waits=new Waits(this.store),w=String(a.outputKind).startsWith('wait:')?waits.get(String(a.outputKind).slice(5)):undefined;
         const index=Number(String(a.action).slice(7)),choice=w?.choices?.[index];
@@ -68,7 +69,7 @@ export class Cards {
           return result('这次问题已结束或任务已变化，请查看最新问题。',true);
         const key=`card-wait:${digest(token)}`;
         const input:Incoming={key,messageId:key,chatId:String(a.deliveryChat),chatKey:task.chatKey,senderId:String(a.ownerId),text:choice,
-          envelope:{version:1,type:'card_action',kind:'instruction',scopeKey:task.scopeKey,materials:[],limitations:[]}};
+          envelope:{...this.store.get(task.inboxKey)?.envelope,version:1,type:'card_action',kind:'instruction',scopeKey:task.scopeKey,materials:[],limitations:[]}};
         try {
           this.store.transaction(()=>{
             if(!this.store.enqueue(input))throw new WaitInputError('这次回答已经处理。');

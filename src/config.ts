@@ -4,12 +4,14 @@ import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { configFile } from './paths.js';
 import { parseGitHubAccessConfig, type GitHubAccessConfig } from './github-access.js';
+import { parseOrganization, parseAudience, type OrganizationAccess, type ProjectAccess } from './access.js';
 
 export interface Config {
   file: string;
   dataDir: string;
   feishu: {
     appId: string; appSecret: string; allowedUserIds: string[];
+    access?: OrganizationAccess;
     allowedChatIds: string[]; requireMention: boolean; domain: 'feishu' | 'lark';
     cards?: boolean; reactions?: boolean; progressUpdates?: boolean;
     progressDelayMs?: number; progressIntervalMs?: number; progressHeartbeatMs?: number;
@@ -18,6 +20,7 @@ export interface Config {
     bin: string; home: string; model?: string; timeoutMs: number;
     sandbox: 'read-only' | 'workspace-write';
     projects?: Record<string, string>; defaultProject?: string;
+    projectAccess?: Record<string, ProjectAccess>; accessScope?: string;
     networkAccess?: boolean; explicitDenyPaths?:string[]; readPaths?: string[]; denyPaths?: string[]; allowLocalCommits?: boolean;
   };
   gitApprovals?: {
@@ -46,7 +49,8 @@ export function parseConfig(d: any, absolute: string): Config {
   const c = d.codex ?? {};
   const github=parseGitHubAccessConfig(d.github,process.env);
   const pairedUserIds=list(f.allowedUserIds??[],'feishu.allowedUserIds');
-  if(github?.allowedUserIds.some(id=>!pairedUserIds.includes(id)))throw new Error('github_access_user_not_paired');
+  const access = parseOrganization(f.access);
+  if(!access && github?.allowedUserIds.some(id=>!pairedUserIds.includes(id)))throw new Error('github_access_user_not_paired');
   const g = d.gitApprovals ?? {};
   if (!g || typeof g !== 'object' || Array.isArray(g)) throw new Error('gitApprovals must be an object');
   if (d.agent !== undefined && d.agent !== 'codex') throw new Error(tr("当前版本只支持 codex；Claude Code 和 OpenClaw Gateway 尚未接入"));
@@ -73,13 +77,21 @@ export function parseConfig(d: any, absolute: string): Config {
   const projects: Record<string, string> = {};
   if (c.projects !== undefined && (!c.projects || typeof c.projects !== 'object' || Array.isArray(c.projects))) throw new Error(tr("codex.projects 必须是项目名到目录的对象"));
   for (const [name, value] of Object.entries(c.projects ?? {})) {
-    if (!/^[a-zA-Z0-9_-]{1,48}$/.test(name) || typeof value !== 'string' || !value.trim()) throw new Error(tr("项目名只能包含字母、数字、下划线和连字符，目录不能为空"));
+    if (['__proto__','prototype','constructor'].includes(name) || !/^[a-zA-Z0-9_-]{1,48}$/.test(name) || typeof value !== 'string' || !value.trim()) throw new Error(tr("项目名只能包含字母、数字、下划线和连字符，目录不能为空"));
     const dir = realpathSync(path(value));
     if (!statSync(dir).isDirectory() || dir === '/' || dir === homedir()) throw new Error(tr("项目必须是存在的具体目录，不能使用根目录或主目录"));
     projects[name] = dir;
   }
   if (c.defaultProject !== undefined && (typeof c.defaultProject !== 'string' || !Object.hasOwn(projects, c.defaultProject))) throw new Error(tr("codex.defaultProject 必须指向已配置项目"));
   if (Object.keys(projects).length && !c.defaultProject) throw new Error(tr("配置项目后必须指定 codex.defaultProject"));
+  const projectAccess: Record<string, ProjectAccess> = {};
+  if (c.projectAccess !== undefined && (!c.projectAccess || typeof c.projectAccess !== 'object' || Array.isArray(c.projectAccess))) throw new Error('project_access_invalid');
+  for (const [name, raw] of Object.entries(c.projectAccess ?? {})) {
+    if (!Object.hasOwn(projects,name)) throw new Error('project_access_unknown_project');
+    const audience = parseAudience(raw), permission = (raw as any).permission;
+    if (!['read-only','workspace-write'].includes(permission)) throw new Error('project_access_invalid_permission');
+    projectAccess[name] = {...audience,permission};
+  }
   if (g.maxTtlMs !== undefined && (!Number.isSafeInteger(g.maxTtlMs) || g.maxTtlMs < 1_000 || g.maxTtlMs > 900_000)) throw new Error('gitApprovals.maxTtlMs must be between 1000 and 900000');
   if (g.remotes !== undefined && !Array.isArray(g.remotes)) throw new Error('gitApprovals.remotes must be an array');
   const gitRemotes: NonNullable<Config['gitApprovals']>['remotes'] = [];
@@ -98,6 +110,7 @@ export function parseConfig(d: any, absolute: string): Config {
       appId: f.appId ?? '',
       appSecret: f.appSecret || process.env[f.appSecretEnv ?? 'FEISHU_APP_SECRET'] || '',
       allowedUserIds: pairedUserIds,
+      ...(access ? {access} : {}),
       allowedChatIds: list(f.allowedChatIds ?? [], 'feishu.allowedChatIds'),
       requireMention: f.requireMention !== false,
       cards: f.cards === true, reactions:f.reactions!==false, progressUpdates:f.progressUpdates!==false,
@@ -108,6 +121,7 @@ export function parseConfig(d: any, absolute: string): Config {
       bin: c.bin && (c.bin.includes('/') || c.bin.includes('\\')) ? path(c.bin) : c.bin ?? 'codex', home: path(c.home ?? `${dataDir}/codex-home`),
       model: c.model || undefined, timeoutMs, sandbox: c.sandbox ?? 'read-only',
       projects, defaultProject: c.defaultProject, networkAccess: c.networkAccess ?? false,
+      ...(c.projectAccess !== undefined ? {projectAccess} : {}),
       allowLocalCommits: c.allowLocalCommits ?? false,
       readPaths: list(c.readPaths ?? [], 'codex.readPaths').map(p => realpathSync(path(p))),
       explicitDenyPaths:list(c.denyPaths??[], 'codex.denyPaths').map(path),
@@ -121,5 +135,5 @@ export function parseConfig(d: any, absolute: string): Config {
 
 export function validateFeishu(config: Config): void {
   if (!config.feishu.appId || !config.feishu.appSecret) throw new Error(tr("请在 config.local.json 填写飞书 appId 和 appSecret，或设置 appSecretEnv 指向的环境变量"));
-  if (!config.feishu.allowedUserIds.length) throw new Error(tr("请填写 feishu.allowedUserIds（允许使用 bot 的用户 open_id）；空数组拒绝所有人"));
+  if (!config.feishu.access && !config.feishu.allowedUserIds.length) throw new Error(tr("请填写 feishu.allowedUserIds（允许使用 bot 的用户 open_id）；空数组拒绝所有人"));
 }

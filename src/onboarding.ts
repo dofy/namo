@@ -131,7 +131,7 @@ export async function onboard(file: string, ui: Prompter, overrides: Partial<Ini
     if (!await ui.confirm(tr("已配置订阅、发布应用，并能在飞书找到机器人？"))) { ui.info(tr("等待平台配置完成。退出不会丢失配置，稍后运行 namo init 继续。")); return result; }
     const bot = await connection.identity(); ui.info(tr("✓ 已识别机器人：{0}", bot.name));
     checkpoint('pairing');
-    if (!config.feishu.allowedUserIds.length || await ui.confirm(tr("是否再配对一位用户？（已有授权用户保留）"))) {
+    if (!config.feishu.access && (!config.feishu.allowedUserIds.length || await ui.confirm(tr("是否再配对一位用户？（已有授权用户保留）")))) {
       const candidate = await waitForPairing(subscribe, ui);
       if (!await ui.confirm(tr("收到私聊验证，用户标识末尾 {0}。允许此用户使用本地 Agent？", candidate.senderId.slice(-6)))) { ui.info(tr("没有新增授权用户。")); return result; }
       raw.feishu.allowedUserIds = [...new Set([...(raw.feishu.allowedUserIds ?? []), candidate.senderId])];

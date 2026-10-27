@@ -18,6 +18,7 @@ import { Profiles, ProfileError } from './profiles.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
 import { Browse, BrowseError } from './browse.js';
 import { parseGitHubAccessConfig, publicGitHubAccess } from './github-access.js';
+import { FeishuTransport } from './feishu.js';
 import { discoverLocalGh, type LocalGhConfig } from './github-local.js';
 
 export class ManagementError extends Error { constructor(message:string,readonly status=409){super(message);} }
@@ -65,6 +66,7 @@ export class Management {
     if(version!==SCHEMA_VERSION) throw new ManagementError(tr("当前数据库尚未升级。请在维护窗口升级接收服务；界面没有迁移或修改数据"));
     const s=new Store(join(this.dataDir,'bot.sqlite'));try{return fn(s);}finally{s.close();}
   }
+  async organization():Promise<{tenantKey:string;name:string}> { return new FeishuTransport(loadConfig(this.file).feishu,()=>{}).organization(); }
   config():any {
     const {raw,revision}=this.source(),c=raw.codex??{},f=raw.feishu??{};
     let valid=true;try{parseConfig(raw,this.file);}catch{valid=false;}
@@ -72,11 +74,11 @@ export class Management {
     const service=this.status();let applied:string|undefined;
     try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid)applied=h.configRevision;}catch{/* Not yet instrumented. */}
     return {revision,valid,github,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
-      values:{projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.allowLocalCommits??false,
+      values:{projectAccess:c.projectAccess??{},projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.allowLocalCommits??false,
         concurrency:raw.concurrency??2,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
         reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??12000,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},
       feishu:{appId:f.appId??'',domain:f.domain??'feishu',secretConfigured:!!f.appSecret||!!process.env[f.appSecretEnv??'FEISHU_APP_SECRET'],pairedUsers:Array.isArray(f.allowedUserIds)?f.allowedUserIds.length:0,
-        restrictedChats:Array.isArray(f.allowedChatIds)?f.allowedChatIds.length:0},file:this.file};
+        restrictedChats:Array.isArray(f.allowedChatIds)?f.allowedChatIds.length:0,access:f.access??null,allowedUserIds:f.allowedUserIds??[],allowedChatIds:f.allowedChatIds??[]},file:this.file};
   }
   state():any {
     const db=this.read(s=>{
@@ -99,7 +101,7 @@ export class Management {
   }
   private memoryIdentity(ownerId?:unknown):{ownerId:string;owners:{id:string;label:string}[];projects:string[];appId:string;channel:'feishu'|'lark';secret:string} {
     let config;try{config=loadConfig(this.file);}catch{throw new ManagementError(tr("配置尚未通过校验，请检查项目目录和权限后保存。"),409);}
-    const f=config.feishu,ids=[...new Set(f.allowedUserIds)];
+    const f=config.feishu,ids=f.access?this.profiles().entries.map(p=>p.userId):[...new Set(f.allowedUserIds)];
     if(!ids.length)throw new ManagementError(tr("请先完成应用配置和用户配对"),409);
     if(ownerId!==undefined&&(typeof ownerId!=='string'||!ids.includes(ownerId)))throw new ManagementError(tr("只能管理当前应用中已配对用户的记忆"),403);
     const selected=typeof ownerId==='string'?ownerId:ids[0]!;
@@ -214,7 +216,7 @@ export class Management {
     if(typeof f.appId!=='string'||!f.appId||!['feishu','lark'].includes(f.domain??'feishu')||!Array.isArray(f.allowedUserIds)||f.allowedUserIds.some((id:unknown)=>typeof id!=='string'||!id))return unavailable(tr("请先完成应用配置和用户配对"));
     try{return this.read(s=>{
       if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)return unavailable(tr("在线数据尚未升级，档案暂不可编辑；请在维护窗口升级接收服务"));
-      return this.sanitize({available:true,configRevision:revision,entries:[...new Set<string>(f.allowedUserIds)].map(userId=>new Profiles(s,{channel:f.domain??'feishu',appId:f.appId,userId}).get())});
+      return this.sanitize({available:true,configRevision:revision,entries:[...new Set<string>([...f.allowedUserIds,...(f.access?s.db.prepare("SELECT DISTINCT senderId FROM inbox WHERE chatKey LIKE ? AND json_extract(envelope,'$.tenantKey')=? LIMIT 1000").all(`${f.appId}:%`,f.access.tenantKey).map(r=>String(r.senderId)):[])])].map(userId=>new Profiles(s,{channel:f.domain??'feishu',appId:f.appId,userId}).get())});
     })??unavailable(tr("尚无服务数据库，请先完成初始化"));}
     catch(e){if(e instanceof ProfileError)return unavailable(e.message);throw e;}
   }
@@ -223,7 +225,7 @@ export class Management {
     try{
       const {raw,revision}=this.source(),f=raw.feishu??{};
       if(configRevision!==revision)throw new ManagementError(tr("应用配置已变化，请刷新并重新选择用户"));
-      if(typeof userId!=='string'||!Array.isArray(f.allowedUserIds)||!f.allowedUserIds.includes(userId))throw new ManagementError(tr("只能管理当前应用中已配对用户的档案"));
+      if(typeof userId!=='string'||!Array.isArray(f.allowedUserIds)||!(f.access?this.profiles().entries.some(p=>p.userId===userId):f.allowedUserIds.includes(userId)))throw new ManagementError(tr("只能管理当前应用中已配对用户的档案"));
       if(typeof f.appId!=='string'||!f.appId||!['feishu','lark'].includes(f.domain??'feishu'))throw new ManagementError(tr("应用身份无效"));
       const redact=this.redactor();
       if(JSON.stringify(patch)!==redact(JSON.stringify(patch)??''))throw new ManagementError(tr("档案不能包含凭据，请移除后重试"));
@@ -235,7 +237,7 @@ export class Management {
     const {raw,revision:current}=this.source();
     if (revision!==current) throw new ManagementError(tr('配置已被其他页面或程序修改，请刷新后重试'));
     const owners=patch.github.allowedUserIds;
-    if (!Array.isArray(owners)||owners.length!==1||!raw.feishu?.allowedUserIds?.includes(owners[0]))
+    if (patch.github.grants===undefined && (!Array.isArray(owners)||owners.length!==1||!raw.feishu?.allowedUserIds?.includes(owners[0])))
       throw new ManagementError(tr('本机 GitHub 登录只能绑定一个已配对用户'),400);
     let local:LocalGhConfig;
     try {local=await this.deps.localGh();}
@@ -247,10 +249,15 @@ export class Management {
     try {
       const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError(tr("配置已被其他页面或程序修改，请刷新后重试"));
       if(!patch||typeof patch!=='object'||Array.isArray(patch))throw new ManagementError(tr("配置内容无效"));
-      const allowed=['projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken'];
+      const allowed=['serviceAccess','projectAccess','projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken'];
       if(Object.keys(patch).some(k=>!allowed.includes(k)))throw new ManagementError(tr("包含不允许编辑的配置项"));
       const next=structuredClone(raw);next.codex??={};next.feishu??={};
-      for(const key of allowed.filter(k=>!['concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
+      for(const key of allowed.filter(k=>!['serviceAccess','concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
+      if(patch.serviceAccess!==undefined) {
+        const a=patch.serviceAccess;
+        if (!a || typeof a!=='object' || Array.isArray(a) || Object.keys(a).some(k=>!['access','allowedUserIds','allowedChatIds'].includes(k))) throw new ManagementError(tr('组织接入配置无效'),400);
+        next.feishu.access=a.access;next.feishu.allowedUserIds=a.allowedUserIds;next.feishu.allowedChatIds=a.allowedChatIds;
+      }
       if(next.codex.defaultProject==='')delete next.codex.defaultProject;
       if(Object.hasOwn(patch,'concurrency'))next.concurrency=patch.concurrency;
       for(const k of ['cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs'])if(Object.hasOwn(patch,k))next.feishu[k]=patch[k];
@@ -259,14 +266,15 @@ export class Management {
         if(patch.newSecret)next.feishu.appSecret=patch.newSecret;
       }
       if(patch.github!==undefined){
-        if(!patch.github||typeof patch.github!=='object'||Array.isArray(patch.github)||Object.keys(patch.github).some(k=>!['source','repositories','allowedUserIds'].includes(k)))throw new ManagementError(tr('GitHub 配置无效'),400);
+        if(!patch.github||typeof patch.github!=='object'||Array.isArray(patch.github)||Object.keys(patch.github).some(k=>!['source','repositories','allowedUserIds','grants'].includes(k)))throw new ManagementError(tr('GitHub 配置无效'),400);
         next.github={...next.github,...patch.github};
+        if(patch.github.grants===undefined)delete next.github.grants;
         if (patch.github.source==='gh') {
           if (!localGh || patch.newGithubToken || patch.clearGithubToken || patch.github.repositories?.length) throw new ManagementError(tr('GitHub 配置无效'),400);
-          next.github={source:'gh',localGh,repositories:[],allowedUserIds:patch.github.allowedUserIds};
+          next.github={source:'gh',localGh,repositories:[],allowedUserIds:patch.github.allowedUserIds,...(patch.github.grants===undefined?{}:{grants:patch.github.grants})};
         } else if (patch.github.source==='anonymous') {
           if (patch.newGithubToken) throw new ManagementError(tr('GitHub 配置无效'),400);
-          next.github={source:'anonymous',repositories:[],allowedUserIds:[]};
+          next.github={source:'anonymous',repositories:[],allowedUserIds:[],...(patch.github.grants===undefined?{}:{grants:patch.github.grants})};
         } else if (patch.github.source==='token') {
           delete next.github.localGh;delete next.github.source;
         }

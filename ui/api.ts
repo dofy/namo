@@ -1,3 +1,4 @@
+import type { ServiceAccessPatch } from '../src/ui-contract';
 import { t as tr, getLocale } from './i18n';
 import type { ApplyResult, AssistantView, AssistantValues, BrowseOptions, ConfigValues, ConfigView, GitHubConfigPatch, Dashboard, Diagnostic, Issue, ManagementState, MemoryMutation, MemoryViewState, PageResult, ProfileValues, ResolutionAction, SessionSummary, TaskDetail, TaskList, UserProfile } from '../src/ui-contract';
 
@@ -15,6 +16,8 @@ async function request<T>(path: string, body?: unknown, signal?: AbortSignal): P
   return data as T;
 }
 export const api = {
+  organization:()=>request<{tenantKey:string;name:string}>('/api/organization',{}),
+  saveAccess:(revision:string,patch:ServiceAccessPatch)=>request<ConfigView>('/api/config',{revision,patch}),
   assistantSave: (version:number,values:AssistantValues)=>request<AssistantView>('/api/assistant',{action:'save',version,values}),
   assistantReset: (version:number)=>request<AssistantView>('/api/assistant',{action:'reset',version}),
   assistantPreview: (values:AssistantValues)=>request<string>('/api/assistant',{action:'preview',values}),

@@ -1,10 +1,30 @@
-# Private GitHub checks / 私有 GitHub 检查
+# GitHub service access / GitHub 服务访问
 
 Namo can wait for checks on a private pull request at one fixed HEAD. This is read-only access for the external-wait feature; it does not clone repositories, grant the model GitHub credentials, or authorize a push, merge or deployment.
 
 Namo 可以等待私有 PR 固定 HEAD 的检查结果。本功能只读，不代表支持私有仓库克隆，也不会把凭据交给模型或授予推送、合并、部署权限。
 
-## Local GitHub login (recommended) / 本机 GitHub 登录（推荐）
+## Shared organization service / 组织共享服务
+
+Configure **Connections → Organization access** (or `namo access configure`) first. Detect and select the current app’s tenant. Then select **GitHub → Shared service (per repository)** and add exact repositories with an audience: the whole organization, selected groups, or selected users in direct messages. The service can use its local `gh` login or a separate token. Only explicitly listed resources are readable; private user grants never permit disclosure in a group.
+
+先在**连接设置 → 组织接入**（或 `namo access configure`）检测并选择当前应用的组织。再将 **GitHub → 资源访问模式**设为**服务共享（按仓库授权）**，逐项配置仓库和范围：整个组织、指定群或指定成员私聊。服务可使用服务器的 `gh` 登录或独立令牌；只开放明确列出的资源，个人授权不隐含群披露授权。
+
+Mention Namo in an authorized group and ask it to review a PR URL. The agent calls the read-only `read_pull_request` tool, which checks the durable task identity and resource grant, reads a bounded diff and confirms that base/head did not change. Findings are returned to Feishu, with commit and coverage limits. No GitHub review is posted. This differs from `wait_for_external`, which observes CI status and does not review code.
+
+在获授权群里 @Namo 并请求 review PR 链接即可。Agent 调用只读 `read_pull_request` 工具，服务校验任务身份和资源授权，有界读取 diff 并核对 base/head 未变化。回复包含审查提交、发现及覆盖限制，不向 GitHub 发布 review。这与只观察 CI 状态的 `wait_for_external` 是两个能力。
+
+Review reads at most 200 files and 120,000 patch characters (24,000 per file), with a 30-second request deadline and three calls per run. Missing, truncated and binary patches are marked as limited coverage. Credentials stay outside model inputs. New tool registration requires a fresh workstream; enabling organization access creates a new permission context for subsequent tasks. Configuration changes invalidate active organization runs; repository grants are rechecked before tool delivery and cached review output.
+
+审查最多读取 200 个文件、120,000 字符补丁（单文件 24,000），单次读取限时 30 秒，每轮最多调用三次。缺失、截断和二进制补丁标明覆盖不足，凭据不进入模型。新工具注册需要新工作线；启用组织接入后，后续任务采用新的权限上下文。配置变化会停止正在执行的组织任务；交付工具内容和缓存审查结果前重新核对仓库授权。
+
+## Personal access compatibility / 个人访问兼容模式
+
+The following behavior applies only to legacy personal mode; it is not the organization service model. Upgrades preserve it until an administrator explicitly selects shared access.
+
+以下行为仅适用于旧版个人模式；升级先保留，管理员明确切换共享范围后才改变。
+
+### Local GitHub login / 本机 GitHub 登录
 
 In **Connections → GitHub**, choose **Local GitHub login**, select your paired Feishu user and save. The CLI offers the same choice in `namo github configure`. Namo connects the active `github.com` account from the local `gh` installation. If needed, run `gh auth login` first. No separate token or repository allowlist is required; the selected user can read checks in repositories that account can access, in direct messages only.
 
@@ -31,13 +51,13 @@ GitHub permission references: [Checks](https://docs.github.com/en/rest/checks/ru
 
 ## Boundaries / 边界
 
-- Only an explicitly selected user's direct-message task may use private access on `github.com`. Local login binds one user; token mode additionally requires an exact allowed repository. Group chats never use private credentials.
+- Shared mode requires an admitted user and an explicit repository/audience grant. Legacy personal mode requires a selected user’s direct message; groups cannot use legacy private credentials.
 - Local login is opt-in. Without that selection Namo does not use `gh`; neither mode inherits ambient GitHub tokens, Git credential helpers or browser sessions.
 - Requests go only to `https://api.github.com`, with no redirects. HTTP errors are reduced to stable codes. Credentials stay outside prompts, wait records, public configuration responses and logs.
 - In token mode, local configuration and protected configuration backups contain the token. Replacing or clearing it does not delete historical backups or revoke it at GitHub. Local login stores no token in Namo configuration; protect the host credential store in either case.
 - Each private observation is bound to its task, user, chat and authorization scope. Before resuming, Namo checks current settings again. Revoked access leaves the task waiting until authorized again, cancelled or timed out; it never resumes using the old credential's observation.
 
-私有访问仅限明确选择用户的本人私聊，群聊不使用。本机登录需主动选择，独立令牌模式另外限制仓库白名单。令牌模式的配置及备份含凭据，清除配置不会抹除旧备份或撤销 GitHub 上的令牌。权限变化后会重新核对，不直接使用旧观察恢复任务。
+共享模式按组织准入和仓库范围授权；旧版个人模式仅限明确选择用户的本人私聊。本机登录需主动选择，独立令牌模式另外限制仓库白名单。令牌模式的配置及备份含凭据，清除配置不会抹除旧备份或撤销 GitHub 上的令牌。权限变化后会重新核对，不直接使用旧观察恢复任务。
 
 For manually managed **foreground** deployments, `github.tokenEnv` may name an explicit `NAMO_GITHUB_*` environment variable instead of `github.token`; the two are mutually exclusive. The variable must exist in the receiving process. The macOS service installer does not copy shell environment variables into launchd. Prefer the local configuration UI or CLI for background services. No GitHub environment variable is forwarded to Codex.
 

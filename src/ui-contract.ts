@@ -1,8 +1,10 @@
+import type { Audience, OrganizationAccess, ProjectAccess } from './access-contract.js';
 /** Browser-visible projections only. Never include configuration or auth secrets. */
 export const uiRoutes = { dashboard: '/', tasks: '/tasks', sessions: '/sessions', settings: '/settings', assistant: '/assistant', memory: '/memory', profiles: '/profiles', connections: '/connections' } as const;
 export type UiPage = keyof typeof uiRoutes;
 
 export interface ConfigValues {
+  projectAccess?: Record<string, ProjectAccess>;
   projects: Record<string, string>;
   defaultProject: string;
   sandbox: 'read-only' | 'workspace-write';
@@ -28,10 +30,10 @@ export interface ConfigView {
   application: 'stopped' | 'unknown' | 'applied' | 'pending';
   values: ConfigValues;
   file: string;
-  feishu: { appId: string; domain: string; secretConfigured: boolean; pairedUsers: number; restrictedChats: number };
-  github?: { credentialConfigured:boolean; credentialSource:string; localGh?:{login:string}; tokenEnv?:string; repositories:string[]; allowedUserIds:string[] };
+  feishu: { appId: string; domain: string; secretConfigured: boolean; pairedUsers: number; restrictedChats: number; access?:OrganizationAccess|null; allowedUserIds?:string[]; allowedChatIds?:string[] };
+  github?: { credentialConfigured:boolean; credentialSource:string; localGh?:{login:string}; tokenEnv?:string; repositories:string[]; allowedUserIds:string[]; grants?:Array<Audience & {repository:string}> };
 }
-export interface GitHubConfigPatch { github: {source?:'gh'|'token'|'anonymous';repositories:string[];allowedUserIds:string[]};newGithubToken?:string;clearGithubToken?:boolean }
+export interface GitHubConfigPatch { github: {source?:'gh'|'token'|'anonymous';repositories:string[];allowedUserIds:string[];grants?:Array<Audience & {repository:string}>};newGithubToken?:string;clearGithubToken?:boolean }
 export interface TaskSummary {
   id: string; workstreamId: string; project: string | null; state: string; inputVersion: number;
   startedAt: number | null; finishedAt: number | null; error: string | null;
@@ -141,3 +143,5 @@ export interface RunEvidence {
 }
 export interface Diagnostic { id: string; status: 'ok' | 'warn' | 'fail'; message: string; next?: string }
 export interface ApplyResult { ready: boolean; config: ConfigView; message: string }
+
+export interface ServiceAccessPatch { serviceAccess: {access:OrganizationAccess|null;allowedUserIds:string[];allowedChatIds:string[]}; projectAccess?:Record<string,ProjectAccess> }

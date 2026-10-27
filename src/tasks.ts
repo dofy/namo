@@ -20,7 +20,8 @@ const id = (prefix: string) => `${prefix}-${randomBytes(6).toString('hex').toUpp
 export class TaskInputError extends Error {}
 export function policyHash(c?: Config['codex']): string {
   return createHash('sha256').update(JSON.stringify(c ? { agent: 'codex', sandbox: c.sandbox, network: c.networkAccess ?? false,
-    commits: c.allowLocalCommits ?? false, read: c.readPaths ?? [], deny: c.denyPaths ?? [], home: c.home, bin: c.bin, model: c.model } : {})).digest('hex');
+    commits: c.allowLocalCommits ?? false, read: c.readPaths ?? [], deny: c.denyPaths ?? [], home: c.home, bin: c.bin, model: c.model,
+    ...(c.accessScope?{accessScope:c.accessScope}:{}) } : {})).digest('hex');
 }
 
 export class Tasks {

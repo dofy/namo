@@ -5,20 +5,22 @@
 <h1 align="center">Namo</h1>
 
 <p align="center"><strong>住在本地，帮你把事情做完的小狐狸。</strong><br />
-连接飞书、Lark 与 Codex 的本地 AI 工作伙伴。</p>
+面向飞书与 Lark 组织、由 Codex 驱动的自托管 Agent 服务。</p>
 
 <p align="center"><a href="README.md">English</a> · <strong>简体中文</strong><br />
 <a href="https://github.com/dofy/namo">GitHub</a> · <a href="https://github.com/dofy/namo/issues">问题反馈</a> · <a href="docs/development-plan.md">开发计划</a></p>
 
-Namo 将聊天应用连接到本地开发环境。从私聊或群 @ 发起任务，在指定项目中修改文件、运行命令和测试，再将结果回复到原会话。
+Namo 将组织内的聊天连接到运行在工作站或服务器上的 Agent。从私聊或群 @ 发起任务，在指定项目中修改文件、运行命令和测试，再将结果回复到原会话。
 
 Namo 管理消息、队列、项目、会话和执行边界；任务理解与工具执行交给官方 **Codex app-server**。代码、任务状态和执行环境位于本机，模型推理使用 Codex 账号对应的服务。
 
-**状态：早期可用版本。** 面向个人或少量可信用户，已验证真实飞书收发，运行主机仍需自行维护。尚未发布 npm 包。
+**状态：早期可用版本。** 支持组织接入和明确的项目、仓库授权，已验证真实飞书收发，运行主机仍需自行维护。尚未发布 npm 包。
 
 ## 已有能力
 
-- **飞书 / Lark 入口**：长连接、私聊、群 @、文字与基本富文本；通过一次性本地配对和用户白名单限制访问。
+- **飞书 / Lark 入口**：长连接、私聊、群 @、文字与基本富文本；按组织身份或指定成员名单接入。
+- **组织接入**：从飞书应用检测组织身份，成员无需逐人配对；本机项目和 GitHub 仓库按组织、群或成员私聊授权，成员默认进入隔离工作区。
+- **群聊 PR 审查**：通过服务端 GitHub 连接读取固定 base/head 的有界补丁，在获授权会话中回复发现和覆盖限制，不自动发布 GitHub 评论。
 - **项目与会话**：在指定目录工作，保留会话上下文，切换项目并显式续接历史会话。
 - **持久化任务**：SQLite 入站与出站、消息去重、输入修订、同聊天及同项目串行，以及全局并发限制。
 - **提问与回答**：Agent 可暂停等待补充；引用问题回复，或点击与问题对应的选项按钮后继续。
@@ -121,3 +123,5 @@ pnpm run smoke:codex -- --run # 显式真实模型测试
 完整文档见[文档索引](docs/README.md)，源码构建与验证见[开发指南](docs/development.md)，待办见[后续计划](docs/development-plan.md)。
 
 项目地址：[github.com/dofy/namo](https://github.com/dofy/namo)。反馈问题时请提供复现步骤，勿附凭据、私有配置或原始会话数据。
+
+组织配置：运行 `namo access configure`，再用 `namo github configure` 设置共享仓库，或在工作台的连接设置中配置。旧安装保持原范围，直到管理员明确修改。见[组织接入与权限](docs/organization-access.md)。

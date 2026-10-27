@@ -5,20 +5,22 @@
 <h1 align="center">Namo</h1>
 
 <p align="center"><strong>A little fox on your machine, helping you get work done.</strong><br />
-A local-first AI work companion for Feishu, Lark and Codex.</p>
+A self-hosted agent service for Feishu and Lark organizations, powered by Codex.</p>
 
 <p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a><br />
 <a href="https://github.com/dofy/namo">GitHub</a> · <a href="https://github.com/dofy/namo/issues">Issues</a> · <a href="docs/development-plan.md">Development plan</a></p>
 
-Namo connects chat to your local development environment. Send a direct message or mention the bot in a group to work on a configured project, edit files, run commands and tests, and receive the result in the same conversation.
+Namo connects an organization’s chats to an agent running on a workstation or server. Send a direct message or mention the bot in a group to work on a configured project, edit files, run commands and tests, and receive the result in the same conversation.
 
 Namo manages messages, queues, projects, sessions and execution boundaries. The official **Codex app-server** handles reasoning and tools. Code, task state and execution stay on your machine; model inference uses the service associated with your Codex account.
 
-**Status: early access.** Intended for individuals and small groups of trusted users. Real Feishu messaging has been verified, but you maintain the host yourself. No npm package has been published yet.
+**Status: early access.** Supports organization admission with explicit project and repository grants. Real Feishu messaging has been verified, but you maintain the host yourself. No npm package has been published yet.
 
 ## What it does
 
-- **Feishu / Lark chat:** persistent connection, direct messages, group mentions, text and basic rich text; one-time pairing and a user allowlist control access.
+- **Feishu / Lark chat:** persistent connection, direct messages, group mentions, text and basic rich text; organization membership or a selected-member allowlist controls admission.
+- **Organization access:** detect the Feishu tenant, admit members without individual pairing, and grant local projects or GitHub repositories to an organization, selected groups, or selected members in direct messages. Members start in isolated workspaces.
+- **Group PR review:** read bounded PR patches with a fixed base/head through a service-side GitHub connection and return findings to the authorized conversation. Missing patches and review limits are explicit; no automatic GitHub comments.
 - **Projects and sessions:** work in configured directories, preserve conversation context, switch projects and explicitly resume sessions.
 - **Durable tasks:** SQLite inbox and outbox, message deduplication, input revisions, per-chat and per-project serialization, and a global concurrency limit.
 - **Questions and answers:** the agent can pause for your input; answer by replying to the question or choosing a matching card option.
@@ -34,6 +36,8 @@ Namo manages messages, queues, projects, sessions and execution boundaries. The 
 The workbench and CLI support **English and Simplified Chinese**. They follow the system language by default and fall back to English for unsupported languages. Task content, user input and execution logs retain their original language.
 
 Schema 8 includes the roadmap integrations above and has passed review and deployment on the maintained local instance. Existing installations require an explicit service upgrade. PDF/Office/audio material interpretation, reminders, background delegation and offline message backfill remain unsupported. See the [development plan](docs/development-plan.md) for deployment status and outstanding real-world acceptance checks.
+
+Organization setup: use `namo access configure`, then configure shared repositories with `namo github configure`, or use **Connections** in the workbench. Existing installations retain their access rules until an administrator changes them. See [organization access](docs/organization-access.md).
 
 ## Get started
 

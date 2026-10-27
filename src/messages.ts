@@ -12,6 +12,7 @@ export interface Envelope {
   type: string;
   kind: 'instruction' | 'material';
   chatType?: 'p2p' | 'group';
+  tenantKey?: string;
   scopeKey: string;
   threadId?: string;
   parentId?: string;

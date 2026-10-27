@@ -26,6 +26,8 @@ import { TaskImages, type ImageInput } from './image-inputs.js';
 import type { MaterialReadAdapter } from './materials.js';
 import { richPost, openFence, hasMarkdown } from './richtext.js';
 import { Feedback, recordActivity } from './feedback.js';
+import { admitted, projectAllowed, executionPolicy } from './access.js';
+import { assertReviewDelivery, readReview } from './github-review.js';
 
 export interface DeliveryRoute { messageId: string; thread: boolean; }
 export interface Sender {
@@ -68,7 +70,7 @@ export class Engine {
     private config: Pick<Config, 'dataDir' | 'concurrency' | 'github'> & { file?:string; codex?: Config['codex']; feishu?: Partial<Config['feishu']> },
     private redact: (s: string) => string = s => s,
     private log: Log = () => {},
-    private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); this.feedback = new Feedback(store, sender); this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined);
+    private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); this.feedback = new Feedback(store, sender); this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined,id=>{const task=this.tasks.get(id);return !!task&&this.taskAccessible(task);});
       if(config.file){const file=config.file;this.approvals=new ApprovalService(store,loadConfig(file),digest(readFileSync(file,'utf8')),()=>digest(readFileSync(file,'utf8')));} }
 
   private fatal(code: string): void {
@@ -77,6 +79,10 @@ export class Engine {
   }
 
   accept(m: Incoming): boolean {
+    if (this.config.feishu?.access) {
+      const f=this.config.file?loadConfig(this.config.file).feishu:this.config.feishu as Config['feishu'];
+      if (!admitted(f,m.senderId,m.chatId,m.envelope?.tenantKey)) return false;
+    }
     // All routing and receipts are durable in the same acceptance transaction.
     const fresh = this.store.transaction(() => {
       const safe: Incoming = JSON.parse(this.redact(JSON.stringify(m)));
@@ -97,7 +103,8 @@ export class Engine {
   private handleControl(m: Incoming): boolean {
     if (m.envelope?.kind === 'material') return false;
     if(this.approvals?.handleControl(m))return true;
-    const memoryReply=memoryCommand(this.store,m,this.config.feishu?.allowedUserIds??[],this.tasks.binding(m)?.project??this.config.codex?.defaultProject??null,this.redact);
+    const knownUsers=this.config.feishu?.access?[m.senderId]:this.config.feishu?.allowedUserIds??[];
+    const memoryReply=memoryCommand(this.store,m,knownUsers,this.tasks.binding(m)?.project??this.config.codex?.defaultProject??null,this.redact);
     if(memoryReply!==undefined){if(this.store.claim(m.key))this.store.finish(m.key,memoryReply);return true;}
     const command = m.text.trim().split(/\s/)[0];
     if (['/deliver','/profile','/issues','/issue','/resolve','/status', '/whoami', '/cancel', '/reset', '/new', '/session', '/tasks', '/task', '/help', '/project', '/unsupported', '/too-long'].includes(command)) {
@@ -117,6 +124,8 @@ export class Engine {
           if(command==='/issues') reply=recovery.list(actor).map(x=>`${x.subject} · ${x.state} · /issue ${x.subject}`).join('\n')||'暂无待核对异常。';
           else if(command==='/issue') {
             const x=recovery.inspect(parts[1]?.toUpperCase()??'',actor);
+            const task=x.taskId?this.tasks.get(x.taskId):undefined;
+            if(task&&!this.taskAccessible(task))throw new RecoveryError('任务访问权限已变化，请联系管理员。');
             reply=`${x.subject} · ${x.state}\n${x.guidance}\n${x.content??''}\n${x.actions.map((a:string)=>`/resolve ${x.subject} ${x.stamp} ${a} 核对依据`).join('\n')}\nreceived=确认收到；retry=明确重发（可能重复）；dismiss=放弃发送；reviewed=已核对执行。`;
           } else {
             recovery.resolve({subject:parts[1]?.toUpperCase()??'',stamp:parts[2],action:parts[3],note:parts.slice(4).join(' '),requestId:m.key,acknowledgeDuplicate:parts[3]==='retry'},actor);
@@ -126,7 +135,7 @@ export class Engine {
       }
       else if (command === '/whoami') reply = `用户 open_id：${m.senderId}\n会话 chat_id：${m.chatId}`;
       else if (command === '/tasks') reply = this.tasks.list(m).map(t => `${taskStateLabel(t.state)}${t.project ? ` · ${t.project}` : ''}\n/task ${t.id}`).join('\n\n') || '尚无任务记录。';
-      else if (command === '/task') { const id = m.text.trim().split(/\s+/)[1]; const t = id ? this.tasks.owned(id, m) : this.tasks.latest(m); reply = t ? taskStatus(this.store, t) : '未找到可访问的任务。用 /tasks 查看任务编号。'; }
+      else if (command === '/task') { const id = m.text.trim().split(/\s+/)[1]; const t = id ? this.tasks.owned(id, m) : this.tasks.latest(m); reply = t && this.taskAccessible(t) ? taskStatus(this.store, t) : '未找到可访问的任务。用 /tasks 查看任务编号。'; }
       else if (command === '/session') {
         const wid = m.text.trim().split(/\s+/)[1];
         if (wid && this.store.hasPending(m.chatKey, m.key,m.senderId,scopeOf(m))) reply = '仍有未完成请求，暂不能切换工作线。';
@@ -139,7 +148,7 @@ export class Engine {
       }
       else if (command === '/project') {
         const name = m.text.trim().split(/\s+/)[1];
-        const projects = this.config.codex?.projects ?? {};
+        const projects = Object.fromEntries(Object.entries(this.config.codex?.projects??{}).filter(([name])=>!this.config.feishu?.access || projectAllowed(this.config.codex!,this.config.feishu as Config['feishu'],m,name)));
         if (!name) reply = `当前目录：${this.workspaceLabel(m)}\n可选项目：\n${Object.entries(projects).map(([n, p]) => `${n} → ${p}`).join('\n') || '尚未配置'}\n切换：/project 项目名（开始新上下文）`;
         else if (!Object.hasOwn(projects, name)) reply = '未配置该项目。用 /project 查看可选项目；新增目录需修改本地配置。';
         else if (this.store.hasPending(m.chatKey, m.key,m.senderId,scopeOf(m))) reply = '本会话仍有未完成的请求，暂不能切换项目。请等待完成，或 /cancel 后再切换。';
@@ -169,7 +178,7 @@ export class Engine {
     if (m.envelope?.chatType !== 'p2p') return '用户档案仅在机器人私聊中查看和修改，请私聊发送 /profile。';
     if (m.envelope.type !== 'text' || m.envelope.parentId || m.envelope.rootId || m.envelope.materials.length) return '请单独发送 /profile 文字命令；引用、转发和材料不会修改档案。';
     const f = this.config.feishu;
-    if (!f?.appId || !f.domain || !f.allowedUserIds?.includes(m.senderId)) return '当前身份未获准访问档案，请先通过本机初始化完成配对。';
+    if (!f?.appId || !f.domain || !(f.access ? admitted(f as Config['feishu'],m.senderId,m.chatId,m.envelope?.tenantKey) : f.allowedUserIds?.includes(m.senderId))) return '当前身份未获准访问档案，请先通过本机初始化完成配对。';
     try {
       const profiles = new Profiles(this.store, { channel: f.domain, appId: f.appId, userId: m.senderId });
       const parts = m.text.trim().split(/\s+/);
@@ -188,20 +197,26 @@ export class Engine {
   }
   private projectScope(m: Incoming): string { return m.envelope ? `${scopeOf(m)}:user:${m.senderId}` : m.chatKey; }
   private project(m: Incoming, reference?: Task): ProjectBinding {
-    const c = this.config.codex;
+    const c = this.config.codex, f=this.config.feishu as Config['feishu'];
     const bound = reference ?? this.tasks.binding(m);
     const legacy = !m.envelope?.threadId ? this.store.project(m.chatKey) : undefined;
-    const name = bound?.project ?? this.store.project(this.projectScope(m)) ?? legacy ?? c?.defaultProject;
+    let name = bound?.project ?? this.store.project(this.projectScope(m)) ?? legacy ?? c?.defaultProject;
+    if (f?.access && name && c && !projectAllowed(c,f,m,name)) {
+      if (bound?.project) throw new RuntimeError('project_access_denied');
+      name=undefined;
+    }
+    let policy=c;
+    try { if (c && f?.access) policy=executionPolicy(c,f,m,name,this.config.github); } catch { throw new RuntimeError('organization_access_denied'); }
     if (name) {
       if (!c?.projects || !Object.hasOwn(c.projects, name)) throw new RuntimeError('project_unavailable');
       try { if (realpathSync(c.projects[name]) !== c.projects[name]) throw new Error(); }
       catch { throw new RuntimeError('project_unavailable'); }
       if (bound && bound.cwd !== c.projects[name]) throw new RuntimeError('project_changed');
-      return { project: name, cwd: c.projects[name], policyHash: policyHash(c) };
+      return { project: name, cwd: c.projects[name], policyHash: policyHash(policy) };
     }
     const cwd = bound?.cwd ?? chatWorkspace(this.config.dataDir, this.projectScope(m));
     mkdirSync(cwd, { recursive: true, mode: 0o700 });
-    return { cwd: realpathSync(cwd), policyHash: policyHash(c) };
+    return { cwd: realpathSync(cwd), policyHash: policyHash(policy) };
   }
   private workspaceLabel(m: Incoming): string {
     try { return this.project(m).cwd; }
@@ -238,7 +253,7 @@ export class Engine {
           const adapter=()=>{
             const current=this.config.file?loadConfig(this.config.file):this.config;
             if(current.feishu?.appId!==this.config.feishu?.appId)throw new Error('github_access_account_changed');
-            return new ScopedGitHubAdapter(this.store,current.github);
+            return new ScopedGitHubAdapter(this.store,current.github,undefined,undefined,current.feishu as Config['feishu']);
           };
           return pollAndResume(this.store,adapter(),Date.now(),undefined,adapter);
         }).catch(()=>this.log('external_wait_poll_failed')).finally(()=>{this.externalPolling=undefined;});
@@ -305,6 +320,7 @@ export class Engine {
         taskId: task.id, runId: run,
         threadId: this.tasks.thread(task), cwd, signal,
         prompt, images,
+        ...(this.config.file?{onReview:(args:unknown)=>readReview(this.store,this.config.file!,task,args,signal)}:{}),
         onActivity: phase => recordActivity(this.store, run, phase),
         onThread: threadId => { this.store.saveThread(sessionKey(task.workstreamId), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
         onTurn: turnId => { const threadId = this.store.thread(sessionKey(task.workstreamId)); if (threadId) { this.store.saveRun(m.key, threadId, turnId); this.tasks.saveRun(run, threadId, turnId); } },
@@ -313,6 +329,7 @@ export class Engine {
         onWait: request => requestWait(this.store, task.id, run, { ...request, question: this.redact(request.question), choices: request.choices?.map(value => this.redact(value)) }),
       });
       await this.active.get(m.chatKey)?.steering;
+      if (this.config.file) assertReviewDelivery(this.store,loadConfig(this.config.file),task);
       if (signal.aborted && !this.runtime.persistent) throw new RuntimeError('cancelled');
       this.store.transaction(() => {
         evidence?.finish(true);
@@ -379,6 +396,14 @@ export class Engine {
       this.reply(m, `项目不可用（${e.code}），尚未执行。请用 /project 选择已配置项目。`);
     }
   }
+  private taskAccessible(task:Task):boolean {
+    if (!this.config.file) return true;
+    try {
+      const c=loadConfig(this.config.file), m=this.store.get(task.inboxKey)!;
+      if (c.feishu.access && (!admitted(c.feishu,m.senderId,m.chatId,m.envelope?.tenantKey) || task.project && !projectAllowed(c.codex,c.feishu,m,task.project))) return false;
+      assertReviewDelivery(this.store,c,task); return true;
+    } catch { return false; }
+  }
   private reply(m: Incoming, text: string): void { this.store.claim(m.key); this.store.finish(m.key, text); }
   private steer(slot: Active): Promise<void> {
     if (!slot.controls) return Promise.resolve();
@@ -412,6 +437,17 @@ export class Engine {
         return next && this.store.sending(next.id) ? next : undefined;
       });
       if (!output) return;
+      if (this.config.file && (output.kind==='result'||output.kind.startsWith('card-status:'))) {
+        const taskId=this.store.get(output.inboxKey)?.taskId, task=taskId?this.tasks.get(taskId):undefined;
+        if (task) try {
+          const current=loadConfig(this.config.file), message=this.store.get(task.inboxKey)!;
+          if (current.feishu.access && policyHash(executionPolicy(current.codex,current.feishu,message,task.project??undefined,current.github))!==task.policyHash) throw new Error('access_changed');
+          assertReviewDelivery(this.store,current,task);
+        } catch {
+          this.store.deliveryFailed(output.id,false,'access_changed');
+          this.log('reply_withheld',{outboxId:output.id,code:'access_changed'}); continue;
+        }
+      }
       if(output.kind==='result'&&this.config.feishu?.progressUpdates!==false){const task=this.store.get(output.inboxKey)?.taskId;if(task)await this.feedback.finalize(task);}
       this.nextSendAt = Date.now() + 300;
       let platformId: string;
@@ -454,7 +490,7 @@ export class Engine {
     while (this.outputBusy) await new Promise(r => setTimeout(r, 20));
   }
   acceptCard(event: CardEvent): ReturnType<Cards['accept']> {
-    const result=new Cards(this.store).accept(event);
+    const result=new Cards(this.store,task=>this.taskAccessible(task)).accept(event);
     for(const active of this.active.values()) if(this.store.get(active.key)?.cancelRequested) active.abort.abort();
     void this.pump();return result;
   }

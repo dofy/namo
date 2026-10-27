@@ -10,8 +10,9 @@ import { pathsOverlap } from './engine.js';
 interface Delivery {id:string; inboxKey:string; taskId:string; ownerId:string; chatId:string; projectRoot:string; path:string; state:string; uuid:string; createdAt:number; sha256?:string; size?:number; fileKey?:string; platformId?:string; error?:string;}
 export class ArtifactDelivery {
   private busy=false;
-  constructor(private store:Store,private sender:Sender,private denyPaths:string[]=[],private isolation?:{dataDir:string;explicitDenyPaths:string[]}){ }
+  constructor(private store:Store,private sender:Sender,private denyPaths:string[]=[],private isolation?:{dataDir:string;explicitDenyPaths:string[]},private canAccess:(taskId:string)=>boolean=()=>true){ }
   private denied(taskId:string,root:string,path:string):boolean{
+    if(!this.canAccess(taskId))return true;
     const target=resolve(root,path),task=this.store.db.prepare(`SELECT t.project,t.chatKey,t.scopeKey,t.ownerId,t.cwd,i.envelope
       FROM tasks t JOIN inbox i ON i.key=t.inboxKey WHERE t.id=?`).get(taskId);
     // Engine.project binds current messages to scope+owner. Only legacy inbox
@@ -61,6 +62,7 @@ export class ArtifactDelivery {
           if(artifact.sha256!==row.sha256||artifact.size!==row.size)throw new ArtifactError('artifact_changed_since_authorization');
           row.state='uploading';this.save(row);row.fileKey=await this.sender.uploadArtifact(artifact);row.state='uploaded';this.save(row);
         }
+        if(!this.canAccess(row.taskId))throw new ArtifactError('artifact_access_changed');
         row.state='sending';this.save(row);
         row.platformId=await this.sender.sendArtifact(row.chatId,row.fileKey!,row.uuid,{messageId:input.messageId,thread:!!input.envelope?.threadId});
         this.store.transaction(()=>{row.state='sent';this.save(row);});

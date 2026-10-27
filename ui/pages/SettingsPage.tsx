@@ -27,7 +27,7 @@ function toPatch(draft: Draft): ConfigValues & { newSecret: string } {
     projects[name] = path;
   }
   const { timeoutSeconds, ...values } = draft;
-  return { ...values, projects, concurrency: Number(draft.concurrency), timeoutMs: Number(timeoutSeconds) * 1000,
+  return { ...values, projects, ...(values.projectAccess?{projectAccess:Object.fromEntries(Object.entries(values.projectAccess).filter(([name])=>Object.hasOwn(projects,name)))}:{}), concurrency: Number(draft.concurrency), timeoutMs: Number(timeoutSeconds) * 1000,
     progressDelayMs:Number(draft.progressDelayMs),progressIntervalMs:Number(draft.progressIntervalMs),progressHeartbeatMs:Number(draft.progressHeartbeatMs),
     readPaths: draft.readPaths.split('\n').map(x => x.trim()).filter(Boolean), denyPaths: draft.denyPaths.split('\n').map(x => x.trim()).filter(Boolean) };
 }

@@ -11,6 +11,10 @@ import { createInterface } from 'node:readline';
 const write = m => process.stdout.write(JSON.stringify(m)+'\\n');
 createInterface({input:process.stdin}).on('line', line=>{
  const m=JSON.parse(line);
+ if(m.id===99&&!m.method){
+  const output=m.result?.success===true?'review received':JSON.stringify(m.result??m.error);
+  return write({method:'turn/completed',params:{threadId:'thread-one',turn:{id:'turn-one',status:'completed',items:[{id:'final',type:'agentMessage',phase:'final_answer',text:output}]}}});
+ }
  if(!m.method || m.id===undefined)return;
  if(m.method==='initialize')return write({id:m.id,result:{}});
  if(m.method==='thread/start'||m.method==='thread/resume')return write({id:m.id,result:{thread:{id:m.params.threadId||'thread-one'}}});
@@ -25,6 +29,10 @@ createInterface({input:process.stdin}).on('line', line=>{
   const prompt=m.params.input[0].text;
   if(prompt==='image-input' && (m.params.input.length!==2 || m.params.input[1].type!=='localImage' || !m.params.input[1].path.endsWith('/accepted.png')))
    return write({id:m.id,error:{code:-32602,message:'image input missing'}});
+  if(prompt==='review'||prompt==='review-invalid'){
+   write({id:99,method:'item/tool/call',params:{namespace:null,tool:'read_pull_request',threadId:'thread-one',turnId:prompt==='review-invalid'?'foreign-turn':'turn-one',callId:'review-call',arguments:{url:'https://github.com/org/private/pull/3'}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
+  }
   if(prompt==='hang')return write({id:m.id,result:{turn:{id:'turn-one'}}});
   if(prompt==='disconnect')return process.exit(1);
   const threadId=m.params.threadId;
@@ -130,4 +138,14 @@ test('failed turns retain observed operations and evidence storage failure stops
   await assert.rejects(runtime.run({ cwd: dir, prompt: 'evidence', signal: new AbortController().signal,
     onThread() {}, onTurn() {}, onEvidence() { throw new Error('PRIVATE_STORAGE_ERROR'); } }),
   (e: unknown) => e instanceof RuntimeError && e.code === 'evidence_storage_error');
+});
+
+test('PR review tool handles buffered calls asynchronously and sanitizes errors without exposing credentials',async t=>{
+ const{dir,runtime}=fixture(t);let calls=0;
+ const run=(prompt:string,onReview:(args:unknown)=>Promise<unknown>)=>runtime.run({cwd:dir,prompt,signal:new AbortController().signal,onThread(){},onTurn(){},onReview});
+ const result=await run('review',async args=>{calls++;assert.deepEqual(args,{url:'https://github.com/org/private/pull/3'});await new Promise(r=>setTimeout(r,10));return{headSha:'a'.repeat(40)};});
+ assert.equal(result.text,'review received');assert.equal(calls,1);
+ const failure=await run('review',async()=>{throw new Error('PRIVATE_TOKEN in upstream error');});
+ assert.match(failure.text,/github_review_unavailable/);assert.doesNotMatch(failure.text,/PRIVATE_TOKEN/);
+ await run('review-invalid',async()=>{throw new Error('should not run');});
 });
