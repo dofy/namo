@@ -19,6 +19,7 @@ createInterface({input:process.stdin}).on('line', line=>{
  }
  if(!m.method || m.id===undefined)return;
  if(m.method==='initialize')return write({id:m.id,result:{}});
+ if(m.method==='thread/start' && new Set((m.params.dynamicTools??[]).map(t=>Object.hasOwn(t,'type')?'canonical':'legacy')).size>1)return write({id:m.id,error:{code:-32600,message:'mixed dynamic tool formats'}});
  if(m.method==='thread/start'||m.method==='thread/resume')return write({id:m.id,result:{thread:{id:m.params.threadId||'thread-one'}}});
  if(m.method==='turn/interrupt'&&waitAfterLate){
   write({id:m.id,result:{}});
@@ -188,7 +189,7 @@ test('failed turns retain observed operations and evidence storage failure stops
 
 test('PR review tool handles buffered calls asynchronously and sanitizes errors without exposing credentials',async t=>{
  const{dir,runtime}=fixture(t);let calls=0;
- const run=(prompt:string,onReview:(args:unknown)=>Promise<unknown>)=>runtime.run({cwd:dir,prompt,signal:new AbortController().signal,onThread(){},onTurn(){},onReview});
+ const run=(prompt:string,onReview:(args:unknown)=>Promise<unknown>)=>runtime.run({cwd:dir,prompt,signal:new AbortController().signal,onThread(){},onTurn(){},onWait(){return 'unused';},onReview});
  const result=await run('review',async args=>{calls++;assert.deepEqual(args,{url:'https://github.com/org/private/pull/3'});await new Promise(r=>setTimeout(r,10));return{headSha:'a'.repeat(40)};});
  assert.equal(result.text,'review received');assert.equal(calls,1);
  const failure=await run('review',async()=>{throw new Error('PRIVATE_TOKEN in upstream error');});
