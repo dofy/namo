@@ -64,15 +64,15 @@ test('answer persisted while receiver is offline survives two database reopens a
   assert.deepEqual(f.fatals, []);
 });
 
-test('simultaneous answer and cancellation use independent SQLite writers; acknowledged cancel cannot resume after restart', { timeout: 30_000 }, async t => {
+async function answerCancelRace(t: TestContext, order: 'simultaneous' | 'answer-first' | 'cancel-first') {
   let calls = 0;
   const f = fixture(t, { async run(r) { calls++; return waitResult(r); } });
   f.engine.start(); f.engine.accept(message('root', 'ORIGINAL_ACTION'));
   await until(() => new Tasks(f.store).get(f.store.get('root')?.taskId ?? '')?.state === 'waiting');
   const taskId = f.store.get('root')!.taskId!, waitId = new Waits(f.store).current(taskId)!.id;
   await f.engine.stop();
-  // Persist the real resume command. A bare unlinked "blue" is a new task if
-  // cancellation wins, which would test routing a new instruction, not resume.
+  // Preserve the real resume command in the durable inbox. If cancellation wins,
+  // a rejected answer must not be replayed as an unrelated ordinary instruction.
   const answer = message('answer', `/resume ${waitId} blue`); f.store.enqueue(answer);
   const moduleUrl = (name: string) => new URL(`../src/${name}.js`, import.meta.url).href;
   const children = ['answer', 'cancel'].map(action => {
@@ -104,8 +104,15 @@ process.once('message',()=>{
     return { child, prepared, finished };
   });
   await Promise.all(children.map(c => c.prepared));
-  children.forEach(c => c.child.send('go'));
-  const [, cancelled] = await Promise.all(children.map(c => c.finished));
+  if (order === 'simultaneous') children.forEach(c => c.child.send('go'));
+  else {
+    const first = order === 'answer-first' ? 0 : 1;
+    children[first].child.send('go');
+    assert.equal(await children[first].finished, true);
+    children[1 - first].child.send('go');
+  }
+  const [answered, cancelled] = await Promise.all(children.map(c => c.finished));
+  if (order !== 'simultaneous') assert.equal(answered, order === 'answer-first');
   assert.equal(cancelled, true);
   await f.reopen();
   f.engine.accept(message('late', `/resume ${waitId} late`));
@@ -115,7 +122,14 @@ process.once('message',()=>{
   assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM task_runs WHERE taskId=?').get(taskId)?.n, 1);
   assert.equal(f.store.db.prepare("SELECT COUNT(*) n FROM outbox WHERE inboxKey='root' AND kind='result'").get()?.n, 1);
   assert.deepEqual(f.fatals, []);
-});
+}
+
+test('simultaneous answer and cancellation use independent SQLite writers; acknowledged cancel cannot resume after restart',
+  { timeout: 30_000 }, t => answerCancelRace(t, 'simultaneous'));
+test('answer committed before cancellation cannot resume or create another task after restart',
+  { timeout: 30_000 }, t => answerCancelRace(t, 'answer-first'));
+test('cancellation committed before an answer cannot turn the rejected resume command into a new task',
+  { timeout: 30_000 }, t => answerCancelRace(t, 'cancel-first'));
 
 test('platform acceptance followed by receipt storage failure stays unknown across restart; explicit retry sends only saved output', async t => {
   let calls = 0;
