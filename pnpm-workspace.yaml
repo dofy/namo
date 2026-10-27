@@ -4,13 +4,3 @@ allowBuilds:
 # Preserve the exact patch already locked before the package manager migration.
 minimumReleaseAgeExclude:
   - follow-redirects@1.16.2
-  # Exact SDK/CLI compatibility baseline verified for the isolated R7.2 work.
-  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.311'
-  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.311'
-  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.311'
-  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.311'
-  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.311'
-  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.311'
-  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.311'
-  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.311'
-  - '@anthropic-ai/claude-agent-sdk@0.3.311'

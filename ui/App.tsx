@@ -130,9 +130,8 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
         {view === 'dashboard' && <section aria-label={tr("app.dashboardContent")}><DashboardPage state={state} navigate={go} onOpen={onOpen} enabled={!expired} /></section>}
         {(view === 'tasks' || view === 'sessions') && <section aria-label={view === 'tasks' ? tr("app.taskContent") : tr("app.sessionContent")}><TasksPage key={view} kind={view} state={state} onOpen={onOpen} navigate={go} search={search} enabled={!expired} /></section>}
         <section hidden={view !== 'settings'} aria-label={tr("app.projectsPermissionsContent")}><SettingsPage config={state.config} recoveryAvailable={state.recoveryAvailable && !expired} refresh={refresh} notify={notify} /></section>
-        <section hidden={view !== 'connections'} aria-label={tr("app.agentFeishuContent")}><ConnectionsPage config={state.config} profiles={state.profiles} refresh={refresh} expired={expired} /></section>
+        <section hidden={view !== 'connections'} aria-label={tr("app.agentFeishuContent")}><ConnectionsPage state={state} refresh={refresh} expired={expired} /></section>
       </>}
-      <footer>{tr("app.namoConnectsMessagesAgentKeepsYouInformed")}</footer>
     </main>
     <Details target={target} close={() => setTarget(null)} changed={refresh} notify={notify} restoreFocus={() => opener.current?.focus()} />
   </div>;

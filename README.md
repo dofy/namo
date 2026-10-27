@@ -37,7 +37,7 @@ The workbench and CLI support **English and Simplified Chinese**. They follow th
 
 Schema 8 includes the roadmap integrations above and has passed review and deployment on the maintained local instance. Existing installations require an explicit service upgrade. PDF/Office/audio material interpretation, reminders, background delegation and offline message backfill remain unsupported. See the [development plan](docs/development-plan.md) for deployment status and outstanding real-world acceptance checks.
 
-Organization setup: use `namo access configure`, then select a GitHub account and paired owner with `namo github configure`, or use **Connections** in the workbench. Existing installations retain their access rules until an administrator changes them. See [organization access](docs/organization-access.md).
+Organization setup: open **Connections** in the workbench to configure organization access and choose a GitHub account and paired owner. Existing installations retain their access rules until an administrator changes them. See [organization access](docs/organization-access.md).
 
 ## Get started
 
@@ -67,11 +67,6 @@ Existing configuration can be selected with `--config`. Namo also recognizes `NA
 
 ```sh
 namo --help
-namo agent list
-namo doctor           # Environment and connection checks; no model inference
-namo doctor --live    # Explicit real model test; may use account quota
-namo status
-namo logs
 namo ui               # Local workbench; does not start another receiver
 ```
 
@@ -84,8 +79,8 @@ CLI priority is `--lang` → `NAMO_LANG` → system language (`LC_ALL`, `LC_MESS
 ```sh
 namo --lang en --help
 namo --lang zh-CN init
-namo --lang system doctor
-NAMO_LANG=zh-CN namo doctor
+namo --lang system ui
+NAMO_LANG=zh-CN namo ui
 ```
 
 `--version`, paths and JSON output remain machine-readable; project links appear in help and the workbench sidebar. External agent output and historical records keep their original text.
@@ -104,14 +99,14 @@ See the [command reference (Chinese)](docs/getting-started.md#聊天命令) and 
 - Write permission also permits file deletion. Cancellation, timeout or context reset does not undo completed actions.
 - Git push approvals bind an exact task, owner/chat, project, configured remote, branch, HEAD SHA, configuration revision and expiry, then allow a single execution attempt. This is **limited protection**, not complete enforcement: a generally networked agent or another credential path could bypass the approval entrypoint. Deployment is not implemented as a generic target.
 - OpenClaw import requires an explicitly selected source file, supported version and application. It never imports provider authentication, gateways, plugins or tasks, and it cannot automatically take over a receiver; cutover and rollback remain an explicit, verified manual gate.
-- GitHub waits default to anonymous public access. In **Connections → GitHub** or `namo github configure`, select a local `gh` login and one paired owner: admitted groups get read-only repository access; the owner's private chat can use all account API permissions. Other private chats cannot borrow the account. No repository grant lists are needed; a separate token remains available. CI waits never trigger writes. See [private GitHub setup](docs/private-github.md).
+- GitHub waits default to anonymous public access. In **Connections → GitHub**, select a local `gh` login and one paired owner: admitted groups get read-only repository access; the owner's private chat can use all account API permissions. Other private chats cannot borrow the account. No repository grant lists are needed; a separate token remains available. CI waits never trigger writes. See [private GitHub setup](docs/private-github.md).
 - A platform send receipt means the platform accepted the message, not that the user read it. Ambiguous sends are retained for review.
 - A sleeping or disconnected host cannot provide continuous service. There is no offline history backfill.
 - Never commit `config.local.json`, `data/`, logs, tokens or authentication files. Namo does not automatically import personal MCP servers, plugins or third-party model gateways.
 
-Local-only administration also provides `namo migrate`, `namo migrate inspect … --json`, and `namo approval request|inspect|approve|reject|execute|reconcile …`. Migration never switches receivers automatically. Approval targets must already exist in `gitApprovals`; approve, execute and reconcile use explicit confirmation where required. See the [OpenClaw migration](docs/openclaw-migration.md) and [Git approval](docs/approvals.md) documents.
+The CLI keeps only `init`, `login`, `start`, `service`, and `ui`. Status, logs, diagnostics, and Git push approvals are available in the workbench. Inspect OpenClaw sources under **Connections → Runtime and maintenance**; import with `namo init --import`. Migration never switches receivers automatically. Approvals still bind preconfigured targets and require explicit confirmation. See [OpenClaw migration](docs/openclaw-migration.md) and [Git approvals](docs/approvals.md).
 
-Background service management currently supports macOS. Other systems can use foreground mode but have not completed full platform acceptance. Claude Code and OpenClaw are detected but are not supported execution backends.
+Background service management currently supports macOS. Other systems can use foreground mode but have not completed full platform acceptance. Codex is the only execution backend. Other agents are reserved for future plugins; no additional agent SDKs or probes are included.
 
 ## Development
 

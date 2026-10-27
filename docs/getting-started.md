@@ -1,6 +1,6 @@
 # 安装与第一次使用
 
-Namo 是本地消息桥接器：飞书负责入口，Codex 负责执行，Namo 负责配对、项目路由、会话、队列和运行状态。首版只支持 Codex；探针会区分 Claude Code 本地 CLI 与 OpenClaw Gateway，但尚未实现这两个后端。
+Namo 是本地消息桥接器：飞书负责入口，Codex 负责执行，Namo 负责配对、项目路由、会话、队列和运行状态。当前仅支持官方 Codex；其他 Agent 仅保留未来插件扩展的可能性。
 
 当前是**发布前验收版**，尚未发布 npm。包名、许可证和正式发布需要仓库所有者确认，`private: true` 保持启用。
 
@@ -53,7 +53,6 @@ namo init
 ## 配置与恢复
 
 ```sh
-namo config path
 namo init --config /absolute/path/to/config.local.json
 ```
 
@@ -92,35 +91,26 @@ namo init --config /absolute/path/to/config.local.json
 
 ## 日常操作
 
+命令行只保留安装、登录、启动和服务管理所需的入口：
+
 ```sh
-namo agent list
-namo doctor
-namo doctor --json
-namo doctor --live  # 明确调用模型，可能使用账号额度
-namo agent test --live
-namo login
-namo start         # 前台，Ctrl+C 停止
-namo status
-namo logs
-namo ui            # 打开本机工作台，不启动飞书接收端
-namo issues        # 列出待核对异常
-namo service install
-namo service status
-namo service stop
-namo service start
-namo service restart
-namo service uninstall
+namo init                 # 初始化 / 配对；从 OpenClaw 导入使用 init --import
+namo login                # 在独立目录中进行官方 Codex 登录
+namo start                # 前台运行，Ctrl+C 停止
+namo service install      # 安装后台服务
+namo service start        # 启动；另支持 stop / restart / upgrade / uninstall
+namo ui                   # 打开本机工作台，不启动飞书接收端
 ```
 
-需要指定现有配置时，把 `--config /absolute/path/config.json` 加到对应命令。诊断默认不调用模型，也不会启动另一个飞书接收端。它区分命令发现、协议/权限配置、独立账号认证、项目目录、飞书凭据与用户配对。`doctor --live` 只验证 Agent 推理；完整飞书收发通过 init 验证。
+需要指定现有配置时，添加 `--config /absolute/path/config.json`。配置文件位置、运行状态、日志及连接诊断统一放在工作台的**连接设置**；任务、工作线和异常核对使用对应页面。旧的查询命令会提示打开 `namo ui`。
 
-诊断的退出码：存在失败项为 1，仅警告为 0。`--json` 可用于脚本。取消初始化返回 130。
+连接诊断默认不调用模型，也不会启动另一个飞书接收端；它区分命令发现、协议 / 权限配置、独立账号认证、项目目录、飞书凭据与用户配对。需要验证模型时，点击“测试 Codex 回复”并确认；该测试可能使用账号额度。完整飞书收发通过 init 验证。取消初始化返回 130。
 
 当前后台状态通过运行进程和本次实例的健康记录一起判断。旧版服务没有健康记录时，显示连接未知，而不是根据 PID 推断在线；更新后重启即可开始生成健康记录。`uninstall` 仅卸载服务，保留配置、数据和登录；重新安装会使用当前稳定的 Node 和 CLI 路径。
 
 ## 本地工作台与任务卡片
 
-`namo ui` 自动打开只在本机可访问的工作台。保持终端进程运行，Ctrl+C 关闭并撤销本次页面授权；页面会话有效期为 2 小时，失效后重新运行命令。当前自动打开支持 macOS / Linux，Windows 继续使用 CLI，尚未完整验收。
+`namo ui` 自动打开只在本机可访问的工作台。保持终端进程运行，Ctrl+C 关闭并撤销本次页面授权；页面会话有效期为 2 小时，失效后重新运行命令。当前自动打开支持 macOS / Linux；Windows 工作台尚未完整验收。
 
 工作台和 CLI 支持英文、简体中文，默认跟随系统语言，无法匹配时回退英文。工作台侧栏底部可切换“跟随系统 / English / 简体中文”，使用不包含身份信息的本机语言偏好 cookie 记住选择，跨随机端口重新打开仍生效；认证仍使用独立的 HttpOnly cookie。切换语言保留筛选和表单草稿，不翻译任务原文或执行日志。
 
@@ -128,8 +118,9 @@ CLI 使用 `--lang system|en|zh-CN`，也可设置 `NAMO_LANG`；显式参数优
 
 - **任务与工作线**：查看任务结果、运行与投递状态，停止尚未结束的任务，核对中断或发送结果不明。核对后只记账或重发已保存的指定结果，不重新调用模型。
 - **项目与权限**：添加 / 修改项目、默认项目、读写和联网权限、模型、并发与时限。先保存并备份，再确认应用；在途任务存在时不会重启。原 Secret 不显示，输入新 Secret 才替换。
-- **Agent 与飞书**：运行与 CLI 相同的连接诊断，查看官方登录命令和飞书设置 / 配对步骤。登录与新增用户仍在本机终端完成；配对前要停止当前接收端，避免重复连接。
-- **用户档案**：选择已配对用户，编辑称呼、语言和时区，查看保存版本与修改来源。草稿跨页面保留；冲突不会覆盖新内容。清空资料需确认，不移除用户配对。
+- **Agent 与飞书**：运行连接诊断或经确认的模型调用测试，查看官方登录命令和飞书设置 / 配对步骤。登录与新增用户仍在本机终端完成；配对前要停止当前接收端，避免重复连接。
+- **运行与维护**：在连接设置查看配置位置、服务状态和脱敏日志，创建 / 批准 / 执行 Git 推送审批，或检查 OpenClaw 来源元数据。
+- **记忆与档案**：选择已配对用户，编辑称呼、语言和时区，查看保存版本与修改来源。草稿跨页面保留；冲突不会覆盖新内容。清空资料需确认，不移除用户配对。
 
 旧数据库只供查看；工作台不会替你迁移在线库。首次升级到本版需按[运维说明](operations.md)安排维护窗口。
 

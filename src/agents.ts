@@ -1,5 +1,4 @@
-import { probeClaudeAgent, probeCursorAcp, type AgentProbeReport } from './agent-probes.js';
-import { agentCodexConfig, selectAgent, getAgentRegistry, type AgentSelection } from './agent-registry.js';
+import { agentCodexConfig, selectAgent, type AgentSelection } from './agent-registry.js';
 import { t as tr } from './locale.js';
 import { accessSync, constants, existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
@@ -15,13 +14,10 @@ export function findExecutable(bin: string, path = process.env.PATH ?? ''): stri
   return candidates.find(p => { try { accessSync(p, constants.X_OK); return statSync(p).isFile(); } catch { return false; } });
 }
 export function detectAgents(codexBin = 'codex'): AgentInfo[] {
-  return [{ id: 'codex', bin: codexBin, kind: 'local-cli' as const, supported: true },
-    { id: 'cursor', bin: findExecutable('agent') ? 'agent' : 'cursor-agent', kind: 'local-cli' as const, supported: false },
-    { id: 'claude', bin: 'claude', kind: 'local-cli' as const, supported: false },
-    { id: 'openclaw', bin: 'openclaw', kind: 'gateway' as const, supported: false }].map(a => {
+  return [{ id: 'codex', bin: codexBin, kind: 'local-cli' as const, supported: true }].map(a => {
     const path = findExecutable(a.bin);
     // Discovery must not execute an arbitrary PATH command or inherit host
-    // credentials. Explicit profile probes own bounded protocol/version checks.
+    // credentials. Codex diagnostics own bounded protocol and account checks.
     return { id: a.id, kind: a.kind, supported: a.supported, path: path ? realpathSync(path) : undefined, installed: !!path };
   });
 }
@@ -71,13 +67,4 @@ export function toolchainPaths(): string[] {
   if (process.platform === 'darwin' && node.startsWith('/opt/homebrew/')) paths.add('/opt/homebrew');
   else if (!node.startsWith('/usr/')) paths.add(dirname(dirname(node)));
   return [...paths];
-}
-
-/** Discovery and authentication evidence never enables an unimplemented runtime. */
-export async function probeAgentProfile(c: Config, profileId?: string): Promise<{profileId:string;adapter:string;checks?:Check[];report?:AgentProbeReport}> {
-  const registry=getAgentRegistry(c), profile=registry.profiles.find(p=>p.id===(profileId??registry.defaultProfile));
-  if(!profile)throw new Error('agent_profile_unavailable');
-  if(profile.adapter==='codex')return {profileId:profile.id,adapter:profile.adapter,checks:await probeAgent(c,profile.id)};
-  const options={bin:profile.bin,home:profile.home,configDir:join(profile.home,'config')};
-  return {profileId:profile.id,adapter:profile.adapter,report:profile.adapter==='claude'?await probeClaudeAgent(options):await probeCursorAcp(options)};
 }

@@ -9,15 +9,21 @@ import { loadConfig } from '../src/config.js';
 import { atomicJson } from '../src/paths.js';
 import { renderLaunchAgent } from '../src/service.js';
 const bin=resolve('bin/namo.js');
-test('CLI help/version need no config; absent configuration doctor and piped init fail clearly',t=>{
+test('CLI help/version need no config; removed commands guide users to the UI and piped init fails clearly',t=>{
  const dir=mkdtempSync(join(tmpdir(),'namo-cli-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const run=(...a:string[])=>spawnSync(process.execPath,[bin,...a],{cwd:dir,encoding:'utf8',env:{...process.env,NAMO_HOME:dir,NAMO_LANG:'system',LC_ALL:'en_US.UTF-8'}});
  assert.equal(run('--help').status,0);assert.match(run('--version').stdout,/0\.1\.0/);
- const doctor=run('doctor','--json');assert.equal(doctor.status,1);assert.equal(JSON.parse(doctor.stdout).some((x:any)=>x.id==='config'&&x.status==='fail'),true);
- const init=run('init');assert.equal(init.status,1);assert.match(init.stderr,/interactive terminal/);
+ for(const command of ['doctor','check','status','logs','config','agent','issues','issue','resolve','access','github','approval']) {const result=run(command);assert.equal(result.status,1);assert.match(result.stderr,/namo ui/);}
+ assert.match(run('migrate').stderr,/namo init --import/);
+ assert.match(run('init','--import').stderr,/interactive (?:local )?terminal/);
+ assert.match(run('service','status').stderr,/namo ui/);
+ assert.match(run('service').stderr,/install.*uninstall/);
+ assert.equal(run('ui','--import').status,1);
+ assert.equal(run('login','extra').status,1);
+ const init=run('init');assert.equal(init.status,1);assert.match(init.stderr,/interactive (?:local )?terminal/);
  assert.match(run('init','--lang','zh-CN').stderr,/交互终端/);
  assert.equal(run('agent','test').status,1);
- assert.equal(run('--config',join(dir,'other.json'),'config','path').stdout.trim(),join(dir,'other.json'));
+ assert.match(run('--config',join(dir,'other.json'),'ui').stderr,/No configuration/);
  assert.equal(run('doctor','--unknown').status,1);
 });
 test('service render uses explicit installed entry and private config references without secrets',t=>{

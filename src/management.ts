@@ -1,6 +1,10 @@
+import { serviceLogs, listApprovals, changeApproval } from './management-operations.js';
+import { ApprovalError } from './approvals.js';
+import { inspectOpenClawSource, MigrationError } from './migration.js';
+import type { ApprovalAction, ApprovalList } from './ui-contract.js';
 import { t as tr } from './locale.js';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { loadConfig, parseConfig } from './config.js';
@@ -20,7 +24,6 @@ import { Browse, BrowseError } from './browse.js';
 import { parseGitHubAccessConfig, publicGitHubAccess } from './github-access.js';
 import { FeishuTransport } from './feishu.js';
 import { discoverLocalGh, type LocalGhConfig } from './github-local.js';
-import { getAgentRegistry, type AgentProfileInput } from './agent-registry.js';
 
 export class ManagementError extends Error { constructor(message:string,readonly status=409){super(message);} }
 export interface ManagementDeps {
@@ -28,22 +31,6 @@ export interface ManagementDeps {
   localGh: typeof discoverLocalGh;
 }
 const defaults:ManagementDeps={status:serviceStatus,action:serviceAction,wait:waitForService,diagnose:doctor,localGh:discoverLocalGh};
-function publicAgentSpecs(value:unknown):Record<string,AgentProfileInput> {
-  if(!value||typeof value!=='object'||Array.isArray(value))return {};
-  const result:Record<string,AgentProfileInput>={};
-  for(const [id,entry] of Object.entries(value)) {
-    if(!/^[a-z][a-z0-9_-]{0,47}$/.test(id)||['codex','constructor','prototype','__proto__'].includes(id))continue;
-    if(!entry||typeof entry!=='object'||Array.isArray(entry))continue;
-    const profile=entry as Record<string,unknown>;
-    if(!['codex','claude','cursor'].includes(String(profile.adapter)))continue;
-    result[id]={adapter:profile.adapter as AgentProfileInput['adapter'],
-      ...(typeof profile.enabled==='boolean'?{enabled:profile.enabled}:{}),
-      ...(typeof profile.bin==='string'?{bin:profile.bin}:{}),
-      ...(typeof profile.model==='string'?{model:profile.model}:{}),
-      ...(Number.isSafeInteger(profile.timeoutMs)?{timeoutMs:Number(profile.timeoutMs)}:{})};
-  }
-  return result;
-}
 export class Management {
   readonly dataDir: string;
   private deps:ManagementDeps;
@@ -86,13 +73,11 @@ export class Management {
   async organization():Promise<{tenantKey:string;name:string}> { return new FeishuTransport(loadConfig(this.file).feishu,()=>{}).organization(); }
   config():any {
     const {raw,revision}=this.source(),c=raw.codex??{},f=raw.feishu??{};
-    let valid=true,parsed:ReturnType<typeof parseConfig>|undefined;try{parsed=parseConfig(raw,this.file);}catch{valid=false;}
+    let valid=true;try{parseConfig(raw,this.file);}catch{valid=false;}
     let github=publicGitHubAccess();try {github=publicGitHubAccess(parseGitHubAccessConfig(raw.github,process.env));}catch{/* Keep an invalid credential out of the projection. */}
     const service=this.status();let applied:string|undefined;
     try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid)applied=h.configRevision;}catch{/* Not yet instrumented. */}
-    const registry=parsed?getAgentRegistry(parsed):undefined,rawAgents=raw.agents&&typeof raw.agents==='object'&&!Array.isArray(raw.agents)?raw.agents:{};
-    return {revision,valid,github,agents:this.sanitize({defaultProfile:registry?.defaultProfile??(typeof rawAgents.defaultProfile==='string'?rawAgents.defaultProfile:'codex'),memoryProfile:'codex' as const,
-        profiles:registry?.profiles??[],specs:publicAgentSpecs(rawAgents.profiles)}),application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
+    return {revision,valid,github,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
       values:{projectAccess:c.projectAccess??{},projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.allowLocalCommits??false,
         concurrency:raw.concurrency??2,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
         reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??200,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},
@@ -269,10 +254,10 @@ export class Management {
     try {
       const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError(tr("management.configurationChangedAnotherPageProgramRefreshTry"));
       if(!patch||typeof patch!=='object'||Array.isArray(patch))throw new ManagementError(tr("management.invalidConfigurationContent"));
-      const allowed=['serviceAccess','projectAccess','projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','agents'];
+      const allowed=['serviceAccess','projectAccess','projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken'];
       if(Object.keys(patch).some(k=>!allowed.includes(k)))throw new ManagementError(tr("management.configurationIncludesFieldsCannotEdited"));
       const next=structuredClone(raw);next.codex??={};next.feishu??={};
-      for(const key of allowed.filter(k=>!['serviceAccess','concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','agents'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
+      for(const key of allowed.filter(k=>!['serviceAccess','concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
       if(patch.serviceAccess!==undefined) {
         const a=patch.serviceAccess;
         if (!a || typeof a!=='object' || Array.isArray(a) || Object.keys(a).some(k=>!['access','allowedUserIds','allowedChatIds'].includes(k))) throw new ManagementError(tr("management.invalidOrganizationAccessSettings"),400);
@@ -280,11 +265,6 @@ export class Management {
       }
       if(next.codex.defaultProject==='')delete next.codex.defaultProject;
       if(Object.hasOwn(patch,'concurrency'))next.concurrency=patch.concurrency;
-      if(Object.hasOwn(patch,'agents')){
-        const encoded=JSON.stringify(patch.agents);
-        if(encoded!==this.redactor()(encoded))throw new ManagementError(tr("management.agentProfilesCannotContainCredentialsRemoveThem"),400);
-        next.agents=structuredClone(patch.agents);
-      }
       for(const k of ['cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs'])if(Object.hasOwn(patch,k))next.feishu[k]=patch[k];
       if(patch.newSecret!==undefined) {
         if(typeof patch.newSecret!=='string'||patch.newSecret.length>256)throw new ManagementError(tr("management.invalidSecretFormat"));
@@ -375,5 +355,35 @@ export class Management {
       return {duplicate:false};
     }));
   }
-  async diagnose():Promise<any> {return this.sanitize(await this.deps.diagnose(this.file,false));}
+  logs() { return serviceLogs(this.dataDir, this.redactor()); }
+  inspectMigration(input: { sourceFile?: unknown; sourceInstanceId?: unknown }) {
+    if (typeof input.sourceFile !== 'string' || !isAbsolute(input.sourceFile) || input.sourceFile.length > 4096
+      || typeof input.sourceInstanceId !== 'string' || !input.sourceInstanceId.trim() || input.sourceInstanceId.length > 100) throw new ManagementError(tr('operations.migrationInputInvalid'), 400);
+    try { return this.sanitize(inspectOpenClawSource({ sourceFile: input.sourceFile, sourceInstanceId: input.sourceInstanceId })); }
+    catch (error) { if (error instanceof MigrationError) throw new ManagementError(this.redactor()(error.message), 400); throw error; }
+  }
+  approvals(): ApprovalList {
+    const { revision } = this.source(), config = loadConfig(this.file);
+    return this.sanitize({ configured: !!config.gitApprovals?.gitBin && !!config.gitApprovals.remotes.length,
+      configRevision: revision, remotes: config.gitApprovals?.remotes.map(remote => remote.name) ?? [], items: this.read(listApprovals) ?? [] });
+  }
+  async approval(input: ApprovalAction) {
+    if (!input || !['request','approve','reject','execute','reconcile'].includes(input.action)) throw new ManagementError(tr('common.actionNotFound'), 400);
+    const { revision } = this.source(), config = loadConfig(this.file);
+    if (input.confirmed !== true) throw new ManagementError(tr('operations.confirmRequired'), 400);
+    if (this.source().revision !== revision) throw new ManagementError(tr('management.configurationChangedReviewAgainApplying'));
+    if (!/^[a-f0-9]{64}$/.test(input.configRevision??'') || (input.action === 'request'
+      ? typeof input.taskId !== 'string' || !/^N-[A-F0-9]{12}$/.test(input.taskId) || typeof input.remote !== 'string' || typeof input.ref !== 'string'
+      : typeof input.id !== 'string' || !/^AP-[A-F0-9]{12}$/.test(input.id) || !Number.isSafeInteger(input.revision))) throw new ManagementError(tr('operations.approvalInputInvalid'), 400);
+    const schema = this.read(s => Number(s.db.prepare('PRAGMA user_version').get()?.user_version));
+    if (schema !== SCHEMA_VERSION) throw new ManagementError(tr('management.databaseUpgradeRequiredUpgradeReceiverDuringMaintenance'));
+    const store = new Store(join(this.dataDir, 'bot.sqlite'));
+    try { return this.sanitize(await changeApproval(store, config, revision, () => this.source().revision, input)); }
+    catch (error) { if (error instanceof ApprovalError) throw new ManagementError(this.redactor()(error.message)); throw error; }
+    finally { store.close(); }
+  }
+  async diagnose(live = false, confirmed = false): Promise<any> {
+    if (live && !confirmed) throw new ManagementError(tr('operations.confirmRequired'), 400);
+    return this.sanitize(await this.deps.diagnose(this.file, live));
+  }
 }

@@ -25,11 +25,13 @@ export function ServiceAccessSettings({config,refresh,expired}:{config:ConfigVie
     }catch(e){setError(message(e));}finally{setBusy(false);}}}>
       <fieldset disabled={busy||expired}>
         <Field label={tr("serviceAccess.serviceAudience")} htmlFor="service-mode"><Choice id="service-mode" value={draft.mode} onChange={mode=>edit({mode})} options={[{value:'organization',label:tr("serviceAccess.feishuOrganizationMembers")},{value:'selected',label:tr("serviceAccess.selectedMembersLegacyMode")}]}/></Field>
-        {draft.mode==='organization'?<>
-          <Flex gap="3" align="end" wrap="wrap"><Field label={tr("serviceAccess.feishuTenantKey")} htmlFor="service-tenant"><TextField.Root id="service-tenant" value={draft.tenantKey} onChange={e=>edit({tenantKey:e.target.value})}/></Field>
-            <Button type="button" variant="soft" onClick={async()=>{setBusy(true);setError('');try{const org=await api.organization();edit({tenantKey:org.tenantKey});setNotice(org.name);}catch(e){setError(message(e));}finally{setBusy(false);}}}>{tr("serviceAccess.detectOrganizationApp")}</Button></Flex>
-          <Text as="p" size="1" color="gray">{tr("serviceAccess.userEventsOrganizationAcceptedFeishuAppAvailability")}</Text>
-        </>:<Field label={tr("common.allowedMembersOpenId")} htmlFor="service-users"><IdentityInput id="service-users" value={draft.users} onChange={users=>edit({users})}/></Field>}
+        {draft.mode==='organization'?<Field label={tr("serviceAccess.feishuTenantKey")} htmlFor="service-tenant">
+          <Flex gap="3" align="center" wrap="wrap">
+            <TextField.Root id="service-tenant" aria-describedby="service-tenant-help" value={draft.tenantKey} onChange={e=>edit({tenantKey:e.target.value})}/>
+            <Button type="button" variant="soft" onClick={async()=>{setBusy(true);setError('');try{const org=await api.organization();edit({tenantKey:org.tenantKey});setNotice(org.name);}catch(e){setError(message(e));}finally{setBusy(false);}}}>{tr("serviceAccess.detectOrganizationApp")}</Button>
+          </Flex>
+          <Text as="p" id="service-tenant-help" size="1" color="gray">{tr("serviceAccess.userEventsOrganizationAcceptedFeishuAppAvailability")}</Text>
+        </Field>:<Field label={tr("common.allowedMembersOpenId")} htmlFor="service-users"><IdentityInput id="service-users" value={draft.users} onChange={users=>edit({users})}/></Field>}
         <Field label={tr("common.restrictChatsLeaveEmptyAllChats")} htmlFor="service-chats"><IdentityInput id="service-chats" value={draft.chats} onChange={chats=>edit({chats})}/></Field>
         <Heading as="h3" size="3" mt="4">{tr("serviceAccess.localProjectSharing")}</Heading>
         <Text as="p" size="2" color="gray">{tr("serviceAccess.organizationMembersUseIsolatedWorkspacesDefaultWithout")}</Text>

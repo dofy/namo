@@ -26,14 +26,14 @@ namo service install
 
 安装会创建快照、写入固定入口并启动服务。`service start` 和 `service restart` 只使用 `dataDir/service.json` 已登记的快照，不会把发出命令的 CLI 路径写回服务元数据。`service stop` 和 `service uninstall` 同样不会改写发布身份。
 
-`namo service status` 中的 `release` 字段分别表示：
+工作台侧栏的版本信息分别展示：
 
 - `installed`：服务登记的 release id；
 - `running`：匹配当前 PID 的进程自己写入健康文件的 release id；
 - `verified`：显式服务状态检查时，登记快照当前是否通过完整文件校验；普通界面轮询可以省略该值；
 - `matches`：运行进程与登记版本是否一致。
 
-因此，版本对比不依赖当前执行 `namo status` 的 CLI 来猜测线上版本。前台开发进程没有发布身份，`running` 可以为空。
+因此，版本对比不依赖当前工作台所用的 CLI 来猜测线上版本。前台开发进程没有发布身份，`running` 可以为空。
 
 ## 安全升级
 
@@ -41,7 +41,7 @@ namo service install
 
 ```sh
 namo service stop
-namo service status
+# 在工作台确认服务已停止，且没有在途任务
 namo service upgrade
 namo service start
 ```

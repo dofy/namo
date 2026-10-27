@@ -65,11 +65,6 @@ namo init
 
 ```sh
 namo --help
-namo agent list
-namo doctor           # 检查环境与连接，不进行模型推理
-namo doctor --live    # 显式真实模型测试，可能使用账号额度
-namo status
-namo logs
 namo ui               # 本地工作台，不启动另一接收端
 ```
 
@@ -82,8 +77,8 @@ CLI 优先级为 `--lang` → `NAMO_LANG` → 系统语言（`LC_ALL`、`LC_MESS
 ```sh
 namo --lang en --help
 namo --lang zh-CN init
-namo --lang system doctor
-NAMO_LANG=zh-CN namo doctor
+namo --lang system ui
+NAMO_LANG=zh-CN namo ui
 ```
 
 `--version`、路径和 JSON 输出保持可供程序读取。项目地址放在帮助信息和工作台侧栏中；外部 Agent 输出和历史记录保留原文。
@@ -102,14 +97,14 @@ NAMO_LANG=zh-CN namo doctor
 - 写权限也允许删除文件。取消、超时或重置上下文不会撤销已发生的操作。
 - Git push 审批绑定确切任务、用户 / 聊天、项目、预配置远端、分支、HEAD SHA、配置版本和有效期，只允许一次执行尝试。这是**有限保护**，不是完整强制隔离：通用联网 Agent 或其他凭据路径仍可能绕过审批入口。部署没有通用目标实现。
 - OpenClaw 导入必须显式选择来源文件、受支持版本和应用；不继承模型认证、网关、插件或任务，也不会自动接管接收端。切换和回退保留为需验证的人工门槛。
-- GitHub 等待默认匿名读取公开仓库。通过**连接设置 → GitHub** 或 `namo github configure` 选择本机 `gh` 登录，绑定一个配对的本人账号：已准入群聊只读访问仓库，本人私聊可使用账号全部 API 权限，其他私聊不借用凭据。无需逐仓库授权；独立令牌作为高级选项保留。检查等待不会自动执行写操作。见[私有 GitHub 配置](docs/private-github.md)。
+- GitHub 等待默认匿名读取公开仓库。通过**连接设置 → GitHub** 选择本机 `gh` 登录，绑定一个配对的本人账号：已准入群聊只读访问仓库，本人私聊可使用账号全部 API 权限，其他私聊不借用凭据。无需逐仓库授权；独立令牌作为高级选项保留。检查等待不会自动执行写操作。见[私有 GitHub 配置](docs/private-github.md)。
 - 平台发送回执表示平台已接收消息，不代表用户已读。发送结果不明时保留记录供核对。
 - 主机休眠或断网时无法持续服务；当前没有离线历史消息补拉。
 - 禁止提交 `config.local.json`、`data/`、日志、令牌或认证文件。Namo 不会自动接入个人 MCP、插件或第三方模型网关。
 
-本机管理还提供 `namo migrate`、`namo migrate inspect … --json` 与 `namo approval request|inspect|approve|reject|execute|reconcile …`。迁移不会自动切换接收端；审批目标必须预先写入 `gitApprovals`，批准、执行和核对结果不明状态时按要求显式确认。详见 [OpenClaw 迁移](docs/openclaw-migration.md)与 [Git 审批](docs/approvals.md)。
+CLI 只保留 `init`、`login`、`start`、`service`、`ui`。状态、日志、诊断和 Git 推送审批在工作台中操作；OpenClaw 来源检查在**连接设置 → 运行与维护**，实际导入使用 `namo init --import`。迁移不会自动切换接收端，审批继续绑定预配置目标并要求显式确认。详见 [OpenClaw 迁移](docs/openclaw-migration.md)与 [Git 审批](docs/approvals.md)。
 
-后台服务管理当前支持 macOS；其他平台可前台运行，但尚未完成全部平台验收。Claude Code 与 OpenClaw 只提供发现状态，尚未支持作为执行后端。
+后台服务管理当前支持 macOS；其他平台可前台运行，但尚未完成全部平台验收。当前仅接入 Codex；其他 Agent 仅保留未来插件扩展的可能性，不包含对应 SDK 或探测功能。
 
 ## 开发
 
@@ -125,4 +120,4 @@ pnpm run smoke:codex -- --run # 显式真实模型测试
 
 项目地址：[github.com/dofy/namo](https://github.com/dofy/namo)。反馈问题时请提供复现步骤，勿附凭据、私有配置或原始会话数据。
 
-组织配置：运行 `namo access configure`，再用 `namo github configure` 选择 GitHub 登录和本人账号，或在工作台的连接设置中配置。旧安装保持原范围，直到管理员明确修改。见[组织接入与权限](docs/organization-access.md)。
+组织配置：在工作台的**连接设置**中配置组织准入、GitHub 登录和本人账号。旧安装保持原范围，直到管理员明确修改。见[组织接入与权限](docs/organization-access.md)。

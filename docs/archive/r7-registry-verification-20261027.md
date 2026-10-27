@@ -26,7 +26,7 @@
 
 ## 尚未通过
 
-- R7.0 未全通过，精确版本及能力证据见[兼容性基线](../agent-compatibility.md)。
+- R7.0 未全通过，精确版本及能力证据见[兼容性基线](agent-compatibility.md)。
 - Claude/Kaon 的回复、精确 session resume、有界本地取消有成功证据；没有官方 Claude 认证，工具权限、部分流式取消、用户问题和 durable wait 尚未通过。
 - Cursor ACP initialize 成功；浏览器授权完成后 CLI 的共享 macOS Keychain 保存失败（根因未定位），专用 CLI status 仍未认证，后续真实任务未执行。没有删除共享 Keychain 项。
 - 尚未真实运行新增 Codex profile 的独立账号模型轮次；旧 Codex 认证协议可用，注册表派发与状态目录由隔离 fixture 验证。

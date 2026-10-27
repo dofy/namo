@@ -31,42 +31,9 @@ export interface ConfigView {
   values: ConfigValues;
   file: string;
   feishu: { appId: string; domain: string; secretConfigured: boolean; pairedUsers: number; restrictedChats: number; access?:OrganizationAccess|null; allowedUserIds?:string[]; allowedChatIds?:string[] };
-  agents: AgentRegistryView;
   github?: { mode?:'simple';ownerUserId?:string;credentialConfigured:boolean; credentialSource:string; localGh?:{login:string}; tokenEnv?:string; repositories:string[]; allowedUserIds:string[]; grants?:Array<Audience & {repository:string}> };
 }
 export interface GitHubConfigPatch { github: {mode?:'simple';ownerUserId?:string;source?:'gh'|'token'|'anonymous';repositories:string[];allowedUserIds:string[];grants?:Array<Audience & {repository:string}>};newGithubToken?:string;clearGithubToken?:boolean }
-export type AgentAdapter = 'codex' | 'claude' | 'cursor';
-export interface AgentProfileSpecView {
-  adapter: AgentAdapter;
-  enabled?: boolean;
-  bin?: string;
-  model?: string;
-  timeoutMs?: number;
-}
-export interface AgentProfileView {
-  id: string;
-  adapter: AgentAdapter;
-  enabled: boolean;
-  bin: string;
-  home: string;
-  model?: string;
-  timeoutMs: number;
-  revision: string;
-  available: boolean;
-}
-export interface AgentRegistryView {
-  defaultProfile: string;
-  memoryProfile: 'codex';
-  profiles: AgentProfileView[];
-  specs: Record<string, AgentProfileSpecView>;
-}
-export interface AgentRegistryPatch {
-  agents: {
-    defaultProfile?: string;
-    memoryProfile?: 'codex';
-    profiles?: Record<string, AgentProfileSpecView>;
-  };
-}
 export interface TaskSummary {
   id: string; workstreamId: string; project: string | null; state: string; inputVersion: number;
   startedAt: number | null; finishedAt: number | null; error: string | null;
@@ -131,11 +98,11 @@ export type MemoryMutation =
   | {action:'disable'|'delete'|'activate';ownerId:string;id:string;version:number};
 export interface ManagementState {
   assistant?: AssistantView;
-  service: { running?: boolean; ready?: boolean; connection?: string;
+  service: { running?: boolean; ready?: boolean; connection?: string; installed?: boolean; registered?: boolean; mode?: string; pid?: number;
     release?: { installed?: string; running?: string; matches?: boolean; verified?: boolean } };
   config: ConfigView;
   database: {
-    schema: number; tasks: TaskSummary[]; issues: Issue[];
+    schema: number; tasks: TaskSummary[]; issues: Issue[]; queue?: { states: { state: string; count: number }[] };
     workstreams: { id: string; project: string | null; createdAt: number }[];
   };
   recoveryAvailable: boolean;
@@ -179,3 +146,22 @@ export interface Diagnostic { id: string; status: 'ok' | 'warn' | 'fail'; messag
 export interface ApplyResult { ready: boolean; config: ConfigView; message: string }
 
 export interface ServiceAccessPatch { serviceAccess: {access:OrganizationAccess|null;allowedUserIds:string[];allowedChatIds:string[]}; projectAccess?:Record<string,ProjectAccess> }
+
+export interface ServiceLog { name: string; status: 'ready' | 'missing' | 'unavailable'; text: string; truncated: boolean }
+export interface ApprovalView {
+  id: string; revision: number; taskId: string; project: string | null; ownerId: string;
+  state: 'pending' | 'approved' | 'rejected' | 'expired' | 'invalidated' | 'executing' | 'succeeded' | 'failed' | 'unknown';
+  remote: string; ref: string; headSha: string; remoteBeforeSha: string | null; configRevision: string;
+  commitSummary: string; expiresAt: number; reason?: string;
+}
+export interface ApprovalList { configured: boolean; configRevision: string; remotes: string[]; items: ApprovalView[] }
+export type ApprovalAction = { configRevision: string; confirmed: boolean } & (
+  { action: 'request'; taskId: string; remote: string; ref: string } |
+  { action: 'approve' | 'reject' | 'execute' | 'reconcile'; id: string; revision: number }
+);
+export interface MigrationInspection {
+  status: 'supported' | 'manual' | 'unsupported'; sourceVersion?: string;
+  applications: { accountId: string; appIdHint: string; domain: string; connectionMode: string; credential: string }[];
+  candidates: { name: string; bytes: number }[];
+  issues: { code: string; message: string; action?: string }[];
+}

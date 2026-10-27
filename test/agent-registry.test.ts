@@ -40,7 +40,7 @@ test('registry rejects unknown, disabled and unimplemented defaults, fields and 
     assert.throws(()=>parseConfig({agents},join(dir,'invalid.json')));
   const tilde=parseConfig({agents:{profiles:{local:{adapter:'codex',bin:'~/.local/bin/codex'}}}},join(dir,'tilde.json'));
   assert.equal(resolveAgent(tilde,selectAgent(tilde,'local')).bin,join(homedir(),'.local/bin/codex'));
-  assert.throws(()=>selectAgent(config,'future'),/agent_adapter_unavailable/);
+  assert.throws(()=>selectAgent(config,'future'),/agent_profile_unavailable/);
   assert.throws(()=>selectAgent(config,'unknown'),/agent_profile_unavailable/);
   const s=selectAgent(config,'review');
   assert.throws(()=>resolveAgent(config,{...s,adapter:'cursor'}),/agent_configuration_changed/);

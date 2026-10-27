@@ -31,8 +31,8 @@ chmod 600 config.local.json
 本项目使用独立的 `data/codex-home`。通过官方流程登录：
 
 ```sh
-pnpm run login
-pnpm run check
+pnpm cli login
+pnpm cli ui  # 连接设置中运行诊断
 pnpm run smoke:codex
 # 登录后验证一次真实模型调用（会占用账号额度）
 pnpm run smoke:codex -- --run
@@ -77,12 +77,9 @@ pnpm run smoke:codex -- --run
 
 ## 状态与恢复语义
 
-```sh
-pnpm run status
-tail -f data/service.log
-```
+运行 `namo ui`：概览与任务页展示任务和投递状态，**连接设置 → 运行与维护**展示服务状态、队列和最近日志。日志仅按需读取固定文件的末尾，最多每份 80 行 / 64 KiB，并对已知凭据脱敏。
 
-数据库 `data/bot.sqlite` 保存消息正文和回复，因此应视为私有数据。目录默认 700、文件默认 600；本地状态命令只打印消息 ID、状态、错误类别和平台回执，不打印正文。需备份时先完成 / 取消全部任务并处理失联占位，再停止服务后备份整个 data 目录，不要在运行中只复制 sqlite 主文件忽略 WAL。schema 5 中停止接收服务后独立任务仍会运行，单独停止接收服务不再等于完整停机。
+数据库 `data/bot.sqlite` 保存消息正文和回复，因此应视为私有数据。目录默认 700、文件默认 600；日志查询会脱敏已知凭据；任务页面可能包含消息与回复正文，不要共享工作台会话。需备份时先完成 / 取消全部任务并处理失联占位，再停止服务后备份整个 data 目录，不要在运行中只复制 sqlite 主文件忽略 WAL。schema 5 中停止接收服务后独立任务仍会运行，单独停止接收服务不再等于完整停机。
 
 | 状态 | 含义与处理 |
 |---|---|
@@ -99,21 +96,11 @@ tail -f data/service.log
 
 ### 人工核对与受控处理
 
-本机可用 `namo ui`，或执行：
+运行 `namo ui`，在**待核对**页面打开记录，查看已保存的结果和投递依据。核实后填写说明，再确认“已收到”“重发此段”“放弃此段”或执行核对。
 
-```sh
-namo issues
-namo issue D-42
-# 从 issue 输出复制当前 stamp，填写真实核对依据
-namo resolve D-42 <stamp> received "已在飞书看到这一段" --confirm
-namo resolve D-42 <stamp> retry "已核对，仍决定重发" --confirm
-namo resolve D-42 <stamp> dismiss "不再发送这一段" --confirm
-namo resolve N-AAAAAAAAAAAA <stamp> reviewed "已检查代码与外部效果" --confirm
-```
+这些操作互斥，不要逐个尝试。重发只发送已保存的结果分段，并明确接受可能重复发送的风险，绝不重跑模型。“已收到”记录为人工确认，不伪造平台 message_id；放弃保留原记录并允许后续分段继续。执行核对不改原任务终态、不重发未确认修订；继续工作需明确发起后续要求。写入使用版本校验和审计事务，记录变化后须刷新再核对。
 
-以上是互斥处理示例，不要逐条执行。`D-编号` 对应一个出站分段；`retry` 只允许结果分段，明确接受可能重复发送的风险，绝不重跑模型。`received` 记为人工 `confirmed`，不会伪造平台 message_id；`dismiss` 保留原记录并允许后续分段继续。执行 `reviewed` 不改原任务终态、不重发未确认修订；继续工作需明确发起后续要求。核对写入审计事务，记录变化后必须重新查看当前 stamp。
-
-飞书使用 `/issues`、`/issue 编号`，再按机器人返回的 `/resolve` 命令填写依据；仅处理本人、本聊天的记录。本机工作台作为本机所有者可核对本实例全部任务。核对依据不要写入凭据，界面和 CLI 会对已知 Secret 及常见凭据格式脱敏。
+飞书使用 `/issues`、`/issue 编号`，再按机器人返回的 `/resolve` 命令填写依据；仅处理本人、本聊天的记录。本机工作台作为本机所有者可核对本实例全部任务。核对依据不要写入凭据，界面会对已知 Secret 及常见凭据格式脱敏。
 
 ### 本地工作台与配置应用
 

@@ -1,0 +1,100 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { atomicJson } from '../src/paths.js';
+import { initialConfig } from '../src/onboarding.js';
+import { loadConfig } from '../src/config.js';
+import { Store, type Incoming } from '../src/store.js';
+import { Tasks, policyHash } from '../src/tasks.js';
+
+const git = existsSync('/usr/bin/git') ? '/usr/bin/git' : realpathSync(execFileSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).trim());
+function command(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env): string { return execFileSync(git, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env }).trim(); }
+
+import { Management } from '../src/management.js';
+import { startUi } from '../src/ui.js';
+import { serviceLogs } from '../src/management-operations.js';
+import { symlinkSync } from 'node:fs';
+test('workbench approvals retain exact targets, confirmation, stale-state rejection and one-time execution', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'namo-approval-ui-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const testEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', NAMO_LANG: 'en' };
+  // The HTTP server runs in-process; isolate real Git from personal filters/helpers.
+  const testGit = join(root, 'git-isolated');
+  writeFileSync(testGit, '#!/bin/sh\nexec /usr/bin/env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null ' + JSON.stringify(git) + ' \"$@\"\n'); chmodSync(testGit, 0o700);
+  const repo = join(root, 'repo'), bare = join(root, 'remote.git'); mkdirSync(repo);
+  command(root, ['init', '--bare', bare], testEnv); command(repo, ['init'], testEnv); command(repo, ['config', 'user.name', 'Test'], testEnv); command(repo, ['config', 'user.email', 'test@example.invalid'], testEnv);
+  writeFileSync(join(repo, 'file.txt'), 'ui\n'); command(repo, ['add', '.'], testEnv); command(repo, ['commit', '-m', 'ui commit'], testEnv); command(repo, ['remote', 'add', 'origin', bare], testEnv);
+  const file = join(root, 'config.json'), raw = initialConfig(file); raw.feishu.appId = 'cli_test'; raw.feishu.appSecret = 'test-only'; raw.feishu.allowedUserIds = ['ou_owner'];
+  raw.codex.projects = { app: realpathSync(repo) }; raw.codex.defaultProject = 'app'; raw.gitApprovals = { gitBin: testGit, maxTtlMs: 900000, remotes: [{ name: 'origin', url: bare, transport: 'local-test' }] }; atomicJson(file, raw);
+  const store = new Store(join(raw.dataDir, 'bot.sqlite')); const message: Incoming = { key: 'instruction', messageId: 'm1', chatKey: 'chat', chatId: 'chat', senderId: 'ou_owner', text: 'work' };
+  store.enqueue(message); const task = new Tasks(store).create(store.get(message.key)!, { project: 'app', cwd: realpathSync(repo), policyHash: policyHash(loadConfig(file).codex) }); store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(task.id); store.close();
+  const manager=new Management(file,{status:()=>({running:false,mode:'stopped'})});
+  const ui=await startUi(manager);t.after(()=>ui.close());
+  const headers={Origin:ui.url,'Content-Type':'application/json','Accept-Language':'en'};
+  assert.equal((await fetch(ui.url+'/api/approvals')).status,401);
+  const login=await fetch(ui.url+'/api/session',{method:'POST',headers,body:JSON.stringify({code:new URL(ui.entryUrl).hash.slice(1)})});
+  const cookie=login.headers.get('set-cookie')!;
+  const get=async()=>await (await fetch(ui.url+'/api/approvals',{headers:{Cookie:cookie}})).json() as any;
+  const post=(input:object,origin=ui.url)=>fetch(ui.url+'/api/approvals',{method:'POST',headers:{...headers,Origin:origin,Cookie:cookie},body:JSON.stringify(input)});
+  const view=await get();assert.equal(view.configured,true);assert.deepEqual(view.remotes,['origin']);assert.deepEqual(view.items,[]);
+  const request={action:'request',taskId:task.id,remote:'origin',ref:'refs/heads/main',configRevision:view.configRevision,confirmed:true};
+  const response=await post(request);assert.equal(response.status,200,await response.clone().text());const preview=await response.json() as any;
+  assert.equal(preview.taskId,task.id);assert.equal(preview.remote,'origin');assert.equal('url' in preview,false);
+  assert.equal(preview.headSha,command(repo,['rev-parse','HEAD'],testEnv));
+  const action=(name:string,record:any,confirmed:unknown=true)=>({action:name,id:record.id,revision:record.revision,configRevision:manager.config().revision,confirmed});
+  assert.equal((await post(action('approve',preview,false))).status,400);
+  assert.equal((await post(action('approve',preview,'true'))).status,400);
+  assert.equal((await post({...action('approve',preview),revision:999})).status,409);
+  assert.equal((await post(action('approve',preview),'https://attacker.invalid')).status,403);
+  const approvedResponse=await post(action('approve',preview));assert.equal(approvedResponse.status,200);const approved=await approvedResponse.json() as any;
+  assert.equal(approved.state,'approved');
+  assert.equal((await post(action('execute',approved,false))).status,400);
+  const executed=await post(action('execute',approved));assert.equal(executed.status,200,await executed.clone().text());assert.equal((await executed.json() as any).state,'succeeded');
+  assert.equal(command(bare,['rev-parse','refs/heads/main'],testEnv),command(repo,['rev-parse','HEAD'],testEnv));
+  assert.equal((await post(action('execute',approved))).status,409);
+  const before=readFileSync(join(raw.dataDir,'bot.sqlite'));
+  assert.equal((await get()).items[0].state,'succeeded');
+  assert.deepEqual(readFileSync(join(raw.dataDir,'bot.sqlite')),before,'queries do not mutate approval records');
+  raw.codex.sandbox='workspace-write';atomicJson(file,raw);
+  const changed=await post({...request,configRevision:manager.config().revision});assert.equal(changed.status,409);
+  assert.match(await changed.text(),/permissions changed/i);
+  assert.equal((await post(request)).status,409,'configuration revisions remain binding');
+});
+
+test('logs are bounded, redacted and never follow symlinks', t => {
+  const root=mkdtempSync(join(tmpdir(),'namo-logs-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const redact=(text:string)=>text.replaceAll('TEST_SECRET','[redacted]');
+  assert.equal(serviceLogs(root,redact)[0].status,'missing');
+  writeFileSync(join(root,'service.log'),'old\n'.repeat(30000)+'TEST_SECRET\nlatest\n');
+  const secret=join(root,'private');writeFileSync(secret,'DO_NOT_READ');symlinkSync(secret,join(root,'service.error.log'));
+  const logs=serviceLogs(root,redact);
+  assert.equal(logs[0].truncated,true);assert.equal(logs[0].text.split('\n').length,80);assert.match(logs[0].text,/\[redacted\]\nlatest$/);
+  assert.equal(logs[1].status,'unavailable');assert.doesNotMatch(JSON.stringify(logs),/TEST_SECRET|DO_NOT_READ/);
+});
+
+test('workbench logs, source inspection and optional inference share local authorization', async t => {
+  const root=mkdtempSync(join(tmpdir(),'namo-operations-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const file=join(root,'config.json'),raw=initialConfig(file);raw.feishu.appId='operations';raw.feishu.appSecret='FAKE_RUNTIME_SECRET';atomicJson(file,raw);mkdirSync(raw.dataDir,{recursive:true});
+  writeFileSync(join(raw.dataDir,'service.log'),'FAKE_RUNTIME_SECRET logged');
+  const source=join(root,'openclaw.json');writeFileSync(source,JSON.stringify({meta:{lastTouchedVersion:'2026.10.6'},channels:{feishu:{appId:'fixture_1234',appSecret:'FAKE_SOURCE_SECRET'}}}));
+  const modes:boolean[]=[];
+  const manager=new Management(file,{status:()=>({running:false}),diagnose:async(_file,live)=>{modes.push(!!live);return [{id:'test',status:'ok',message:'fixture'}];}});
+  const ui=await startUi(manager);t.after(()=>ui.close());
+  assert.equal((await fetch(ui.url+'/api/logs')).status,401);
+  const headers={Origin:ui.url,'Content-Type':'application/json'};
+  const login=await fetch(ui.url+'/api/session',{method:'POST',headers,body:JSON.stringify({code:new URL(ui.entryUrl).hash.slice(1)})});
+  const cookie=login.headers.get('set-cookie')!;
+  const post=(path:string,input:object,origin=ui.url)=>fetch(ui.url+path,{method:'POST',headers:{...headers,Cookie:cookie,Origin:origin},body:JSON.stringify(input)});
+  const logs=await fetch(ui.url+'/api/logs?path='+encodeURIComponent(source),{headers:{Cookie:cookie}});
+  assert.equal(logs.status,200);assert.doesNotMatch(await logs.text(),/FAKE_RUNTIME_SECRET|FAKE_SOURCE_SECRET/);
+  assert.equal((await post('/api/diagnose',{live:true})).status,400);assert.deepEqual(modes,[]);
+  assert.equal((await post('/api/diagnose',{})).status,200);
+  assert.equal((await post('/api/diagnose',{live:true,confirmed:true})).status,200);assert.deepEqual(modes,[false,true]);
+  const before=readFileSync(file,'utf8');
+  assert.equal((await post('/api/migration-inspect',{sourceFile:source,sourceInstanceId:'fixture'},'https://attacker.invalid')).status,403);
+  const inspected=await post('/api/migration-inspect',{sourceFile:source,sourceInstanceId:'fixture'});
+  assert.equal(inspected.status,200);const text=await inspected.text();assert.doesNotMatch(text,/FAKE_SOURCE_SECRET|fixture_1234/);assert.equal(JSON.parse(text).applications.length,1);
+  assert.equal(readFileSync(file,'utf8'),before);assert.equal((await post('/api/migration-inspect',{sourceFile:'relative',sourceInstanceId:'fixture'})).status,400);
+});

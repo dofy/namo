@@ -74,7 +74,7 @@ export async function onboard(file: string, ui: Prompter, overrides: Partial<Ini
     if (editor.value) ui.info(tr("onboarding.existingConfigurationFoundUnknownFieldsAuthorizedUsers"));
     const reuse = !!editor.value && !!raw.feishu.appId && !!raw.codex.defaultProject && await ui.confirm(tr("onboarding.reuseExistingAgentProjectFeishuSettings"), true);
     if (!reuse) {
-      ui.info(tr("onboarding.supportedBackendCodexLocalCliClaudeCode"));
+      ui.info(tr("onboarding.codexOnly"));
       const found = detectAgents(raw.codex?.bin ?? 'codex').find(a => a.id === 'codex');
       raw.agent = 'codex'; raw.codex ??= initialConfig(file).codex;
       raw.codex.readPaths ??= toolchainPaths();

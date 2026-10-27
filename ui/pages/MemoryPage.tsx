@@ -131,8 +131,10 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
         options={(state?.owners??[]).map(owner => ({ value: owner.id, label: owner.label }))} /></Field>
       <Field label={c.search} htmlFor="memory-search"><TextField.Root id="memory-search" value={query} maxLength={120} onChange={event => setQuery(event.target.value)} /></Field>
     </div>
-    <Button variant="soft" color="gray" disabled={busy || !state} onClick={() => void act(() => api.memories(state!.ownerId), false)}>{c.refresh}</Button>
-    {state&&<Text as="p" size="1" color="gray">{c.capacity}: {state.items.filter(item=>item.status!=='deleted').length} / {state.limits.ownerEntries} {c.entries} · {state.items.reduce((sum,item)=>sum+item.contentChars,0)} / {state.limits.ownerChars} {c.chars}</Text>}
+    <Flex direction="column" align="start" gap="2">
+      <Button variant="soft" color="gray" disabled={busy || !state} onClick={() => void act(() => api.memories(state!.ownerId), false)}>{c.refresh}</Button>
+      {state&&<Text as="p" size="1" color="gray">{c.capacity}: {state.items.filter(item=>item.status!=='deleted').length} / {state.limits.ownerEntries} {c.entries} · {state.items.reduce((sum,item)=>sum+item.contentChars,0)} / {state.limits.ownerChars} {c.chars}</Text>}
+    </Flex>
 
     <Separator my="5" size="4" />
     {!filtered.length && <Text size="2" color="gray">{c.empty}</Text>}

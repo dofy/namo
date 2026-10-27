@@ -1,25 +1,27 @@
+import { OperationsPanel } from '../OperationsPanel';
 import { t as tr } from '../i18n';
 import { Icon } from '../Icon';
 import { useState } from 'react';
-import { Button, Code, Heading, Link, Text } from '@radix-ui/themes';
-import type { ConfigView, Diagnostic, ProfileState } from '../../src/ui-contract';
+import { Button, Code, Flex, Heading, Link, Text } from '@radix-ui/themes';
+import type { ManagementState, Diagnostic } from '../../src/ui-contract';
 import { api, message } from '../api';
-import { Notice } from '../components';
+import { ConfirmButton, Notice } from '../components';
 import { ServiceAccessSettings } from '../ServiceAccessSettings';
 import { GitHubSettings } from '../GitHubSettings';
-import { AgentRegistrySettings } from '../components/AgentRegistrySettings';
 
 const quote = (value: string) => "'" + value.split("'").join("'\"'\"'") + "'";
-export function ConnectionsPage({ config, profiles, refresh, expired }: {
-  config: ConfigView; profiles: ProfileState; refresh: () => Promise<unknown>; expired: boolean;
+export function ConnectionsPage({ state, refresh, expired }: {
+  state: ManagementState; refresh: () => Promise<unknown>; expired: boolean;
 }) {
+  const { config, profiles } = state;
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [checks, setChecks] = useState<Diagnostic[]>([]);
   return <>
     <div className="connection"><div><Heading as="h2" size="5">Codex</Heading><Text as="p" size="2" color="gray">{tr("connections.officialAppServerIsolatedLogin")}</Text></div>
-      <Button variant="soft" loading={busy} onClick={async () => {
+      <Flex gap="2" wrap="wrap"><Button variant="soft" disabled={expired} loading={busy} onClick={async () => {
         setBusy(true); setError('');
         try { setChecks(await api.diagnose()); } catch (e) { setError(message(e)); } finally { setBusy(false); }
       }}><Icon name="activity" />{tr("connections.runDiagnostics")}</Button>
+    <ConfirmButton disabled={busy||expired} title={tr('operations.liveTest')} description={tr('operations.liveTestHelp')} action={tr('operations.liveTest')} onConfirm={async()=>{setBusy(true);setError('');try{setChecks(await api.diagnose(true));}catch(error){setError(message(error));}finally{setBusy(false);}}}>{tr('operations.liveTest')}</ConfirmButton></Flex>
     </div>
     {error && <Notice error>{error}</Notice>}
     <div className="diagnostics" aria-live="polite">{checks.map(check => <div key={check.id}>
@@ -31,7 +33,6 @@ export function ConnectionsPage({ config, profiles, refresh, expired }: {
       <Code variant="ghost">namo login --config {quote(config.file)}</Code>
       <Text as="p" size="2" color="gray">{tr("connections.diagnosticsCheckEnvironmentConnectionWithoutCallingModel")}</Text>
     </div>
-    <AgentRegistrySettings config={config} refresh={refresh} expired={expired} />
     <div className="connection"><div><Heading as="h2" size="5">{tr("connections.feishuBot")}</Heading>
       <Text as="p" size="2" color="gray">{config.feishu.appId}  {config.feishu.access?tr("connections.organizationService"):tr("connections.pairedUsers",config.feishu.pairedUsers)} {config.feishu.secretConfigured ? tr("common.credentialsConfigured") : tr("connections.credentialsMissing")}</Text></div>
       <Link href={config.feishu.domain === 'lark' ? 'https://open.larksuite.com/app' : 'https://open.feishu.cn/app'} target="_blank" rel="noopener noreferrer">{tr("connections.openDeveloperConsole")}</Link>
@@ -45,5 +46,6 @@ export function ConnectionsPage({ config, profiles, refresh, expired }: {
     </div>}
     <ServiceAccessSettings config={config} refresh={refresh} expired={expired} />
     <GitHubSettings config={config} profiles={profiles} refresh={refresh} expired={expired} />
+    <OperationsPanel state={state} expired={expired}/>
   </>;
 }

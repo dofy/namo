@@ -56,7 +56,7 @@ export function parseConfig(d: any, absolute: string): Config {
   if(!access && github?.allowedUserIds.some(id=>!pairedUserIds.includes(id)))throw new Error('github_access_user_not_paired');
   const g = d.gitApprovals ?? {};
   if (!g || typeof g !== 'object' || Array.isArray(g)) throw new Error('gitApprovals must be an object');
-  if (d.agent !== undefined && d.agent !== 'codex') throw new Error(tr("config.codexSupportedClaudeCodeOpenclawGatewayNot"));
+  if (d.agent !== undefined && d.agent !== 'codex') throw new Error(tr("config.codexOnly"));
   for (const [name, value] of Object.entries({ dataDir: d.dataDir, 'feishu.appId': f.appId,
     'feishu.appSecret': f.appSecret, 'feishu.appSecretEnv': f.appSecretEnv, 'codex.bin': c.bin,
     'codex.home': c.home, 'codex.model': c.model, 'gitApprovals.gitBin': g.gitBin, 'gitApprovals.sshCommand': g.sshCommand })) {

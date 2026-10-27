@@ -79,18 +79,13 @@ Git 退出码不单独决定结果。每次尝试后都只读查询同一远端 
 
 `credentialHelpers` 只适用于 HTTPS，且只能选固定 allowlist；未配置时不继承任意 helper。`sshCommand` 如配置必须是绝对可执行普通文件。生产不应配置 `local-test`，它只用于隔离 bare repository 验收。
 
-本机 CLI：
+本机入口：`namo ui` → **连接设置 → 运行与维护 → Git 推送审批**。
 
-```text
-namo approval request <task> <remote> <refs/heads/branch>
-namo approval inspect <AP-id>
-namo approval approve <AP-id> --confirm
-namo approval reject <AP-id>
-namo approval execute <AP-id> --confirm
-namo approval reconcile <AP-id> --confirm
-```
+1. 选择已成功完成的任务、预配置 remote 和目标分支，生成审批预览。
+2. 核对项目、任务、提交、目标分支和有效期，明确确认批准或拒绝。
+3. 批准后再次确认执行，最多尝试一次推送。结果不明时只核对远端，不能自动重新推送。
 
-JSON 预览包含 task/project/cwd/policy/config revision、过期时间、精确 commit/ref、远端基线和 `limitedProtection`，但不输出 URL 凭据、helper 输出或命令 stderr。approve 与 execute 分离，二者都要求本机显式 `--confirm`。
+预览隐藏 URL 凭据和命令 stderr。批准与执行是独立操作，都有确认对话框；配置或审批版本变化时必须刷新后重审。此入口不放宽现有 Git 权限和单次执行限制。
 
 `ApprovalService` 为飞书控制层提供同步 `handleControl` 和异步 `pump`。Engine 只在入站已持久化且系统身份校验完成后，把以下精确私聊命令交给它；方法先用 SQLite claim + job 记录持久化再返回，不调用模型：
 
@@ -105,7 +100,7 @@ JSON 预览包含 task/project/cwd/policy/config revision、过期时间、精�
 
 ## 验证
 
-`test/approvals.test.ts`、`test/approval-service.test.ts`、`test/approval-cli.test.ts` 和 `test/approval-config.test.ts` 使用临时普通仓库和 bare 本地远端，不连接真实服务、不读取凭据：
+`test/approvals.test.ts`、`test/approval-service.test.ts`、`test/management-operations.test.ts` 和 `test/approval-config.test.ts` 使用临时普通仓库和 bare 本地远端，不连接真实服务、不读取凭据：
 
 - 预览与持久绑定、错误 owner/chat、批准/拒绝/过期/重复决定；
 - 精确 SHA 到精确分支的一次 push、远端 ref 回读和重复消费拒绝；

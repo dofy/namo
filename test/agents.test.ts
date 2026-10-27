@@ -29,6 +29,6 @@ test('agent discovery never executes a generic PATH binary or exposes inherited 
 touch '${marker}'
 `,{mode:0o700});
  const path=process.env.PATH;process.env.PATH=dir;
- try { const cursor=detectAgents().find(a=>a.id==='cursor');assert.equal(cursor?.installed,true);assert.equal(cursor?.supported,false);assert.equal(cursor?.version,undefined);assert.equal(existsSync(marker),false); }
+ try { const agents=detectAgents();assert.deepEqual(agents.map(a=>a.id),['codex']);assert.equal(agents[0].installed,false);assert.equal(existsSync(marker),false); }
  finally {if(path===undefined)delete process.env.PATH;else process.env.PATH=path;}
 });

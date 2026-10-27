@@ -1,4 +1,4 @@
-import type { ServiceAccessPatch } from '../src/ui-contract';
+import type { ApprovalAction, ApprovalList, ApprovalView, ServiceLog, MigrationInspection, ServiceAccessPatch } from '../src/ui-contract';
 import { t as tr, getLocale } from './i18n';
 import type { ApplyResult, AssistantView, AssistantValues, BrowseOptions, ConfigValues, ConfigView, GitHubConfigPatch, Dashboard, Diagnostic, Issue, ManagementState, MemoryMutation, MemoryViewState, PageResult, ProfileValues, ResolutionAction, SessionSummary, TaskDetail, TaskList, UserProfile } from '../src/ui-contract';
 
@@ -39,7 +39,11 @@ export const api = {
   resolve: (issue: Issue, action: ResolutionAction, note: string) => request('/api/resolve', {
     subject: issue.subject, stamp: issue.stamp, action, note, requestId: crypto.randomUUID(), acknowledgeDuplicate: action === 'retry',
   }),
-  diagnose: () => request<Diagnostic[]>('/api/diagnose', {}),
+  diagnose: (live = false) => request<Diagnostic[]>('/api/diagnose', { live, confirmed: live }),
+  logs: () => request<ServiceLog[]>('/api/logs'),
+  approvals: () => request<ApprovalList>('/api/approvals'),
+  approval: (input: ApprovalAction) => request<ApprovalView>('/api/approvals', input),
+  inspectMigration: (sourceFile: string, sourceInstanceId: string) => request<MigrationInspection>('/api/migration-inspect', { sourceFile, sourceInstanceId }),
   saveProfile: (configRevision: string, profile: UserProfile, patch: ProfileValues) => request<UserProfile>('/api/profiles', { configRevision, userId: profile.userId, version: profile.version, patch }),
 };
 export const message = (error: unknown) => error instanceof Error ? error.message : tr("api.actionIncompletePleaseTryAgain");

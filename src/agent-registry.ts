@@ -3,12 +3,14 @@ import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { Config } from './config.js';
 
-export type AgentAdapter = 'codex' | 'claude' | 'cursor';
+// Codex is the only installed adapter. Legacy bindings remain for session compatibility.
+export type AgentAdapter = 'codex';
 export interface AgentProfileInput { adapter: AgentAdapter; enabled?: boolean; bin?: string; model?: string; timeoutMs?: number }
 export interface AgentRegistryInput { defaultProfile?: string; memoryProfile?: 'codex'; profiles?: Record<string, AgentProfileInput> }
 export interface AgentRegistryConfig { defaultProfile: string; memoryProfile: 'codex'; profiles: Record<string, AgentProfileInput> }
-export interface AgentSelection { profileId: string; adapter: AgentAdapter; revision: string }
-export interface AgentProfile extends AgentSelection { id: string; enabled: boolean; bin: string; home: string; model?: string; timeoutMs: number; available: boolean }
+/** Persisted identity may name a retired adapter; resolution must reject it without fallback. */
+export interface AgentSelection { profileId: string; adapter: string; revision: string }
+export interface AgentProfile extends AgentSelection { adapter: AgentAdapter; id: string; enabled: boolean; bin: string; home: string; model?: string; timeoutMs: number; available: boolean }
 export type AgentConfig = Pick<Config, 'dataDir' | 'codex' | 'agents'>;
 export class AgentRegistryError extends Error { constructor(readonly code: string) { super(code); } }
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
@@ -30,6 +32,8 @@ export function parseAgentRegistry(value: unknown, configDir: string): AgentRegi
     if (p.enabled !== undefined && typeof p.enabled !== 'boolean') throw new AgentRegistryError('agent_enabled_invalid');
     for (const key of ['bin','model']) if (p[key] !== undefined && (typeof p[key] !== 'string' || !p[key].trim() || p[key].length > 4096 || /[\x00-\x1f]/.test(p[key]))) throw new AgentRegistryError('agent_option_invalid');
     if (p.timeoutMs !== undefined && (!Number.isSafeInteger(p.timeoutMs) || p.timeoutMs < 1000 || p.timeoutMs > 7200000)) throw new AgentRegistryError('agent_timeout_invalid');
+    // Retired preregistrations remain untouched on disk, but never become runtime profiles.
+    if (p.adapter !== 'codex') continue;
     profiles[id] = { adapter: p.adapter, enabled: p.enabled !== false,
       ...(p.bin ? { bin: p.bin.includes('/') || p.bin.includes('\\') ? p.bin.startsWith('~/') ? resolve(homedir(),p.bin.slice(2)) : resolve(configDir, p.bin) : p.bin } : {}),
       ...(p.model ? { model: p.model } : {}), ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}) };
@@ -43,7 +47,7 @@ export function getAgentRegistry(c: AgentConfig): { defaultProfile: string; memo
   const profile = (id: string, p: AgentProfileInput): AgentProfile => {
     const legacy = id === 'codex';
     const v = { id, profileId: id, adapter: p.adapter, enabled: legacy || p.enabled !== false,
-      bin: legacy ? c.codex.bin : p.bin ?? ({codex:'codex',claude:'claude',cursor:'agent'}[p.adapter]),
+      bin: legacy ? c.codex.bin : p.bin ?? 'codex',
       home: legacy ? c.codex.home : join(c.dataDir, 'agents', id),
       model: legacy ? c.codex.model : p.model, timeoutMs: legacy ? c.codex.timeoutMs : p.timeoutMs ?? c.codex.timeoutMs,
       available: p.adapter === 'codex' };

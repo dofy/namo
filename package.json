@@ -8,20 +8,11 @@
   },
   "scripts": {
     "build": "pnpm run build:server && pnpm run build:ui",
-    "start": "node dist/src/cli.js start",
-    "check": "node dist/src/cli.js check",
     "test": "pnpm run build && node --test --test-concurrency=4 dist/test/*.test.js",
     "smoke:codex": "pnpm run build && node dist/scripts/smoke-codex.js",
     "smoke:skills": "pnpm run build:server && node dist/scripts/smoke-skills.js",
-    "login": "node dist/src/cli.js login",
-    "status": "node dist/src/cli.js status",
-    "service:install": "node dist/scripts/launchd.js install",
-    "service:upgrade": "node dist/scripts/launchd.js upgrade",
-    "service:uninstall": "node dist/scripts/launchd.js uninstall",
     "prepack": "pnpm run build",
     "cli": "node bin/namo.js",
-    "init": "node bin/namo.js init",
-    "doctor": "node bin/namo.js doctor",
     "build:server": "tsc -p tsconfig.json",
     "typecheck:ui": "tsc -p tsconfig.ui.json",
     "build:ui": "pnpm run typecheck:ui && vite build",
@@ -29,8 +20,7 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.76.0",
-    "smol-toml": "1.9.1",
-    "@anthropic-ai/claude-agent-sdk": "0.3.311"
+    "smol-toml": "1.9.1"
   },
   "devDependencies": {
     "@radix-ui/themes": "3.3.0",
