@@ -2,7 +2,7 @@
 
 调研日期：2026-10-27。状态更新：优先完成官方 Codex 全流程，暂停其他 Agent 接入与新增试验。本文件保留有条件恢复的技术候选方案，历史官方资料与版本届时需重新核实。当前优先级以[开发计划](development-plan.md)为准。
 
-R7.1 注册表已交付，保持 Codex 配置 / session 兼容。Claude 实验保留在 `seven/r7-2-claude`（`073c50d`），其 SDK、worker 和依赖不合入主线；Kaon 部分验证通过、跨 worker 原生续接未通过，官方账号与 API key 未完成真实验收。Cursor 不继续开发。现阶段只保留内部 adapter 边界，不提供插件市场、动态安装加载或公共插件 SDK；Codex 完整闭环通过并有第二执行器需求后再重新评估。
+R7.1 注册表已交付，保持 Codex 配置 / session 兼容。Claude 实验提交 `073c50d` 按用户本次分支整合要求并入 main，保留 SDK、worker、测试和验证记录，生产执行入口仍禁用；Kaon 部分验证通过、跨 worker 原生续接未通过，官方账号与 API key 未完成真实验收。Cursor 不继续开发。现阶段只保留内部 adapter 边界，不提供插件市场、动态安装加载或公共插件 SDK；Codex 完整闭环通过并有第二执行器需求后再重新评估。
 
 ## 结论与选型
 
