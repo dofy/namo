@@ -7,7 +7,7 @@
 | 组件 | 固定版本 | 官方来源 | 本轮证据 |
 | --- | --- | --- | --- |
 | Claude Code CLI | `2.1.311` | [Claude Code](https://github.com/anthropics/claude-code)；[程序化 CLI 文档](https://code.claude.com/docs/en/headless) | 宿主 `~/.local/bin/claude` 的真实目标为官方版本目录；`--version` 成功 |
-| Claude Agent SDK (TypeScript) | `0.3.311` | npm `@anthropic-ai/claude-agent-sdk`；[Agent SDK 概览](https://code.claude.com/docs/en/agent-sdk/overview)；[官方 SDK 仓库](https://github.com/anthropics/claude-agent-sdk-typescript) | 仅在临时隔离目录以精确版本、禁用 lifecycle scripts 安装并核对 package name/version；不是项目依赖；随后只在用户单独授权的 Kaon 附加基线中调用 `query()`，见下文 |
+| Claude Agent SDK (TypeScript) | `0.3.311` | npm `@anthropic-ai/claude-agent-sdk`；[Agent SDK 概览](https://code.claude.com/docs/en/agent-sdk/overview)；[官方 SDK 仓库](https://github.com/anthropics/claude-agent-sdk-typescript) | 仅在临时隔离目录以精确版本、禁用 lifecycle scripts 安装并核对 package name/version；R7.0 时不是项目依赖；R7.2 隔离分支已精确锁定为依赖，在线实例不变。Kaon `query()` 附加基线见下文 |
 | Cursor Agent CLI | `2026.10.22-27dcf5f` | [官方安装说明](https://cursor.com/docs/cli/installation)；[ACP 文档](https://cursor.com/docs/cli/acp) | 下载并先检查 `https://cursor.com/install`，安装器 SHA-256 为 `77d44de2cb8d12245077e290870ca4085644c5cfd534ba96334c4d6eeb8f0a7c`；只安装到临时 HOME，实际下载地址位于官方 `downloads.cursor.com`；宿主 PATH 未安装 |
 
 Cursor 安装器和下载版本会更新；上面的 hash 是这次取样的证据，不是永久 allowlist。升级时必须重新获取官方安装说明、固定实际版本并重跑协议探针，不能只信任名为 `agent` 的通用可执行文件。
@@ -90,9 +90,22 @@ fixture 测试覆盖：已安装但未登录、SDK package identity、ACP initia
 R7.0 **未全通过**。当前可以合入 R7.1 的仅是安全探针、版本固定、Cursor ACP initialize 证据，以及明确标注为 third-party-only 的 Kaon session / bounded local cancel 证据。以下项目是启用 R7.2 / R7.3 adapter 之前的阻断门槛：
 
 - Claude 官方认证与官方 provider query 尚未验证；Kaon 不能成为发布默认或失败 fallback。
-- Claude Kaon 的工具调用没有发生，因此 permission request / allow-once / reject-once、工具证据和实际写入效果均未验证。
+- R7.2 后续 Kaon 实测已通过 Read/Edit 单次允许、拒绝、工具结果与文件实效；Write / AskUserQuestion 未在本轮 CLI 初始化中公布，通用 shell、工具执行中取消、提问与持久等待仍未验证。新 worker 的精确恢复被上游拒绝，不能沿用旧 R7.0 的成功结论开放新适配器。
 - Cursor 没有专用认证；浏览器完成不能覆盖 CLI Keychain 保存失败，ACP session/new/load/prompt/cancel/request_permission 均未实测。
 - 两后端都没有验证用户提问、计划确认、live callback 与 durable resume 的转换；没有验证等待中 receiver/worker 重启、超时、重复回答或崩溃后的副作用核对。
 - 两后端都没有 provider 侧 cancel receipt；Claude 的 bounded abort 只证明 SDK iterator 与 owned process 有界结束。适配器必须明确披露这种能力限制，不能声称远端已停止计费或副作用已撤销；不要求虚构供应商未提供的 receipt。
 
 在这些门槛完成前，注册表能力应保持 `unverified` / `unavailable`，runtime factory 应拒绝启动对应 adapter，而不是根据文档、initialize advertisement、fixture 或第三方会话成功自动放宽。
+
+
+## R7.2 后续隔离结果（2026-10-27）
+
+保持 SDK 0.3.311 / CLI 2.1.311 和用户原有 Kaon 路由、模型；没有换模型或 fallback。真实环境与 fixture 分开记录，详见[验证记录](archive/r7-2-claude-validation-20261027.md)。
+
+- 首次精确文本回复通过。
+- 新 worker 的精确 session 恢复未通过：本地 session 已写入且绑定正确，但多轮请求收到上游 `invalid_request` / `reasoning_extraction` 拒绝。以明确的用户项目代号代替 token 用语后仍拒绝。固定错误分类为 `claude_provider_policy_rejection`，未放宽权限或重放副作用；具体拒绝原因仍需上游核实。
+- 初始化实际公布 Read / Edit / Bash；文件验证模式收窄为 Read / Edit。Write 和 AskUserQuestion 未公布，不能按请求列表推断支持。
+- Read/Edit 触发单次授权，允许后文件精确改为预期内容；拒绝后原文件保留。最初测试脚本混用了 macOS `/var` 和 `/private/var` 路径，已在比较前取 realpath 并重验通过。
+- 工具进展和结构化工具结果已收到，未输出工具原文或思考。
+- 初始化后取消，本机进程在约 455 ms 内结束；未证明工具执行中的取消或 provider 停止计费。独立 fixture 验证了进程组后代清理。
+- 官方账号 / API key 只有配置隔离与 fixture 验证，未登录、调用官方模型或声称正式兼容。Cursor 未操作。注册表仍拒绝两者生产执行。

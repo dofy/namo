@@ -1,6 +1,6 @@
 # 多执行器接入、切换与任务路由计划
 
-调研日期：2026-10-27。范围为 Codex、Claude 与 Cursor 的本地执行接入。本文维护分期方案。R7.1 注册表已合并推送并升级本机实例，Claude/Cursor 运行适配器仍待 R7.2/R7.3；R7.0 实测及缺口见[兼容性基线](agent-compatibility.md)，配置契约见[执行器注册表](agent-registry.md)。用户已授权 R7.1 合并、推送和现有本机服务升级；Claude/Cursor 执行保持关闭，npm 发布仍需另行确认。此前授权的 Claude-only Kaon 兼容性试验不改变 Codex 官方认证路径。
+调研日期：2026-10-27。范围为 Codex、Claude 与 Cursor 的本地执行接入。本文维护分期方案。R7.1 注册表已合并推送并升级本机实例，Claude 的隔离 SDK worker 已进入 R7.2 验证，生产桥接与 Cursor 执行仍待完成；R7.0 实测及缺口见[兼容性基线](agent-compatibility.md)，配置契约见[执行器注册表](agent-registry.md)。R7.1 已按当时授权完成合并、推送和本机升级；R7.2 本轮仅隔离开发与 Kaon 验证，不切换服务、推送或发布；Claude/Cursor 执行保持关闭，npm 发布仍需另行确认。此前授权的 Claude-only Kaon 兼容性试验不改变 Codex 官方认证路径。
 
 ## 结论与选型
 

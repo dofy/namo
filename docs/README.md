@@ -27,6 +27,7 @@
 - [首次反馈与执行过程卡片计划](progress-feedback-plan.md)：首卡提速、公开进展和工具摘要已升级本机服务；图片预览与流式更新留后续。
 - [多执行器接入与任务路由计划](agent-adapters-plan.md)：Claude / Cursor 接入、能力差异、切换和交接的分期计划。
 - [执行器注册表](agent-registry.md) · [兼容性验证基线](agent-compatibility.md)：R7.1 配置和安全边界、R7.0 的实测证据与缺口。
+- [Claude 隔离适配器](claude-adapter.md)：认证边界、验证命令及生产开放前的门槛。
 - [品牌资源](brand.md) · [字体与许可证](../assets/fonts/README.md)
 
 ## 历史记录
