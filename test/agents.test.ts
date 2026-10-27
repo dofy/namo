@@ -154,8 +154,10 @@ test('registry migration rebuild preserves every legacy wait field and foreign-k
     INSERT INTO task_waits SELECT * FROM backup_waits; DROP TABLE backup_waits;
     DROP TABLE execution_bindings; PRAGMA user_version=8;`);
   const before=JSON.stringify(store.db.prepare('SELECT * FROM task_waits').all());
+  store.db.exec('UPDATE task_waits SET rowid=42');
   const upgraded=new Store(join(project,'..','bot.sqlite'));
   assert.equal(JSON.stringify(upgraded.db.prepare('SELECT * FROM task_waits').all()),before);
+  assert.equal(upgraded.db.prepare('SELECT rowid FROM task_waits').get()?.rowid,42);
   assert.deepEqual(upgraded.db.prepare('PRAGMA foreign_key_check').all(),[]);
   assert.equal(new Tasks(upgraded).get(task.id)?.state,'running');upgraded.close();
 });

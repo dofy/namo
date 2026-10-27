@@ -2,7 +2,7 @@
 
 Namo 负责身份、权限、任务调度和交付，官方 Codex app-server 负责推理与工具执行。当前只支持 Codex；其他 Agent 仅保留内部扩展接口。
 
-技术栈：TypeScript、Node.js 24.15+、SQLite、飞书官方 SDK；本地 UI 使用 React、Radix Themes、Lucide 和 Vite。schema 定义在 [schema-migrations.ts](../src/schema-migrations.ts)，当前为 11。
+技术栈：TypeScript、Node.js 24.15+、SQLite、飞书官方 SDK；本地 UI 使用 React、Radix Themes、Lucide 和 Vite。schema 与版本迁移统一定义在 [schema-migrations.ts](../src/schema-migrations.ts)，当前为 12。
 
 ## 主链路
 
@@ -44,6 +44,8 @@ flowchart LR
 ## 关键设计
 
 **数据与恢复。** SQLite 保存 inbox、task、run、wait、outbox 和审计。取消、回答、恢复以事务顺序决定归属；心跳过期不转移执行权，失联进程及后代核对完成前保留目录占位。模型完成、平台接受、用户收件是三类事实，不能相互推断。
+
+迁移在同一事务中按版本执行并更新版本号，失败整体回滚；只读连接不迁移，最新版本直接打开。v12 补齐任务运行、runner 事件、等待、待发送消息及键值前缀查询索引；结构设计以当前业务需求为准，历史转换集中在迁移入口。
 
 **上下文。** 每次运行冻结输入、项目、权限、助手设置和记忆版本。普通配置保存不改变既有运行；组织授权撤销仍会阻断执行及交付。worker 通过私有管道接收生效配置，模型不继承宿主飞书 / GitHub 凭据。
 
