@@ -87,8 +87,14 @@ export async function pollAndResume(store: Store, adapter: GitHubObservationAdap
       const ended=endExternalTaskWait(store,taskWaitId,external.id,'timed_out',currentTime());
       actions.push({externalWaitId:external.id,taskWaitId,action:ended?'timed_out':'deferred'});continue;
     }
-    try {if(currentAdapter().authorize?.(external.target,external)!==external.observation?.authorizationScope)
-      throw new ExternalWaitBridgeError('external_wait_access_changed');}
+    try {
+      const current = currentAdapter();
+      if(current.authorize?.(external.target,external)!==external.observation?.authorizationScope)
+        throw new ExternalWaitBridgeError('external_wait_access_changed');
+      if (external.observation) await current.validateResume?.(external.observation,external.requiredChecks,external,Date.now()+15_000);
+      if(currentAdapter().authorize?.(external.target,external)!==external.observation?.authorizationScope)
+        throw new ExternalWaitBridgeError('external_wait_access_changed');
+    }
     catch {actions.push({externalWaitId:external.id,taskWaitId,action:'deferred'});continue;}
     let resumed = false;
     const settledAt = currentTime();

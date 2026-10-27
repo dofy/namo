@@ -136,6 +136,26 @@ test('a passing observation that returns after expiry times out without queuing 
 const privateCredential='bridge-private-fixture-token-49671';
 const privateAccess:GitHubAccessConfig={token:privateCredential,repositories:['octo-org/app'],allowedUserIds:['alice']};
 
+test('gh ready results recheck live access after restart and cannot resume after logout or config revocation during that check',async t=>{
+ for(const scenario of ['valid','logout','revoked-during-check','rerun'] as const)await t.test(scenario,async inner=>{
+  const f=fixture(inner),config:GitHubAccessConfig={source:'gh',localGh:{executable:'/usr/bin/gh',configDir:'/tmp/gh',login:'owner',userId:42},repositories:[],allowedUserIds:['alice']};
+  let tokenAvailable=true,revoked=false,rerun=false,checking=false;
+  const fetcher:typeof fetch=async url=>{
+   if(String(url).endsWith('/user'))return Response.json({login:'owner',id:42});
+   if(checking&&scenario==='revoked-during-check')revoked=true;
+   return Response.json(String(url).includes('/check-runs?')?{check_runs:[{name:'build',app:{id:123},status:rerun?'in_progress':'completed',conclusion:rerun?null:'success'}]}:{head:{sha:target.headSha},state:'open'});
+  };
+  const fresh=()=>new ScopedGitHubAdapter(f.store,revoked?undefined:config,fetcher,async()=>{if(!tokenAvailable)throw Error('logged out');return privateCredential;});
+  await new ExternalWaits(f.store).poll(f.externalId,fresh(),2000,()=>2000);f.restart();
+  assert.equal(new ExternalWaits(f.store).get(f.externalId)?.state,'ready');
+  tokenAvailable=scenario!=='logout';rerun=scenario==='rerun';checking=true;
+  const actions=await pollAndResume(f.store,fresh(),3000,()=>3000,fresh);
+  assert.equal(actions[0].action,scenario==='valid'?'resumed':'deferred');
+  assert.equal(!!f.store.get(`external-result:${f.externalId}`),scenario==='valid');
+  assert.doesNotMatch(JSON.stringify(new ExternalWaits(f.store).get(f.externalId)),new RegExp(privateCredential));
+ });
+});
+
 async function privateReady(f:ReturnType<typeof fixture>):Promise<void>{
  let requests=0;
  const fetcher:typeof fetch=async(url,options)=>{

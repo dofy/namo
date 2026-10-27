@@ -82,7 +82,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         const input=await body(req);
         if(path==='/api/assistant')return send(200,manager.assistant(input.action,input.version,input.values));
         if(path==='/api/memories')return send(200,manager.memory(input.action,input.ownerId,input.input));
-        if(path==='/api/config')return send(200,manager.save(input.revision,input.patch));
+        if(path==='/api/config')return send(200,await manager.saveGitHub(input.revision,input.patch));
         if(path==='/api/apply')return send(200,await manager.apply(input.revision,input.confirmed===true));
         if(path==='/api/diagnose')return send(200,await manager.diagnose());
         if(path==='/api/profiles')return send(200,manager.saveProfile(input.configRevision,input.userId,input.version,input.patch));

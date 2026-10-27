@@ -18,12 +18,14 @@ import { Profiles, ProfileError } from './profiles.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
 import { Browse, BrowseError } from './browse.js';
 import { parseGitHubAccessConfig, publicGitHubAccess } from './github-access.js';
+import { discoverLocalGh, type LocalGhConfig } from './github-local.js';
 
 export class ManagementError extends Error { constructor(message:string,readonly status=409){super(message);} }
 export interface ManagementDeps {
   status: typeof serviceStatus; action: typeof serviceAction; wait: typeof waitForService; diagnose: typeof doctor;
+  localGh: typeof discoverLocalGh;
 }
-const defaults:ManagementDeps={status:serviceStatus,action:serviceAction,wait:waitForService,diagnose:doctor};
+const defaults:ManagementDeps={status:serviceStatus,action:serviceAction,wait:waitForService,diagnose:doctor,localGh:discoverLocalGh};
 export class Management {
   readonly dataDir: string;
   private deps:ManagementDeps;
@@ -228,7 +230,19 @@ export class Management {
       return this.write(s=>new Profiles(s,{channel:f.domain??'feishu',appId:f.appId,userId}).update(version,patch,{source:'local-owner'}));
     }catch(e){if(e instanceof ProfileError)throw new ManagementError(e.message);throw e;}finally{release();}
   }
-  save(revision:string,patch:any):any {
+  async saveGitHub(revision:string,patch:any):Promise<any> {
+    if (patch?.github?.source!=='gh') return this.save(revision,patch);
+    const {raw,revision:current}=this.source();
+    if (revision!==current) throw new ManagementError(tr('配置已被其他页面或程序修改，请刷新后重试'));
+    const owners=patch.github.allowedUserIds;
+    if (!Array.isArray(owners)||owners.length!==1||!raw.feishu?.allowedUserIds?.includes(owners[0]))
+      throw new ManagementError(tr('本机 GitHub 登录只能绑定一个已配对用户'),400);
+    let local:LocalGhConfig;
+    try {local=await this.deps.localGh();}
+    catch {throw new ManagementError(tr('无法使用本机 GitHub 登录，请先在本机运行 gh auth login 后重试'),400);}
+    return this.save(revision,patch,local);
+  }
+  save(revision:string,patch:any,localGh?:LocalGhConfig):any {
     const release=acquireLock(join(this.dataDir,'config-edit.lock'));
     try {
       const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError(tr("配置已被其他页面或程序修改，请刷新后重试"));
@@ -245,12 +259,22 @@ export class Management {
         if(patch.newSecret)next.feishu.appSecret=patch.newSecret;
       }
       if(patch.github!==undefined){
-        if(!patch.github||typeof patch.github!=='object'||Array.isArray(patch.github)||Object.keys(patch.github).some(k=>!['repositories','allowedUserIds'].includes(k)))throw new ManagementError(tr('GitHub 配置无效'),400);
+        if(!patch.github||typeof patch.github!=='object'||Array.isArray(patch.github)||Object.keys(patch.github).some(k=>!['source','repositories','allowedUserIds'].includes(k)))throw new ManagementError(tr('GitHub 配置无效'),400);
         next.github={...next.github,...patch.github};
+        if (patch.github.source==='gh') {
+          if (!localGh || patch.newGithubToken || patch.clearGithubToken || patch.github.repositories?.length) throw new ManagementError(tr('GitHub 配置无效'),400);
+          next.github={source:'gh',localGh,repositories:[],allowedUserIds:patch.github.allowedUserIds};
+        } else if (patch.github.source==='anonymous') {
+          if (patch.newGithubToken) throw new ManagementError(tr('GitHub 配置无效'),400);
+          next.github={source:'anonymous',repositories:[],allowedUserIds:[]};
+        } else if (patch.github.source==='token') {
+          delete next.github.localGh;delete next.github.source;
+        }
       }
       if(patch.clearGithubToken!==undefined&&typeof patch.clearGithubToken!=='boolean')throw new ManagementError(tr('GitHub 配置无效'),400);
       if(patch.newGithubToken!==undefined&&(typeof patch.newGithubToken!=='string'||patch.newGithubToken.length>4096))throw new ManagementError(tr('GitHub 凭据格式无效'),400);
       if(patch.clearGithubToken&&patch.newGithubToken)throw new ManagementError(tr('不能同时清除和更新 GitHub 凭据'),400);
+      if(next.github?.source==='gh'&&(patch.newGithubToken||patch.clearGithubToken))throw new ManagementError(tr('GitHub 配置无效'),400);
       if(patch.newGithubToken||patch.clearGithubToken){next.github??={};delete next.github.tokenEnv;delete next.github.token;
         if(patch.newGithubToken)next.github.token=patch.newGithubToken;}
       try{parseConfig(next,this.file);}catch{throw new ManagementError(tr("配置未通过校验：请核对项目目录、默认项目、权限、并发和超时；原配置没有覆盖"));}

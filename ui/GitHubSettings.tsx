@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { Badge, Button, Checkbox, Flex, Heading, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { ConfigView, GitHubConfigPatch, ProfileState } from '../src/ui-contract';
 import { api, ApiError, message } from './api';
-import { ConfirmButton, Field, Notice } from './components';
+import { Choice, ConfirmButton, Field, Notice } from './components';
 import { Icon } from './Icon';
 import { t as tr } from './i18n';
 
-interface Draft { repositories: string; allowedUserIds: string[]; token: string; clearToken: boolean }
-const fromConfig = (config: ConfigView): Draft => ({ repositories: (config.github?.repositories ?? []).join('\n'),
+interface Draft { source:'gh'|'token'|'anonymous'; repositories: string; allowedUserIds: string[]; token: string; clearToken: boolean }
+const fromConfig = (config: ConfigView): Draft => ({ source:config.github?.credentialSource==='gh'?'gh':config.github?.credentialConfigured||config.github?.repositories.length?'token':'anonymous', repositories: (config.github?.repositories ?? []).join('\n'),
   allowedUserIds: [...(config.github?.allowedUserIds ?? [])], token: '', clearToken: false });
 
 export function GitHubSettings({ config, profiles, refresh, expired }: {
@@ -57,12 +57,13 @@ export function GitHubSettings({ config, profiles, refresh, expired }: {
   }
   async function save() {
     if (!dirty || busy || locked || conflict) return;
-    const repositories = [...new Set(draft.repositories.split('\n').map(value => value.trim().toLowerCase()).filter(Boolean))];
+    const repositories = draft.source==='token'?[...new Set(draft.repositories.split('\n').map(value => value.trim().toLowerCase()).filter(Boolean))]:[];
     if (repositories.length > 200 || repositories.some(value => !/^[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9_.-]{1,100}$/.test(value)
       || ['.', '..'].includes(value.split('/')[1]!))) {
       setError('仓库请按 owner/repo 每行一个填写，不支持网址或通配符。'); return;
     }
-    const patch: GitHubConfigPatch = { github: { repositories, allowedUserIds: draft.allowedUserIds },
+    if (draft.source==='gh' && draft.allowedUserIds.length!==1) {setError('本机 GitHub 登录只能绑定一个已配对用户');return;}
+    const patch: GitHubConfigPatch = { github: { source:draft.source, repositories, allowedUserIds: draft.source==='anonymous'?[]:draft.allowedUserIds },
       ...(draft.token ? { newGithubToken: draft.token } : {}), ...(draft.clearToken ? { clearGithubToken: true } : {}) };
     setBusy(true); setError(''); setNotice('');
     try {
@@ -78,15 +79,30 @@ export function GitHubSettings({ config, profiles, refresh, expired }: {
   return <section className="form-section profiles-page" aria-labelledby="github-settings-title">
     <Flex align="center" justify="between" gap="3" wrap="wrap">
       <Heading as="h2" size="5" id="github-settings-title">GitHub</Heading>
-      <Badge color={config.github?.credentialConfigured ? 'green' : 'gray'}>{config.github?.credentialConfigured ? tr('凭据已配置') : tr('仅公开仓库')}</Badge>
+      <Badge color={config.github?.credentialConfigured ? 'green' : 'gray'}>{config.github?.credentialSource==='gh'?tr('本机登录已配置'):config.github?.credentialConfigured ? tr('凭据已配置') : tr('仅公开仓库')}</Badge>
     </Flex>
-    <Text as="p" size="2" color="gray">{tr('等待私有仓库 PR 的检查结果。凭据仅用于所选用户的私聊和下列仓库。')}</Text>
-    <Text as="p" size="1" color="gray">{tr('请使用仅开放所选仓库的细粒度令牌，授予 Checks、Commit statuses 和 Pull requests 的只读权限。')}</Text>
+    <Text as="p" size="2" color="gray">{tr('读取 GitHub PR 检查结果，不授权推送、合并或部署。')}</Text>
     {conflict && <Notice>{tr('GitHub 配置已被修改，当前草稿保留。请核对后重新载入已保存配置。')}</Notice>}
     {locked && <Notice error>{tr('本机授权已过期，请重新打开工作台后再修改 GitHub 配置。')}</Notice>}
     {error && <Notice error>{tr(error)}</Notice>}{notice && <Notice>{tr(notice)}</Notice>}
     <form onSubmit={event => { event.preventDefault(); void save(); }}>
       <fieldset disabled={busy || locked}>
+        <Field label={tr('GitHub 登录方式')} htmlFor="github-source">
+          <Choice id="github-source" value={draft.source} disabled={busy||locked} onChange={source=>edit({source:source as Draft['source'],token:'',clearToken:false,
+            allowedUserIds:source==='gh'?(draft.allowedUserIds.length===1?draft.allowedUserIds:paired.length===1?[paired[0].userId]:[]):draft.allowedUserIds})}
+            options={[{value:'anonymous',label:tr('仅公开仓库')},{value:'gh',label:tr('本机 GitHub 登录（推荐）')},{value:'token',label:tr('独立令牌（高级）')}]} />
+        </Field>
+        {draft.source==='gh' && <>
+          <Text as="p" size="2" color="gray">{tr('本机登录可读取该账号有权访问的仓库，只对所选用户的私聊生效。')}</Text>
+          <Text as="p" size="1" color="gray">{tr('保存时连接本机 gh 当前账号。无需填写令牌或仓库白名单；退出登录后停止私有读取。')}</Text>
+          {config.github?.localGh && <Text as="p" size="2">{tr('已选择的 GitHub 账号：{0}',config.github.localGh.login)}</Text>}
+          <Field label={tr('允许使用的配对用户')} htmlFor="github-owner">
+            <Choice id="github-owner" value={draft.allowedUserIds[0]??''} disabled={!profiles.available||busy||locked} onChange={id=>edit({allowedUserIds:id?[id]:[]})}
+              options={[{value:'',label:tr('请选择用户')},...paired.map(p=>({value:p.userId,label:p.name||p.userId}))]} />
+          </Field>
+        </>}
+        {draft.source==='token' && <>
+        <Text as="p" size="1" color="gray">{tr('请使用仅开放所选仓库的细粒度令牌，授予 Checks、Commit statuses 和 Pull requests 的只读权限。')}</Text>
         <div className="form-grid">
           <Field label={tr('允许的 GitHub 仓库')} htmlFor="github-repositories">
             <TextArea id="github-repositories" rows={4} maxLength={28400} placeholder="owner/repository" spellCheck={false}
@@ -124,6 +140,7 @@ export function GitHubSettings({ config, profiles, refresh, expired }: {
           <Checkbox checked={draft.clearToken} onCheckedChange={checked => edit({ clearToken: checked === true, token: '' })} />
           {tr('清除已保存的 GitHub 凭据')}
         </Flex></Text>}
+        </>}
       </fieldset>
       <Flex gap="3" mt="5" wrap="wrap" align="center">
         <Button type="submit" loading={busy} disabled={!dirty || locked || conflict}><Icon name="save" />{tr('保存 GitHub 配置')}</Button>
