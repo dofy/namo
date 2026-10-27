@@ -2,7 +2,7 @@
 
 Namo 负责身份、权限、任务调度和交付，官方 Codex app-server 负责推理与工具执行。当前只支持 Codex；其他 Agent 仅保留内部扩展接口。
 
-技术栈：TypeScript、Node.js 24.15+、SQLite、飞书官方 SDK；本地 UI 使用 React、Radix Themes、Lucide 和 Vite。schema 与版本迁移统一定义在 [schema-migrations.ts](../src/schema-migrations.ts)，当前为 12。
+技术栈：TypeScript、Node.js 24.15+、SQLite、飞书官方 SDK；本地 UI 使用 React、Radix Themes、Lucide 和 Vite。当前 schema 为 13：表与索引集中在 [schema.ts](../src/schema.ts)，初始化和版本检查集中在 [schema-migrations.ts](../src/schema-migrations.ts)。
 
 ## 主链路
 
@@ -45,13 +45,23 @@ flowchart LR
 
 **数据与恢复。** SQLite 保存 inbox、task、run、wait、outbox 和审计。取消、回答、恢复以事务顺序决定归属；心跳过期不转移执行权，失联进程及后代核对完成前保留目录占位。模型完成、平台接受、用户收件是三类事实，不能相互推断。
 
-迁移在同一事务中按版本执行并更新版本号，失败整体回滚；只读连接不迁移，最新版本直接打开。v12 补齐任务运行、runner 事件、等待、待发送消息及键值前缀查询索引；结构设计以当前业务需求为准，历史转换集中在迁移入口。
+开发期采用新的 v13 基线，不再维护 v0–12 的兼容转换。空库在一个事务中初始化，失败整体回滚；旧库明确拒绝写入，UI 和升级入口同样阻止不兼容版本，绝不自动删库。重建步骤见[运维指南](operations.md)。
+
+| 数据域 | 独立表与约束 |
+| --- | --- |
+| 长期记忆 | `memories` 存归属、范围和版本；`memory_contents` 通过版本外键关联正文，授权后才读取；变更、运行快照和禁止复活指纹分别保存 |
+| 自动提取 | `memory_jobs` 存状态、重试和租约；来源去重键与来源消息分别关联，不伪装成模型运行 ID |
+| Git 审批 | `git_approvals` 关联任务并冻结目标与权限；`approval_jobs` 关联入站命令，按状态调度 |
+| 外部等待 | `external_waits` 关联任务 / 运行；同任务只能有一个活动等待，`external_wait_links` 与人工等待一对一关联 |
+| 文件交付 | `artifact_intents` 关联任务指令，`artifact_deliveries` 保存文件身份、发送 UUID 和回执状态 |
+
+新业务表使用 STRICT 类型、外键和状态约束；状态队列、归属查询和历史排序有对应索引。JSON 仅用于有界列表、证据和冻结快照；这些业务记录不再存入 `settings`。
 
 **上下文。** 每次运行冻结输入、项目、权限、助手设置和记忆版本。普通配置保存不改变既有运行；组织授权撤销仍会阻断执行及交付。worker 通过私有管道接收生效配置，模型不继承宿主飞书 / GitHub 凭据。
 
 **记忆。** 默认在前台任务空闲时，从直接用户消息提取有证据的长期事实；独立临时 Codex 轮次关闭项目工具、hooks、插件及沙箱网络。`global / local` 知识层级与 `shared / private / chat` 披露范围、来源项目授权分别检查；全局存储不代表公开。临时要求不写长期记忆，迁移候选须人工启用。既有 session 与历史副本不会随删除自动清除。
 
-**后台工作。** [background-work](../src/background-work.ts) 仅为记忆提取和产物交付提供有索引的调度视图；原始内容、队列和审计仍在持久账本。它不是定时任务或自主派工系统。
+**后台工作。** [background-work](../src/background-work.ts) 直接查询业务队列索引，不再用触发器维护重复的调度表。审批执行中断、文件发送结果不明仍进入 `unknown`，不自动重试。
 
 **反馈。** 默认首卡合并窗口 200 ms、进展更新间隔 5 s、状态确认间隔 30 s；这是调度配置，不是客户端时延承诺。慢表情和卡片更新不挡最终结果；只汇总真实公开事件，不展示原始思维链或编造完成比例。图片预览与流式卡片尚未实现。
 

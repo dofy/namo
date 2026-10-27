@@ -1,11 +1,8 @@
+import { memoryTable } from './business-storage.js';
 import { randomBytes, createHash } from 'node:crypto';
 import type { Store } from './store.js';
 import { makeRedactor } from './safety.js';
 
-export const MEMORY_META_PREFIX = 'memory:meta:';
-export const MEMORY_CONTENT_PREFIX = 'memory:content:';
-export const MEMORY_CHANGE_PREFIX = 'memory:change:';
-export const MEMORY_SNAPSHOT_PREFIX = 'memory:snapshot:';
 
 export const MEMORY_LIMITS = Object.freeze({
   entryChars: 3_000,
@@ -63,11 +60,10 @@ export interface MemoryMetadata {
   expiresAt: number | null;
   visibility?: MemoryVisibility;
   /** Host-owned provenance, independent of model labels. */
-  resourceProjects?: string[];
+  resourceProjects: string[];
   automatic?: { key: string; sourceMessageIds: string[]; evidence: string[]; observedAt: number };
 }
 
-interface StoredMemoryContent { schema: 1; version: number; text: string }
 
 export interface MemoryRecord extends MemoryMetadata { text: string }
 
@@ -251,15 +247,15 @@ function parseJson(raw: string, label: string): Record<string, unknown> {
 
 function parseMeta(raw: string): MemoryMetadata {
   const value = parseJson(raw, 'memory metadata');
-  const fields = ['schema', 'id', 'version', 'kind', 'status', 'scope', 'source', 'dependsOn', 'contentChars', 'createdAt', 'updatedAt', 'expiresAt'];
-  if (Object.keys(value).some(key => ![...fields, 'visibility', 'automatic', 'resourceProjects'].includes(key)) || fields.some(key => !(key in value)) || value.schema !== 1 || !idPattern.test(String(value.id)) || !Number.isSafeInteger(value.version) || Number(value.version) < 1
+  const fields = ['schema', 'id', 'version', 'kind', 'status', 'scope', 'source', 'dependsOn', 'contentChars', 'createdAt', 'updatedAt', 'expiresAt', 'resourceProjects'];
+  if (Object.keys(value).some(key => ![...fields, 'visibility', 'automatic'].includes(key)) || fields.some(key => !(key in value)) || value.schema !== 1 || !idPattern.test(String(value.id)) || !Number.isSafeInteger(value.version) || Number(value.version) < 1
     || !kinds.includes(value.kind as MemoryKind) || !statuses.includes(value.status as MemoryStatus) || !Array.isArray(value.dependsOn)
     || !Number.isSafeInteger(value.contentChars) || Number(value.contentChars) < 0 || Number(value.contentChars) > MEMORY_LIMITS.entryChars
     || !Number.isSafeInteger(value.createdAt) || Number(value.createdAt) < 1 || !Number.isSafeInteger(value.updatedAt) || Number(value.updatedAt) < Number(value.createdAt)
     || !(value.expiresAt === null || (Number.isSafeInteger(value.expiresAt) && Number(value.expiresAt) > 0))) {
     throw new MemoryError('storage_invalid', 'Stored memory metadata uses an unsupported format');
   }
-  if (value.resourceProjects !== undefined && (!Array.isArray(value.resourceProjects) || value.resourceProjects.some(p => typeof p !== 'string' || !p || p.length > 48))) throw new MemoryError('storage_invalid', 'Invalid memory resource provenance');
+  if ((!Array.isArray(value.resourceProjects) || value.resourceProjects.some(p => typeof p !== 'string' || !p || p.length > 48))) throw new MemoryError('storage_invalid', 'Invalid memory resource provenance');
   const dependsOn = value.dependsOn.map(validateRef);
   if ((value.kind !== 'handoff' && dependsOn.length > 0) || new Set(dependsOn.map(ref => ref.id)).size !== dependsOn.length) {
     throw new MemoryError('storage_invalid', 'Stored memory lineage is invalid');
@@ -283,7 +279,7 @@ function parseMeta(raw: string): MemoryMetadata {
   return { schema: 1, id: String(value.id), version: Number(value.version), kind: value.kind as MemoryKind, status: value.status as MemoryStatus,
     scope: validateScope(value.scope), source: validateSource(value.source), dependsOn, contentChars: Number(value.contentChars),
     createdAt: Number(value.createdAt), updatedAt: Number(value.updatedAt), expiresAt: value.expiresAt === null ? null : Number(value.expiresAt),
-    ...(visibility ? {visibility} : {}), ...(automatic ? {automatic} : {}), ...(value.resourceProjects ? {resourceProjects: [...value.resourceProjects as string[]]} : {}) };
+    ...(visibility ? {visibility} : {}), ...(automatic ? {automatic} : {}), resourceProjects: [...value.resourceProjects as string[]] };
 }
 
 function parseContent(raw: string, expected: MemoryMetadata): string {
@@ -307,7 +303,7 @@ function coversScope(source:MemoryScope,target:MemoryScope,privateChat:boolean):
 function freezeRecord<T extends MemoryRecord>(record: T): T {
   Object.freeze(record.scope); Object.freeze(record.source); record.dependsOn.forEach(Object.freeze); Object.freeze(record.dependsOn);
   if(record.visibility)Object.freeze(record.visibility);
-  if(record.resourceProjects)Object.freeze(record.resourceProjects);
+  Object.freeze(record.resourceProjects);
   if(record.automatic){Object.freeze(record.automatic.sourceMessageIds);Object.freeze(record.automatic.evidence);Object.freeze(record.automatic);}
   return Object.freeze(record);
 }
@@ -344,7 +340,7 @@ export class Memories {
     const visibility: MemoryVisibility = {privacy:input.privacy,chatKey:input.privacy === 'chat' ? actor.chatKey : null};
     return this.store.transaction(() => {
       if(this.blockedAutomatic(actor.ownerId,text,evidence))return;
-      const related=this.allMeta().filter(meta=>meta.scope.ownerId===actor.ownerId&&meta.automatic?.key===key
+      const related=this.allMeta(actor.ownerId).filter(meta=>meta.scope.ownerId===actor.ownerId&&meta.automatic?.key===key
         &&(input.kind!=='project_knowledge'||meta.kind!=='project_knowledge'||meta.scope.project===project
           ||meta.automatic.evidence.some(hash=>evidence.includes(hash))));
       if(related.some(meta=>meta.status==='deleted'||meta.status==='disabled'))return;
@@ -369,7 +365,7 @@ export class Memories {
         const automatic={key,observedAt:input.observedAt,sourceMessageIds:[...new Set([...before.automatic!.sourceMessageIds,...sourceMessageIds])].slice(-16),
           evidence:[...new Set([...before.automatic!.evidence,...evidence])].slice(-16)};
         const meta={...before,automatic};
-        this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(meta),`${MEMORY_META_PREFIX}${meta.id}`);
+        memoryTable(this.store.db).save(meta);
         return freezeRecord({...meta,text});
       }
       this.assertCapacity(scope, count(text), before);
@@ -399,7 +395,7 @@ export class Memories {
       do { id = `M-${randomBytes(8).toString('hex').toUpperCase()}`; }
       while (this.meta(id));
       const meta: MemoryMetadata = { schema: 1, id, version: 1, kind: input.kind, status: input.pendingReview ? 'pending_review' : 'active',
-        scope, source: actor.source, dependsOn: [], contentChars: count(text), createdAt: now, updatedAt: now, expiresAt };
+        scope, source: actor.source, dependsOn: [], resourceProjects: scope.project ? [scope.project] : [], contentChars: count(text), createdAt: now, updatedAt: now, expiresAt };
       this.write(meta, text, 'saved');
       return freezeRecord({ ...meta, text });
     });
@@ -483,7 +479,7 @@ export class Memories {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MEMORY_LIMITS.searchResults) throw new MemoryError('invalid', 'Search result limit is invalid');
     // Security order is deliberate: metadata-only authorization and lineage
     // checks happen before any content row is read, then redaction, then match.
-    const authorized = this.allMeta().filter(meta => this.authorized(meta, access) && meta.status === 'active'
+    const authorized = this.allMeta(access.ownerId, access.kind === 'verified-user', 'active').filter(meta => this.authorized(meta, access) && meta.status === 'active'
       && (meta.expiresAt === null || meta.expiresAt > now) && this.lineageValid(meta, now, new Set()));
     const results: MemorySearchResult[] = [];
     for (const meta of authorized) {
@@ -511,7 +507,7 @@ export class Memories {
   /** Authenticated management projection; deleted or unredactable content is never returned. */
   manage(access: MemoryAccess, now = Date.now()): MemoryManagementItem[] {
     this.assertAccess(access);
-    const authorized = this.allMeta().filter(meta => this.authorized(meta, access));
+    const authorized = this.allMeta(access.ownerId, access.kind === 'verified-user').filter(meta => this.authorized(meta, access));
     return authorized.map(meta => {
       const usable = meta.status === 'active' && (meta.expiresAt === null || meta.expiresAt > now) && this.lineageValid(meta, now, new Set());
       if (meta.status === 'deleted') return { ...meta, text: null, usable };
@@ -524,9 +520,8 @@ export class Memories {
 
   snapshot(runId: string, access: MemoryAccess, options: MemorySearchOptions = {}): MemorySnapshot {
     if (!runPattern.test(runId)) throw new MemoryError('invalid', 'Run ID is invalid');
-    const key = `${MEMORY_SNAPSHOT_PREFIX}${runId}`;
     return this.store.transaction(() => {
-      if (this.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(key)) throw new MemoryError('snapshot_exists', 'This run already has a memory snapshot');
+      if (this.store.db.prepare('SELECT 1 FROM memory_snapshots WHERE runId=?').get(runId)) throw new MemoryError('snapshot_exists', 'This run already has a memory snapshot');
       const requested = Math.min(options.limit ?? MEMORY_LIMITS.snapshotEntries, MEMORY_LIMITS.snapshotEntries);
       if (!Number.isSafeInteger(requested) || requested < 1) throw new MemoryError('invalid', 'Snapshot result limit is invalid');
       const candidates = this.search(access, { ...options, limit: requested + 1 });
@@ -543,16 +538,16 @@ export class Memories {
       if (items.length < candidates.length) truncated = true;
       const createdAt = Date.now(), record: MemorySnapshotRecord = { schema: 1, createdAt, truncated,
         items: items.map(item => ({ id: item.id, version: item.version })) };
-      this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(key, JSON.stringify(record));
+      this.store.db.prepare('INSERT INTO memory_snapshots(runId,createdAt,truncated,items) VALUES(?,?,?,?)').run(runId,createdAt,Number(truncated),JSON.stringify(record.items));
       return Object.freeze({ schema: 1 as const, runId, createdAt, truncated, items: Object.freeze(items) });
     });
   }
 
   snapshotRecord(runId: string): MemorySnapshotRecord | undefined {
     if (!runPattern.test(runId)) throw new MemoryError('invalid', 'Run ID is invalid');
-    const row = this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`${MEMORY_SNAPSHOT_PREFIX}${runId}`) as { value: string } | undefined;
+    const row = this.store.db.prepare('SELECT createdAt,truncated,items FROM memory_snapshots WHERE runId=?').get(runId);
     if (!row) return;
-    const value = parseJson(row.value, 'memory snapshot');
+    const value = {schema:1,createdAt:row.createdAt,truncated:!!row.truncated,items:JSON.parse(String(row.items))};
     if (!exact(value, ['schema', 'createdAt', 'truncated', 'items']) || value.schema !== 1 || !Number.isSafeInteger(value.createdAt)
       || Number(value.createdAt) < 1 || typeof value.truncated !== 'boolean' || !Array.isArray(value.items)) {
       throw new MemoryError('storage_invalid', 'Stored memory snapshot is invalid');
@@ -566,9 +561,9 @@ export class Memories {
     this.assertAccess(access);
     const meta = this.requireMeta(id);
     if (!this.authorized(meta, access)) throw new MemoryError('forbidden', 'Memory is outside this visibility scope');
-    const rows = this.store.db.prepare("SELECT value FROM settings WHERE key LIKE ? ESCAPE '\\' ORDER BY key DESC")
-      .all(`${MEMORY_CHANGE_PREFIX}${id}:%`) as { value: string }[];
-    return rows.map(row => this.parseChange(row.value, id)).flatMap(change => {
+    const rows = this.store.db.prepare('SELECT version,action,sourceKind,sourceRef,createdAt FROM memory_changes WHERE memoryId=? ORDER BY version DESC').all(id);
+    return rows.map(row => this.parseChange(JSON.stringify({schema:1,id,version:row.version,action:row.action,
+      source:{kind:row.sourceKind,ref:row.sourceRef},createdAt:row.createdAt}), id)).flatMap(change => {
       let ref: string | undefined;
       try { ref = this.redact(change.source.ref); } catch { ref = undefined; }
       return ref === undefined || unsafeSingleLine.test(ref) ? [] : [{ ...change, source: { ...change.source, ref } }];
@@ -584,28 +579,23 @@ export class Memories {
       if (before.status === status) return before;
       if(before.automatic){
         const fingerprints=this.automaticFingerprints(before.scope.ownerId,this.requireContent(before),before.automatic.evidence);
-        for(const key of fingerprints)this.store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(key,JSON.stringify({id:before.id}));
+        for(const key of fingerprints)this.store.db.prepare('INSERT INTO memory_blocks(fingerprint,memoryId) VALUES(?,?) ON CONFLICT(fingerprint) DO NOTHING').run(key,before.id);
       }
       const meta: MemoryMetadata = { ...before, version: before.version + 1, status, source: actor.source,
         contentChars: status === 'deleted' ? 0 : before.contentChars, updatedAt: Date.now() };
-      this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
-        .run(`${MEMORY_META_PREFIX}${id}`, JSON.stringify(meta));
-      if (status === 'deleted') this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`${MEMORY_CONTENT_PREFIX}${id}`);
-      else {
-        const text = this.requireContent(before);
-        this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({ schema: 1, version: meta.version, text }), `${MEMORY_CONTENT_PREFIX}${id}`);
-      }
+      const text = status === 'deleted' ? null : this.requireContent(before);
+      memoryTable(this.store.db).save(meta);
+      if (text === null) this.store.db.prepare('DELETE FROM memory_contents WHERE memoryId=?').run(id);
+      else this.store.db.prepare('UPDATE memory_contents SET version=?,text=? WHERE memoryId=?').run(meta.version,text,id);
       this.audit(meta, status);
       return Object.freeze(meta);
     });
   }
 
   private write(meta: MemoryMetadata, text: string, action: MemoryChange['action']): void {
-    const content: StoredMemoryContent = { schema: 1, version: meta.version, text };
-    this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
-      .run(`${MEMORY_META_PREFIX}${meta.id}`, JSON.stringify(meta));
-    this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
-      .run(`${MEMORY_CONTENT_PREFIX}${meta.id}`, JSON.stringify(content));
+    memoryTable(this.store.db).save(meta);
+    this.store.db.prepare('INSERT INTO memory_contents(memoryId,version,text) VALUES(?,?,?) ON CONFLICT(memoryId) DO UPDATE SET version=excluded.version,text=excluded.text')
+      .run(meta.id,meta.version,text);
     this.audit(meta, action);
   }
 
@@ -615,13 +605,12 @@ export class Memories {
     return [prefix+'body:'+hash(text.normalize('NFKC').replace(/\s+/gu,'').toLocaleLowerCase()),...evidence.map(e=>prefix+'evidence:'+e)];
   }
   private blockedAutomatic(ownerId:string,text:string,evidence:string[]):boolean{
-    return this.automaticFingerprints(ownerId,text,evidence).some(key=>!!this.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(key));
+    return this.automaticFingerprints(ownerId,text,evidence).some(key=>!!this.store.db.prepare('SELECT 1 FROM memory_blocks WHERE fingerprint=?').get(key));
   }
 
   private audit(meta: MemoryMetadata, action: MemoryChange['action']): void {
-    const change: MemoryChange = { schema: 1, id: meta.id, version: meta.version, action, source: meta.source, createdAt: meta.updatedAt };
-    this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)')
-      .run(`${MEMORY_CHANGE_PREFIX}${meta.id}:${String(meta.version).padStart(10, '0')}`, JSON.stringify(change));
+    this.store.db.prepare('INSERT INTO memory_changes(memoryId,version,action,sourceKind,sourceRef,createdAt) VALUES(?,?,?,?,?,?)')
+      .run(meta.id,meta.version,action,meta.source.kind,meta.source.ref,meta.updatedAt);
   }
 
   private parseChange(raw: string, id: string): MemoryChange {
@@ -633,15 +622,17 @@ export class Memories {
       source: validateSource(value.source), createdAt: Number(value.createdAt) };
   }
 
-  private allMeta(): MemoryMetadata[] {
-    const rows = this.store.db.prepare("SELECT value FROM settings WHERE key LIKE ? ESCAPE '\\' ORDER BY key")
-      .all(`${MEMORY_META_PREFIX}%`) as { value: string }[];
-    return rows.map(row => parseMeta(row.value));
+  private allMeta(ownerId: string, includeShared = false, status?: 'active' | 'live'): MemoryMetadata[] {
+    // Read only metadata before the full ACL/provenance check; never select body text here.
+    const scope = includeShared ? "(ownerId=? OR scopeKind IN ('global','local'))" : 'ownerId=?';
+    const state = status === 'active' ? " AND status='active'" : status === 'live' ? " AND status!='deleted'" : '';
+    return memoryTable(this.store.db).list(scope + state,
+      [ownerId], 'ORDER BY id').map(row => parseMeta(JSON.stringify(row)));
   }
 
   private meta(id: string): MemoryMetadata | undefined {
-    const row = this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`${MEMORY_META_PREFIX}${id}`) as { value: string } | undefined;
-    return row ? parseMeta(row.value) : undefined;
+    const row = memoryTable(this.store.db).get(id);
+    return row ? parseMeta(JSON.stringify(row)) : undefined;
   }
 
   private requireMeta(id: string): MemoryMetadata {
@@ -651,9 +642,9 @@ export class Memories {
   }
 
   private requireContent(meta: MemoryMetadata): string {
-    const row = this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`${MEMORY_CONTENT_PREFIX}${meta.id}`) as { value: string } | undefined;
+    const row = this.store.db.prepare('SELECT version,text FROM memory_contents WHERE memoryId=?').get(meta.id);
     if (!row) throw new MemoryError('storage_invalid', 'Stored memory content is missing');
-    return parseContent(row.value, meta);
+    return parseContent(JSON.stringify({schema:1,version:row.version,text:row.text}), meta);
   }
 
   private assertIdVersion(id: string, version: number): void {
@@ -668,21 +659,8 @@ export class Memories {
   private resources(meta: MemoryMetadata, seen = new Set<string>()): string[] {
     if (seen.has(meta.id)) throw new MemoryError('storage_invalid', 'Cyclic memory resource lineage');
     const branch = new Set(seen); branch.add(meta.id);
-    const projects = new Set(meta.resourceProjects ?? []);
+    const projects = new Set(meta.resourceProjects);
     if (meta.scope.project) projects.add(meta.scope.project);
-    // Legacy automatic entries did not persist provenance independently of model labels.
-    // Their original source ledger remains available after queue migration.
-    if (!meta.resourceProjects && meta.automatic) {
-      const sources = [meta.source, ...this.store.db.prepare('SELECT value FROM settings WHERE key GLOB ?')
-        .all(`${MEMORY_CHANGE_PREFIX}${meta.id}:*`).map(row => this.parseChange(String(row.value), meta.id).source)];
-      for (const ref of new Set(sources.filter(source => source.kind === 'automatic').map(source => source.ref))) {
-        const row = this.store.db.prepare('SELECT value FROM settings WHERE key=?').get('auto-memory:job:' + ref);
-        if (row) {
-          const source = parseJson(String(row.value), 'automatic memory source');
-          if (typeof source.project === 'string') projects.add(source.project);
-        }
-      }
-    }
     for (const ref of meta.dependsOn) {
       const parent = this.meta(ref.id);
       if (parent) for (const project of this.resources(parent, branch)) projects.add(project);
@@ -749,7 +727,7 @@ export class Memories {
   }
 
   private assertCapacity(scope: MemoryScope, nextChars: number, replacing?: MemoryMetadata): void {
-    const rows = this.allMeta().filter(meta => meta.status !== 'deleted' && (!replacing || meta.id !== replacing.id));
+    const rows = this.allMeta(scope.ownerId, false, 'live').filter(meta => meta.status !== 'deleted' && (!replacing || meta.id !== replacing.id));
     const owner = rows.filter(meta => meta.scope.ownerId === scope.ownerId), scoped = owner.filter(meta => sameScope(meta.scope, scope));
     if (owner.length + 1 > MEMORY_LIMITS.ownerEntries || owner.reduce((total, meta) => total + meta.contentChars, nextChars) > MEMORY_LIMITS.ownerChars
       || scoped.length + 1 > MEMORY_LIMITS.scopeEntries || scoped.reduce((total, meta) => total + meta.contentChars, nextChars) > MEMORY_LIMITS.scopeChars) {

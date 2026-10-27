@@ -141,7 +141,7 @@ test('fresh installs preserve the exact prompt when assistant is inactive and no
   const f=uiContextFixture(t),created=create(f,incoming('legacy')),before=created.tasks.prompt(created.task);
   assert.equal(buildTaskRunPrompt(f.store,created.task,created.inbox,f.config,created.run),before);
   assert.ok(f.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`assistant:run:${created.run}`));
-  assert.equal(f.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`memory:snapshot:${created.run}`),undefined);
+  assert.equal(f.store.db.prepare('SELECT 1 FROM memory_snapshots WHERE runId=?').get(created.run),undefined);
 });
 
 test('date/time classification uses explicit words and does not mistake runtime for time',()=>{

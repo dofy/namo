@@ -1,3 +1,4 @@
+import { deliveries } from './business-storage.js';
 import { legacyPolicyHash, agentSessionKey, type AgentSelection } from './agent-registry.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Store, type Inbox, type Incoming } from './store.js';
@@ -271,7 +272,7 @@ export class Tasks {
       activity: modern?this.store.db.prepare('SELECT a.* FROM run_activity a JOIN task_runs r ON r.id=a.runId WHERE r.taskId=? ORDER BY a.updatedAt DESC').all(t.id):[],
       feedback: modern?this.store.db.prepare('SELECT state,error,updatedAt FROM message_feedback WHERE inboxKey=?').all(t.inboxKey):[],
       progressUpdates: modern?this.store.db.prepare('SELECT u.version,u.state,u.phase,u.createdAt,u.error FROM progress_updates u JOIN outbox o ON o.id=u.outboxId WHERE o.inboxKey=? ORDER BY u.id DESC LIMIT 20').all(t.inboxKey):[],
-      artifacts: this.store.db.prepare("SELECT value FROM settings WHERE key LIKE 'artifact:%'").all().map(row=>JSON.parse(String(row.value))).filter(row=>row.taskId===t.id).map(({fileKey, ...row})=>row),
+      artifacts: deliveries(this.store.db).list('taskId=?',[t.id]).map(({fileKey, ...row})=>row),
       waits: new Waits(this.store).list(t.id),
       runners: runnerDetails(this.store, t.id),
       messages: this.store.db.prepare('SELECT role,version,dispatch FROM task_messages WHERE taskId=? ORDER BY version').all(t.id),

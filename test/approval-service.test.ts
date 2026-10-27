@@ -84,8 +84,8 @@ test('control jobs remain queued until the enclosing acceptance transaction comm
   f.store.transaction(() => {
     f.store.enqueue(message);
     assert.equal(f.service.handleControl(message), true);
-    const row = f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`git-approval-job:${message.key}`) as { value: string };
-    assert.equal(JSON.parse(row.value).state, 'queued');
+    const row = f.store.db.prepare('SELECT state FROM approval_jobs WHERE inboxKey=?').get(message.key)!;
+    assert.equal(row.state, 'queued');
   });
   await Promise.resolve();
   await f.service.idle();
@@ -114,7 +114,7 @@ test('current project path and permission policy are revalidated after service r
 test('hot configuration is rejected until reload and creates no request', async t => {
   const f = fixture(t); f.setCurrentRevision('d'.repeat(64));
   assert.match(await f.send('hot-config', `/push-request ${f.task.id} origin refs/heads/main`), /重启服务加载最新审批策略/);
-  assert.equal((f.store.db.prepare("SELECT COUNT(*) AS n FROM settings WHERE key LIKE 'git-approval:AP-%'").get() as { n: number }).n, 0);
+  assert.equal((f.store.db.prepare("SELECT COUNT(*) AS n FROM git_approvals").get() as { n: number }).n, 0);
 });
 
 test('another paired user cannot trigger an already approved record', async t => {

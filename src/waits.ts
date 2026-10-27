@@ -9,17 +9,16 @@ export interface TaskWait extends WaitResult {
   settledAt?: number; replyInboxKey?: string; replyVersion?: number;
 }
 export class WaitInputError extends Error {}
-const EXTERNAL_LINK_PREFIX = 'external-wait-link:';
 
 export function linkedExternalWait(store: Store, taskWaitId: string): string | undefined {
-  const value = store.db.prepare('SELECT value FROM settings WHERE key=?').get(`${EXTERNAL_LINK_PREFIX}${taskWaitId}`)?.value;
+  const value = store.db.prepare('SELECT externalWaitId FROM external_wait_links WHERE taskWaitId=?').get(taskWaitId)?.externalWaitId;
   return typeof value === 'string' && /^EXT-[A-F0-9]{16}$/.test(value) ? value : undefined;
 }
 
 export function linkExternalWait(store: Store, taskWaitId: string, externalWaitId: string): void {
   if (!/^WAIT-[A-F0-9]{12}$/.test(taskWaitId) || !/^EXT-[A-F0-9]{16}$/.test(externalWaitId))
     throw new RuntimeError('external_wait_link_invalid');
-  store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(`${EXTERNAL_LINK_PREFIX}${taskWaitId}`, externalWaitId);
+  store.db.prepare('INSERT INTO external_wait_links(taskWaitId,externalWaitId) VALUES(?,?)').run(taskWaitId, externalWaitId);
 }
 
 /** A request is not resumable until the runner has positively ended its turn. */

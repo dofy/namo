@@ -59,6 +59,13 @@ export class Management {
     const path=join(this.dataDir,'bot.sqlite');if(!existsSync(path))return;
     const s=new Store(path,true);try{return fn(s);}finally{s.close();}
   }
+  private readCurrent<T>(fn:(s:Store)=>T):T|undefined {
+    return this.read(s=>{
+      if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)
+        throw new ManagementError(tr('management.databaseSchemaUnsupported'),409);
+      return fn(s);
+    });
+  }
   private sanitize<T>(value:T):T {
     const redact=this.redactor();
     const visit=(item:unknown):unknown=>typeof item==='string'?redact(item):Array.isArray(item)?item.map(visit)
@@ -67,7 +74,7 @@ export class Management {
   }
   private write<T>(fn:(s:Store)=>T):T {
     const version=this.read(s=>Number(s.db.prepare('PRAGMA user_version').get()?.user_version));
-    if(version!==SCHEMA_VERSION) throw new ManagementError(tr("management.databaseUpgradeRequiredUpgradeReceiverDuringMaintenance"));
+    if(version!==SCHEMA_VERSION) throw new ManagementError(tr("management.databaseSchemaUnsupported"));
     const s=new Store(join(this.dataDir,'bot.sqlite'));try{return fn(s);}finally{s.close();}
   }
   async organization():Promise<{tenantKey:string;name:string}> { return new FeishuTransport(loadConfig(this.file).feishu,()=>{}).organization(); }
@@ -87,12 +94,12 @@ export class Management {
   state():any {
     const db=this.read(s=>{
       const schema=Number(s.db.prepare('PRAGMA user_version').get()?.user_version);
-      if(schema<1||schema>SCHEMA_VERSION)return {schema,tasks:[],issues:[],workstreams:[]};
+      if(schema!==SCHEMA_VERSION)return {schema,tasks:[],issues:[],workstreams:[]};
       return {schema,tasks:s.db.prepare('SELECT id,workstreamId,project,state,inputVersion,startedAt,finishedAt,error FROM tasks ORDER BY rowid DESC LIMIT 50').all(),
         workstreams:s.db.prepare('SELECT id,project,createdAt FROM workstreams ORDER BY createdAt DESC LIMIT 30').all(),
         issues:schema===SCHEMA_VERSION?new Recovery(s).list():[],queue:s.status()};
     });
-    return this.sanitize({service:this.status(),config:this.config(),database:db??{schema:0,tasks:[],issues:[],workstreams:[]},recoveryAvailable:db?.schema===SCHEMA_VERSION,profiles:this.profiles(),assistant:this.read(s=>new AssistantSettings(s).read())});
+    return this.sanitize({service:this.status(),config:this.config(),database:db??{schema:0,tasks:[],issues:[],workstreams:[]},recoveryAvailable:db?.schema===SCHEMA_VERSION,profiles:this.profiles(),assistant:db?.schema===SCHEMA_VERSION?this.read(s=>new AssistantSettings(s).read()):undefined});
   }
   assistant(action: string, version: number, values: unknown): unknown {
     try {return this.write(s=>{const settings=new AssistantSettings(s);
@@ -109,7 +116,7 @@ export class Management {
     if(!ids.length)throw new ManagementError(tr("management.completeAppSetupUserPairingFirst"),409);
     if(ownerId!==undefined&&(typeof ownerId!=='string'||!ids.includes(ownerId)))throw new ManagementError(tr("management.pairedUsersCurrentAppMayMemoryManaged"),403);
     const selected=typeof ownerId==='string'?ownerId:ids[0]!;
-    const names=this.read(s=>{
+    const names=this.readCurrent(s=>{
       const account=s.db.prepare("SELECT value FROM settings WHERE key='account'").get()?.value;
       if(account&&account!==f.appId)throw new ManagementError(tr("common.appDataDirectoryNotMatchProfilesCannot"),409);
       if(!s.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_profiles'").get())return new Map<string,string>();
@@ -130,7 +137,7 @@ export class Management {
   memories(ownerId?:unknown):unknown {
     try{
       const identity=this.memoryIdentity(ownerId),result=this.read(s=>{
-        if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)throw new ManagementError(tr("management.onlineDataNotUpgradedMemoryEditingUnavailable"),409);
+        if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)throw new ManagementError(tr("management.databaseSchemaUnsupported"),409);
         const redact=this.redactor(),memory=new Memories(s,redact),chats=this.memoryChats(s,identity.ownerId,identity.projects);
         return {available:true,ownerId:identity.ownerId,owners:identity.owners,projects:identity.projects,chats,
           imports:new MigrationMemory(s,{dataDir:this.dataDir,configFile:this.file,appId:identity.appId},redact).list(),
@@ -201,7 +208,7 @@ export class Management {
   browse(kind:'tasks'|'sessions'|'dashboard'|'options',params=new URLSearchParams()):unknown {
     const result=this.read(s=>{
       const schema=Number(s.db.prepare('PRAGMA user_version').get()?.user_version);
-      if(schema<1||schema>SCHEMA_VERSION)throw new BrowseError(tr("management.dataVersionNotSupportBrowsingInitializeUpgrade"));
+      if(schema!==SCHEMA_VERSION)throw new BrowseError(tr("management.databaseSchemaUnsupported"));
       // A deferred read transaction keeps totals and rows consistent without
       // migrating the database or taking a writer reservation from the receiver.
       s.db.exec('BEGIN');
@@ -219,7 +226,7 @@ export class Management {
     const unavailable=(reason:string):ProfileState=>({available:false,reason,configRevision:revision,entries:[]});
     if(typeof f.appId!=='string'||!f.appId||!['feishu','lark'].includes(f.domain??'feishu')||!Array.isArray(f.allowedUserIds)||f.allowedUserIds.some((id:unknown)=>typeof id!=='string'||!id))return unavailable(tr("management.completeAppSetupUserPairingFirst"));
     try{return this.read(s=>{
-      if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)return unavailable(tr("management.liveDataNeedsUpgradeProfilesCanEdited"));
+      if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)return unavailable(tr("management.databaseSchemaUnsupported"));
       return this.sanitize({available:true,configRevision:revision,entries:[...new Set<string>([...f.allowedUserIds,...(f.access?s.db.prepare("SELECT DISTINCT senderId FROM inbox WHERE chatKey LIKE ? AND json_extract(envelope,'$.tenantKey')=? LIMIT 1000").all(`${f.appId}:%`,f.access.tenantKey).map(r=>String(r.senderId)):[])])].map(userId=>new Profiles(s,{channel:f.domain??'feishu',appId:f.appId,userId}).get())});
     })??unavailable(tr("management.noServiceDatabaseCompleteSetupFirst"));}
     catch(e){if(e instanceof ProfileError)return unavailable(e.message);throw e;}
@@ -323,14 +330,14 @@ export class Management {
   }
   detail(id:string):any {
     if(!/^N-[A-F0-9]{12}$/.test(id))throw new ManagementError(tr("management.invalidTaskId"));
-    return this.read(s=>{const tasks=new Tasks(s),t=tasks.get(id);if(!t)throw new ManagementError(tr("tasks.notFound"));
+    return this.readCurrent(s=>{const tasks=new Tasks(s),t=tasks.get(id);if(!t)throw new ManagementError(tr("tasks.notFound"));
       const summary=this.projections(s).taskSummary(id);
       return this.sanitize({...tasks.detail(t) as object,title:summary?.title,ownerId:summary?.ownerId,ownerName:summary?.ownerName,createdAt:summary?.createdAt,
         results:s.db.prepare("SELECT content,state,part FROM outbox WHERE inboxKey=? AND kind='result' ORDER BY part").all(t.inboxKey)});});
   }
   issue(id:string):any {
     return this.read(s=>{
-      if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)throw new ManagementError(tr("management.upgradeReceiverEnableIssueReview"));
+      if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)throw new ManagementError(tr("management.databaseSchemaUnsupported"));
       const {snapshot:_s,inboxKey:_k,...safe}=new Recovery(s).inspect(id);return this.sanitize(safe);
     });
   }
@@ -365,7 +372,7 @@ export class Management {
   approvals(): ApprovalList {
     const { revision } = this.source(), config = loadConfig(this.file);
     return this.sanitize({ configured: !!config.gitApprovals?.gitBin && !!config.gitApprovals.remotes.length,
-      configRevision: revision, remotes: config.gitApprovals?.remotes.map(remote => remote.name) ?? [], items: this.read(listApprovals) ?? [] });
+      configRevision: revision, remotes: config.gitApprovals?.remotes.map(remote => remote.name) ?? [], items: this.readCurrent(listApprovals) ?? [] });
   }
   async approval(input: ApprovalAction) {
     if (!input || !['request','approve','reject','execute','reconcile'].includes(input.action)) throw new ManagementError(tr('common.actionNotFound'), 400);
@@ -376,7 +383,7 @@ export class Management {
       ? typeof input.taskId !== 'string' || !/^N-[A-F0-9]{12}$/.test(input.taskId) || typeof input.remote !== 'string' || typeof input.ref !== 'string'
       : typeof input.id !== 'string' || !/^AP-[A-F0-9]{12}$/.test(input.id) || !Number.isSafeInteger(input.revision))) throw new ManagementError(tr('operations.approvalInputInvalid'), 400);
     const schema = this.read(s => Number(s.db.prepare('PRAGMA user_version').get()?.user_version));
-    if (schema !== SCHEMA_VERSION) throw new ManagementError(tr('management.databaseUpgradeRequiredUpgradeReceiverDuringMaintenance'));
+    if (schema !== SCHEMA_VERSION) throw new ManagementError(tr('management.databaseSchemaUnsupported'));
     const store = new Store(join(this.dataDir, 'bot.sqlite'));
     try { return this.sanitize(await changeApproval(store, config, revision, () => this.source().revision, input)); }
     catch (error) { if (error instanceof ApprovalError) throw new ManagementError(this.redactor()(error.message)); throw error; }

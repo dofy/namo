@@ -120,7 +120,7 @@ test('real enveloped default workspace permits /run delivery intent under parseC
   await waitFor(()=>uploads===1&&sends===1);for(let index=0;index<4;index++)await engine.pump();
   const task=store.db.prepare("SELECT * FROM tasks WHERE inboxKey='intent'").get();
   assert.equal(realpathSync(String(task?.cwd)),realpathSync(chatWorkspace(config.dataDir,'topic-one:user:owner')));assert.equal(uploads,1);assert.equal(sends,1);
-  assert.equal(JSON.parse(String(store.db.prepare("SELECT value FROM settings WHERE key='artifact:intent'").get()?.value)).state,'sent');
+  assert.equal(store.db.prepare("SELECT * FROM artifact_deliveries WHERE id='artifact:intent'").get()!.state,'sent');
 });
 
 test('real enveloped default workspace permits manual /deliver after successful task',async t=>{
@@ -135,5 +135,5 @@ test('real enveloped default workspace permits manual /deliver after successful 
   engine.accept(enveloped('manual-delivery',`/deliver ${taskId} manual.md`));await waitFor(()=>uploads===1&&sends===1);
   for(let index=0;index<4;index++)await engine.pump();
   assert.equal(realpathSync(String(new Tasks(store).get(taskId)?.cwd)),realpathSync(chatWorkspace(config.dataDir,'topic-one:user:owner')));assert.equal(uploads,1);assert.equal(sends,1);
-  assert.equal(JSON.parse(String(store.db.prepare("SELECT value FROM settings WHERE key='artifact:manual-delivery'").get()?.value)).state,'sent');
+  assert.equal(store.db.prepare("SELECT * FROM artifact_deliveries WHERE id='artifact:manual-delivery'").get()!.state,'sent');
 });

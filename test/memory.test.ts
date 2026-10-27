@@ -1,10 +1,10 @@
-import { storeFixture } from './helpers.js';
+import { storeFixture, seedRun } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Memories, MemoryError, MEMORY_CONTENT_PREFIX, MEMORY_LIMITS, MEMORY_META_PREFIX, composeMemoryPrompt, type MemoryAccess, type MemoryAuthority, type MemoryScope, type AutomaticMemoryInput } from '../src/memory.js';
+import { Memories, MemoryError, MEMORY_LIMITS, composeMemoryPrompt, type MemoryAccess, type MemoryAuthority, type MemoryScope, type AutomaticMemoryInput } from '../src/memory.js';
 import { Store, type Incoming } from '../src/store.js';
 import { memoryCommand } from '../src/memory-commands.js';
 
@@ -64,10 +64,10 @@ test('retrieval redacts before keyword matching and omits redaction failures', t
 });
 
 test('capacity, content, query, and expiry limits fail explicitly without partial writes', t => {
-  const f = fixture(t), before = f.store.db.prepare("SELECT COUNT(*) AS n FROM settings WHERE key LIKE 'memory:%'").get()?.n;
+  const f = fixture(t), before = f.store.db.prepare("SELECT COUNT(*) AS n FROM memories").get()?.n;
   assert.throws(() => f.memory.save({ kind: 'preference', scope: ownerScope(), text: 'x'.repeat(MEMORY_LIMITS.entryChars + 1) }, local()), /1-3000/);
   assert.throws(() => f.memory.save({ kind: 'preference', scope: ownerScope(), text: 'future', expiresAt: Date.now() + MEMORY_LIMITS.maxExpiryMs + 10_000 }, local()), /retention/);
-  assert.equal(f.store.db.prepare("SELECT COUNT(*) AS n FROM settings WHERE key LIKE 'memory:%'").get()?.n, before);
+  assert.equal(f.store.db.prepare("SELECT COUNT(*) AS n FROM memories").get()?.n, before);
   const summary = f.memory.save({ kind: 'task_summary', scope: projectScope(), text: 'bounded summary' }, local());
   assert.ok(summary.expiresAt && summary.expiresAt - summary.createdAt <= MEMORY_LIMITS.defaultEphemeralMs + 10);
   assert.equal(f.memory.search(access(), { now: summary.expiresAt! + 1 }).length, 0);
@@ -84,11 +84,11 @@ test('disable excludes retrieval, delete removes current content, and neither ca
   assert.equal(corrected.status, 'disabled'); assert.equal(f.memory.search(access()).length, 0);
   const deleted = f.memory.delete(saved.id, 3, local('alice', 'delete'));
   assert.equal(deleted.version, 4); assert.equal(deleted.status, 'deleted'); assert.equal(deleted.contentChars, 0);
-  assert.equal(f.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`${MEMORY_CONTENT_PREFIX}${saved.id}`), undefined);
+  assert.equal(f.store.db.prepare('SELECT 1 FROM memory_contents WHERE memoryId=?').get(saved.id), undefined);
   assert.throws(() => f.memory.correct(saved.id, 4, { text: 'resurrect' }, local()), /cannot be restored/);
   const replacement = f.memory.save({ kind: 'preference', scope: ownerScope(), text: 'new explicit memory' }, local());
   assert.notEqual(replacement.id, saved.id); assert.deepEqual(f.memory.search(access()).map(item => item.id), [replacement.id]);
-  assert.equal(JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`${MEMORY_META_PREFIX}${saved.id}`)?.value)).status, 'deleted');
+  assert.equal(f.store.db.prepare('SELECT status FROM memories WHERE id=?').get(saved.id)?.status, 'deleted');
   const managed = f.memory.manage({ kind: 'local-owner', authenticated: true, ownerId: 'alice' });
   assert.equal(managed.find(item => item.id === saved.id)?.text, null);
   assert.equal(managed.find(item => item.id === replacement.id)?.text, 'new explicit memory');
@@ -108,12 +108,13 @@ test('handoff lineage is exact-scope and invalidates on correction, disable, or 
     dependsOn: [{ id: source.id, version: corrected.version }] }, local()), /exact visibility/);
   f.memory.delete(source.id, corrected.version, local('alice', 'source-delete'));
   assert.equal(f.memory.search(access(), { query: 'Current handoff' }).length, 0);
-  assert.ok(f.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`${MEMORY_CONTENT_PREFIX}${current.id}`), 'handoff content may remain but is unreachable');
+  assert.ok(f.store.db.prepare('SELECT 1 FROM memory_contents WHERE memoryId=?').get(current.id), 'handoff content may remain but is unreachable');
 });
 
 test('snapshots are bounded, immutable, metadata-only, and never rebuilt for the same run', t => {
   const f = fixture(t);
   for (let index = 0; index < 5; index++) f.memory.save({ kind: 'preference', scope: ownerScope(), text: `snapshot item ${index}` }, local('alice', `source-${index}`));
+  seedRun(f.store, 'run-one'); seedRun(f.store, 'run-two');
   const snapshot = f.memory.snapshot('run-one', access(), { limit: 3 });
   assert.equal(snapshot.items.length, 3); assert.equal(snapshot.truncated, true);
   assert.throws(() => Object.assign(snapshot.items[0]!, { text: 'changed' }), TypeError);
@@ -163,13 +164,8 @@ test('organization project ACL limits shared overviews, model misclassification,
   assert.ok(!ids(f.memory, who).includes(handoff.id));
 });
 
-test('legacy global memories recover project provenance from the source audit after a local correction', t => {
+test('global memories retain host-owned project provenance after a local correction', t => {
   const f = fixture(t), saved = f.memory.upsertAutomatic(candidate({ project: null }), authority())!;
-  f.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run('auto-memory:job:auto-job-one', JSON.stringify({ project: 'atlas', state: 'completed' }));
-  const meta = JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(MEMORY_META_PREFIX + saved.id)!.value));
-  delete meta.resourceProjects;
-  meta.source = { kind: 'local-owner', ref: 'legacy-correction' };
-  f.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(meta), MEMORY_META_PREFIX + saved.id);
   const who = automaticMemoryStorageAccess({ ownerId: 'bob', allowedProjects: [] });
   assert.deepEqual(ids(f.memory, who), []);
   assert.deepEqual(ids(f.memory, { ...who, allowedProjects: ['atlas'] }), [saved.id]);
@@ -262,8 +258,8 @@ test('manual corrections, disabling, and deletion cannot be undone by automatic 
   const deleted = f.memory.upsertAutomatic(candidate({ key: 'deleted', text: 'Distinct deleted fact.', evidence: ['This is a distinct deleted fact.'] }), authority())!;
   f.memory.delete(deleted.id, 1, local);
   assert.equal(f.memory.upsertAutomatic(candidate({ key: 'deleted', text: 'Old transcript replay.', observedAt: 200 }), authority()), undefined);
-  assert.equal(f.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(MEMORY_CONTENT_PREFIX + deleted.id), undefined);
-  assert.equal(JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(MEMORY_META_PREFIX + deleted.id)?.value)).status, 'deleted');
+  assert.equal(f.store.db.prepare('SELECT 1 FROM memory_contents WHERE memoryId=?').get(deleted.id), undefined);
+  assert.equal(f.store.db.prepare('SELECT status FROM memories WHERE id=?').get(deleted.id)?.status, 'deleted');
   assert.ok(!ids(f.memory, automaticMemoryStorageAccess()).includes(disabled.id) && !ids(f.memory, automaticMemoryStorageAccess()).includes(deleted.id));
 });
 
@@ -327,7 +323,7 @@ test('deletion fingerprints prevent resurrection under another key using the del
 test('automatic provenance stores bounded evidence hashes rather than original quoted content', t => {
   const f = fixture(t), quote = 'A source statement that belongs only in the original conversation.';
   const saved = f.memory.upsertAutomatic(candidate({ evidence: [quote], sourceMessageIds: ['source-one', 'source-one'] }), authority())!;
-  const raw = String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(MEMORY_META_PREFIX + saved.id)?.value);
+  const raw = String(f.store.db.prepare('SELECT automatic FROM memories WHERE id=?').get(saved.id)?.automatic);
   assert.doesNotMatch(raw, /A source statement/);
   assert.deepEqual(saved.automatic?.sourceMessageIds, ['source-one']);
   assert.match(saved.automatic!.evidence[0]!, /^sha256:[a-f0-9]{64}$/);
@@ -360,4 +356,16 @@ test('explicit private memory commands preserve ownership, version conflicts and
 test('pending controls are isolated by owner and topic without changing chat scheduling',t=>{
  const root=mkdtempSync(join(tmpdir(),'namo-scope-')),store=new Store(join(root,'db'));t.after(()=>{store.close();rmSync(root,{recursive:true,force:true});});const m=message('work');store.enqueue(m);store.claim(m.key);
  assert.equal(store.hasPending(m.chatKey,'other','owner',m.chatKey),true);assert.equal(store.hasPending(m.chatKey,'other','bob',m.chatKey),false);assert.equal(store.hasPending(m.chatKey,'other','owner',m.chatKey+':thread:other'),false);assert.equal(store.hasPending(m.chatKey,'other'),true);
+});
+
+test('memory metadata, body version and audit commit together; invalid references cannot be persisted', t => {
+  const f = fixture(t), saved = f.memory.save({kind:'preference',scope:ownerScope(),text:'Original'},local());
+  assert.throws(()=>f.store.db.prepare('UPDATE memory_contents SET version=99 WHERE memoryId=?').run(saved.id),/FOREIGN KEY/);
+  assert.throws(()=>f.memory.snapshot('missing-run',access()),/FOREIGN KEY/);
+  f.store.db.exec("CREATE TEMP TRIGGER fail_memory_audit BEFORE INSERT ON memory_changes BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");
+  assert.throws(()=>f.memory.correct(saved.id,1,{text:'Uncommitted'},local()),/audit unavailable/);
+  const visible=f.memory.search(access());
+  assert.equal(visible[0]?.version,1); assert.equal(visible[0]?.text,'Original');
+  assert.equal(f.memory.history(saved.id,access()).length,1);
+  assert.deepEqual(f.store.db.prepare('PRAGMA foreign_key_check').all(),[]);
 });

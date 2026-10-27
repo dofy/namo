@@ -1,3 +1,4 @@
+import { approvals } from './business-storage.js';
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdtempSync, realpathSync, statSync } from 'node:fs';
@@ -5,7 +6,6 @@ import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import type { Store } from './store.js';
 
-const KEY_PREFIX = 'git-approval:';
 const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const REMOTE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const REVISION = /^[0-9a-f]{64}$/;
@@ -112,27 +112,17 @@ export class GitApprovals {
     if (policy.sshCommand !== undefined && (!isAbsolute(policy.sshCommand) || !existsSync(policy.sshCommand) || !statSync(policy.sshCommand).isFile() || !(statSync(policy.sshCommand).mode & 0o111))) throw new ApprovalError('ssh_command_unsafe', 'SSH command must be an explicit executable regular file.');
   }
 
-  private key(id: string): string { return `${KEY_PREFIX}${id}`; }
-  private decode(value: string): GitApprovalRecord {
-    const parsed: unknown = JSON.parse(value);
-    if (!parsed || typeof parsed !== 'object' || (parsed as GitApprovalRecord).schemaVersion !== 1 || (parsed as GitApprovalRecord).operation !== 'git-push') throw new ApprovalError('approval_record_invalid', 'Approval record is malformed or unsupported.');
-    return parsed as GitApprovalRecord;
-  }
   get(id: string): GitApprovalRecord | undefined {
-    const row = this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(this.key(id.toUpperCase())) as { value: string } | undefined;
-    if (!row) return;
-    const record = this.decode(row.value); this.expireRecord(record); return this.read(id);
+    const record = this.read(id); if (!record) return;
+    this.expireRecord(record); return this.read(id);
   }
-  private read(id: string): GitApprovalRecord | undefined {
-    const row = this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(this.key(id.toUpperCase())) as { value: string } | undefined;
-    return row ? this.decode(row.value) : undefined;
-  }
+  private read(id: string): GitApprovalRecord | undefined { return approvals(this.store.db).get(id.toUpperCase()); }
   private save(record: GitApprovalRecord, expected: ApprovalState): GitApprovalRecord {
     return this.store.transaction(() => {
       const current = this.read(record.id);
       if (!current || current.state !== expected || current.revision !== record.revision) throw new ApprovalError('approval_changed', 'Approval changed; refresh before acting.');
       record.revision++; record.updatedAt = this.now();
-      this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(record), this.key(record.id));
+      approvals(this.store.db).save(record);
       return structuredClone(record);
     });
   }
@@ -157,8 +147,8 @@ export class GitApprovals {
     return this.transition(record, record.state, 'rejected', 'owner_rejected', actor.authority);
   }
   expireAll(): number {
-    const rows = this.store.db.prepare("SELECT value FROM settings WHERE key LIKE 'git-approval:%'").all() as { value: string }[];
-    let count = 0; for (const row of rows) { const record = this.decode(row.value); const before = record.state; this.expireRecord(record); if (before !== this.read(record.id)?.state) count++; }
+    const rows = approvals(this.store.db).list("state IN ('pending','approved') AND expiresAt<=?", [this.now()]);
+    let count = 0; for (const record of rows) { const before = record.state; this.expireRecord(record); if (before !== this.read(record.id)?.state) count++; }
     return count;
   }
 
@@ -241,7 +231,7 @@ export class GitApprovals {
         target: { remote: inspected.remote.name, url: inspected.remote.url, transport: inspected.remote.transport, ref: input.ref, headSha: inspected.head, remoteBeforeSha: inspected.before },
         configRevision: input.configRevision, commitSummary: inspected.summary, createdAt: now, expiresAt: now + ttl, updatedAt: now, limitedProtection: true,
         events: [{ state: 'pending', at: now }] };
-      if (this.store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(this.key(id), JSON.stringify(candidate)).changes === 1) record = candidate;
+      if (approvals(this.store.db).save(candidate, 'ignore') === 1) record = candidate;
     }
     if (!record) throw new ApprovalError('approval_id_collision', 'Could not allocate an approval identifier.');
     return this.preview(record);
@@ -290,8 +280,8 @@ export class GitApprovals {
     return this.transition(record, 'executing', 'unknown', push.timedOut ? 'push_timeout_remote_unverified' : 'push_result_unverified');
   }
   recoverInterrupted(): number {
-    const rows = this.store.db.prepare("SELECT value FROM settings WHERE key LIKE 'git-approval:%'").all() as { value: string }[]; let count = 0;
-    for (const row of rows) { const record = this.decode(row.value); if (record.state === 'executing') { this.transition(record, 'executing', 'unknown', 'process_interrupted_during_push'); count++; } }
+    const rows = approvals(this.store.db).list("state='executing'"); let count = 0;
+    for (const record of rows) { if (record.state === 'executing') { this.transition(record, 'executing', 'unknown', 'process_interrupted_during_push'); count++; } }
     return count;
   }
   async reconcile(id: string, task: ApprovalTaskContext, configRevision: string): Promise<GitApprovalRecord> {

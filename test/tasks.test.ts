@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { Store, SCHEMA_VERSION, type Incoming } from '../src/store.js';
+import { Store, type Incoming } from '../src/store.js';
 import { Engine, pathsOverlap } from '../src/engine.js';
 import { Tasks } from '../src/tasks.js';
 import { RuntimeError, type RunRequest, type Runtime } from '../src/runtime.js';
@@ -30,22 +30,6 @@ function setup(t: { after: (fn: () => void | Promise<void>) => void }, runtime?:
   t.after(async () => { await engine.stop(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   return { dir, store, tasks, engine, prompts, config };
 }
-
-test('legacy database migration preserves rows, settings and session ids and is repeatable', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'namo-migrate-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const file = join(dir, 'legacy.sqlite'); const old = new DatabaseSync(file);
-  old.exec(`CREATE TABLE inbox(seq INTEGER PRIMARY KEY AUTOINCREMENT,key TEXT NOT NULL UNIQUE,messageId TEXT NOT NULL,chatKey TEXT NOT NULL,chatId TEXT NOT NULL,senderId TEXT NOT NULL,text TEXT NOT NULL,createdAt INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'queued',cancelRequested INTEGER NOT NULL DEFAULT 0,threadId TEXT,turnId TEXT,error TEXT,finishedAt INTEGER);
-    CREATE TABLE sessions(chatKey TEXT PRIMARY KEY,threadId TEXT NOT NULL); CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-    INSERT INTO inbox(key,messageId,chatKey,chatId,senderId,text,createdAt,state) VALUES('old','old','chat','chat','alice','原话',1,'replied');
-    INSERT INTO sessions VALUES('chat','legacy-thread'); INSERT INTO settings VALUES('project:chat','one');`);
-  old.close();
-  for (let i = 0; i < 2; i++) {
-    const s = new Store(file);
-    assert.equal(s.get('old')?.text, '原话'); assert.equal(s.get('old')?.state, 'replied'); assert.equal(s.get('old')?.envelope, undefined);
-    assert.equal(s.thread('chat'), 'legacy-thread'); assert.equal(s.project('chat'), 'one');
-    assert.equal(s.db.prepare('PRAGMA user_version').get()?.user_version, SCHEMA_VERSION); s.close();
-  }
-});
 
 test('future schema is refused before any schema changes', t => {
   const dir = mkdtempSync(join(tmpdir(), 'namo-version-')); t.after(() => rmSync(dir, { recursive: true, force: true }));

@@ -67,13 +67,13 @@ createInterface({ input: process.stdin }).on('line', line => {
     const database = join(dirname(cwd), 'data', 'bot.sqlite');
     const db = new DatabaseSync(database, { readOnly: true });
     const row = db.prepare('SELECT id,state,question FROM task_waits WHERE callId=?').get(waitParams.callId);
-    const link = external ? db.prepare("SELECT value FROM settings WHERE key='external-wait-link:'||?").get(row?.id) : undefined;
-    const ext = link ? JSON.parse(db.prepare('SELECT value FROM settings WHERE key=?').get('external-wait:' + link.value)?.value || 'null') : undefined;
+    const link = external ? db.prepare('SELECT externalWaitId FROM external_wait_links WHERE taskWaitId=?').get(row?.id) : undefined;
+    const ext = link ? db.prepare('SELECT * FROM external_waits WHERE id=?').get(link.externalWaitId) : undefined;
     db.close();
     const body = JSON.parse(m.result.contentItems?.[0]?.text || '{}');
     if (!row || row.state !== 'requested' || body.wait_id !== row.id
       || (!external && row.question !== 'Which branch?')
-      || (external && (!row.question.includes('octo-org/app#42') || ext?.target?.headSha !== 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'))) process.exit(34);
+      || (external && (!row.question.includes('octo-org/app#42') || JSON.parse(ext?.target || '{}').headSha !== 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'))) process.exit(34);
     writeFileSync(join(cwd, 'ack-after-durable'), row.id);
     return;
   }

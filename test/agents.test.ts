@@ -10,7 +10,7 @@ import { loadConfig, parseConfig } from '../src/config.js';
 import { waitFor } from './helpers.js';
 import { Waits } from '../src/waits.js';
 import { getAgentRegistry, selectAgent, resolveAgent, agentCodexConfig, selectedPolicyHash, agentSessionKey } from '../src/agent-registry.js';
-import { Store, SCHEMA_VERSION, type Incoming } from '../src/store.js';
+import { Store, type Incoming } from '../src/store.js';
 import { Tasks, policyHash } from '../src/tasks.js';
 import { Engine } from '../src/engine.js';
 import { type RunRequest } from '../src/runtime.js';
@@ -95,18 +95,6 @@ test('task and workstream snapshot survive reopen and default changes; native ID
   config.agents!.profiles.review.model='changed';
   assert.throws(()=>resolveAgent(config,tasks.selection(fresh.id)),/agent_configuration_changed/);
 });
-test('schema 8 upgrade retains legacy sessions and task state without rewriting existing rows',t=>{
-  const {store,tasks,project}=fixture(t);
-  store.enqueue(msg('old'));const task=tasks.create(store.get('old')!,{cwd:project,policyHash:'old-policy'});
-  store.saveThread(tasks.sessionKey(task),'old-native');
-  store.db.exec('DROP TABLE execution_bindings; PRAGMA user_version=8');
-  const before=JSON.stringify(store.db.prepare('SELECT * FROM tasks').all());
-  const upgraded=new Store(join(project,'..','bot.sqlite'));
-  assert.equal(JSON.stringify(upgraded.db.prepare('SELECT * FROM tasks').all()),before);
-  assert.equal(new Tasks(upgraded).selection(task.id),undefined);
-  assert.equal(new Tasks(upgraded).thread(task),'old-native');
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version,SCHEMA_VERSION);upgraded.close();
-});
 test('queued task keeps selected executor when default changes; existing workstream keeps binding',async t=>{
   const {config,store,tasks}=fixture(t);const requests:RunRequest[]=[];
   const engine=new Engine(store,{async run(r){requests.push(r);r.onThread('native');return {text:'done',threadId:'native',turnId:'turn'};}},
@@ -141,25 +129,6 @@ test('native wait IDs from independent profiles are scoped by durable run identi
     new Waits(store).request(task.id,run,{threadId:'same-native-thread',turnId:'same-native-turn',callId:'same-native-call',question:'Continue?'});
   }
   assert.equal(store.db.prepare('SELECT COUNT(*) n FROM task_waits').get()?.n,2);
-});
-
-test('registry migration rebuild preserves every legacy wait field and foreign-key link',t=>{
-  const {store,tasks,project}=fixture(t);store.enqueue(msg('legacy-wait'));
-  const task=tasks.create(store.get('legacy-wait')!,{cwd:project,policyHash:'legacy'}),run=tasks.start(task);tasks.saveRun(run,'native','turn');
-  new Waits(store).request(task.id,run,{threadId:'native',turnId:'turn',callId:'call',question:'Pick?',choices:['one','two']});
-  // Recreate the exact schema-8 global native-ID constraint with a populated wait.
-  const sql=String(store.db.prepare("SELECT sql FROM sqlite_master WHERE name='task_waits'").get()?.sql);
-  store.db.exec(`ALTER TABLE task_waits RENAME TO backup_waits;
-    ${sql.replace(/\)\s*$/, ', UNIQUE(threadId,turnId,callId))')};
-    INSERT INTO task_waits SELECT * FROM backup_waits; DROP TABLE backup_waits;
-    DROP TABLE execution_bindings; PRAGMA user_version=8;`);
-  const before=JSON.stringify(store.db.prepare('SELECT * FROM task_waits').all());
-  store.db.exec('UPDATE task_waits SET rowid=42');
-  const upgraded=new Store(join(project,'..','bot.sqlite'));
-  assert.equal(JSON.stringify(upgraded.db.prepare('SELECT * FROM task_waits').all()),before);
-  assert.equal(upgraded.db.prepare('SELECT rowid FROM task_waits').get()?.rowid,42);
-  assert.deepEqual(upgraded.db.prepare('PRAGMA foreign_key_check').all(),[]);
-  assert.equal(new Tasks(upgraded).get(task.id)?.state,'running');upgraded.close();
 });
 
 function agentManagementFixture(t: TestContext) {

@@ -1,4 +1,4 @@
-import { BackgroundWork } from './background-work.js';
+import { memoryJobs } from './business-storage.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Inbox, Store } from './store.js';
 import { Memories, MemoryError, type MemoryKind } from './memory.js';
@@ -30,15 +30,14 @@ export interface AutoMemoryOptions {
   redact: (text: string) => string;
   extract: (input: AutoMemoryInput, signal: AbortSignal) => Promise<unknown>;
 }
-interface Job {
+export interface Job {
   version: 1; id: string; inboxKeys: string[]; ownerId: string; chatKey: string;
-  chatType: 'p2p' | 'group'; project: string | null; sourceRunId: string;
+  chatType: 'p2p' | 'group'; project: string | null; sourceKey: string;
   state: 'pending' | 'running' | 'completed' | 'failed'; attempts: number;
   createdAt: number; dueAt: number; leaseUntil: number; lease: string | null;
   accepted?: number; rejected?: number; error?: 'extraction_failed';
 }
 
-export const AUTO_MEMORY_JOB_PREFIX = 'auto-memory:job:';
 const LEASE_MS = 120_000, TIMEOUT_MS = 60_000, MAX_ATTEMPTS = 3;
 const MAX_MESSAGES = 24, MAX_INPUT_CHARS = 16_000, MAX_CANDIDATES = 8, MAX_OUTPUT_CHARS = 12_000;
 const DEBOUNCE_MS = 1500, MERGE_WINDOW_MS = 15_000;
@@ -57,8 +56,8 @@ export class AutoMemories {
   private busy = false;
   constructor(private readonly store: Store, private readonly options: AutoMemoryOptions) {}
 
-  enqueue(inboxKeys: string[], project: string | null, sourceRunId: string): void {
-    if (!bounded(sourceRunId, 200) || !Array.isArray(inboxKeys) || inboxKeys.length > 100) return;
+  enqueue(inboxKeys: string[], project: string | null, sourceKey: string): void {
+    if (!bounded(sourceKey, 200) || !Array.isArray(inboxKeys) || inboxKeys.length > 100) return;
     const rows = [...new Set(inboxKeys)].flatMap(key => {
       if (typeof key !== 'string') return [];
       const row = this.store.get(key); return row && this.eligible(row) ? [row] : [];
@@ -66,11 +65,9 @@ export class AutoMemories {
     const first = rows[0]; if (!first) return;
     const selected = rows.filter(row => row.senderId === first.senderId && row.chatKey === first.chatKey
       && row.envelope!.chatType === first.envelope!.chatType).slice(-MAX_MESSAGES);
-    const id = createHash('sha256').update(sourceRunId).digest('hex'), now = Date.now();
+    const id = createHash('sha256').update(sourceKey).digest('hex'), now = Date.now();
     this.store.transaction(() => {
-      const sourceKey = 'auto-memory:source:' + id;
-      if (this.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(sourceKey)
-        || this.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(AUTO_MEMORY_JOB_PREFIX + id)) return;
+      if (this.store.db.prepare('SELECT 1 FROM memory_job_sources WHERE sourceKey=?').get(sourceKey)) return;
       const merged = this.jobs().find(job => job.state === 'pending' && job.attempts === 0 && now - job.createdAt <= MERGE_WINDOW_MS
         && job.ownerId === first.senderId && job.chatKey === first.chatKey && job.chatType === first.envelope!.chatType
         && job.project === project && new Set([...job.inboxKeys, ...selected.map(row => row.key)]).size <= MAX_MESSAGES);
@@ -78,20 +75,20 @@ export class AutoMemories {
         merged.inboxKeys = [...new Set([...merged.inboxKeys, ...selected.map(row => row.key)])]
           .sort((a, b) => this.store.get(a)!.seq - this.store.get(b)!.seq);
         merged.dueAt = now + DEBOUNCE_MS; this.write(merged);
-        this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(sourceKey, JSON.stringify({ jobId: merged.id }));
+        this.store.db.prepare('INSERT INTO memory_job_sources(sourceKey,jobId) VALUES(?,?)').run(sourceKey, merged.id);
       } else {
-        const job: Job = { version: 1, id, sourceRunId, inboxKeys: selected.map(row => row.key), ownerId: first.senderId,
+        const job: Job = { version: 1, id, sourceKey, inboxKeys: selected.map(row => row.key), ownerId: first.senderId,
           chatKey: first.chatKey, chatType: first.envelope!.chatType!, project,
           state: 'pending', attempts: 0, createdAt: now, dueAt: now + DEBOUNCE_MS, leaseUntil: 0, lease: null };
-        this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(AUTO_MEMORY_JOB_PREFIX + id, JSON.stringify(job));
-        this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(sourceKey, JSON.stringify({ jobId: id }));
+        memoryJobs(this.store.db).save(job, 'insert');
+        this.store.db.prepare('INSERT INTO memory_job_sources(sourceKey,jobId) VALUES(?,?)').run(sourceKey, id);
       }
     });
   }
 
   pending(): boolean {
     const now = Date.now();
-    // Decode only the indexed due set: a malformed legacy row must not create a busy pump loop.
+    // Query only the indexed due set; terminal history never enters the pump.
     return this.jobs(now).some(job => this.runnable(job, now));
   }
 
@@ -242,29 +239,18 @@ export class AutoMemories {
     }
   }
 
-  private jobs(now?: number): Job[] {
-    return new BackgroundWork(this.store).records('memory', now).flatMap(row => {
-      try {
-        const job = JSON.parse(String(row.value)) as Job;
-        return job.version === 1 && /^[a-f0-9]{64}$/.test(job.id) && Array.isArray(job.inboxKeys)
-          && ['pending', 'running', 'completed', 'failed'].includes(job.state) && Number.isSafeInteger(job.attempts)
-          && Number.isFinite(job.dueAt) && Number.isFinite(job.leaseUntil) ? [job] : [];
-      } catch { return []; }
-    });
+  private jobs(now = Number.MAX_SAFE_INTEGER): Job[] {
+    return memoryJobs(this.store.db).list("(state='pending' AND attempts<3 AND dueAt<=?) OR (state='running' AND leaseUntil<=?)", [now, now], 'ORDER BY createdAt,id');
   }
   private runnable(job: Job, now: number): boolean {
     return (job.attempts < MAX_ATTEMPTS && job.state === 'pending' && job.dueAt <= now)
       || (job.state === 'running' && job.leaseUntil <= now);
   }
   private owns(job: Job): boolean {
-    const value = this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(AUTO_MEMORY_JOB_PREFIX + job.id)?.value;
-    if (typeof value !== 'string') return false;
-    const current = JSON.parse(value) as Job;
-    return current.state === 'running' && current.lease === job.lease;
+    const current = memoryJobs(this.store.db).get(job.id);
+    return current?.state === 'running' && current.lease === job.lease;
   }
-  private write(job: Job): void {
-    this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(job), AUTO_MEMORY_JOB_PREFIX + job.id);
-  }
+  private write(job: Job): void { memoryJobs(this.store.db).save(job); }
   private complete(job: Job, accepted: number, rejected: number): void {
     if (!this.owns(job)) return;
     job.state = 'completed'; job.accepted = accepted; job.rejected = rejected; job.lease = null; job.leaseUntil = 0;

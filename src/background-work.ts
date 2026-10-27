@@ -2,16 +2,13 @@ import type { Store } from './store.js';
 
 export type WorkKind = 'memory' | 'artifact' | 'artifact-intent';
 
-/** Indexed scheduling projection; payload and audit history remain in the durable ledger. */
+/** Native queue indexes; no duplicated JSON ledger or trigger-maintained projection. */
 export class BackgroundWork {
   constructor(private readonly store: Store) {}
-
   ready(kind: WorkKind, now = Date.now()): boolean {
-    return !!this.store.db.prepare('SELECT 1 FROM background_work WHERE kind=? AND readyAt<=? LIMIT 1').get(kind, now);
-  }
-
-  records(kind: WorkKind, now = Number.MAX_SAFE_INTEGER): { key: string; value: string }[] {
-    return this.store.db.prepare(`SELECT s.key,s.value FROM background_work w JOIN settings s ON s.key=w.key
-      WHERE w.kind=? AND w.readyAt<=? ORDER BY w.createdAt,w.key`).all(kind, now) as unknown as { key: string; value: string }[];
+    if (kind === 'memory') return !!this.store.db.prepare(`SELECT 1 FROM memory_jobs
+      WHERE (state='pending' AND attempts<3 AND dueAt<=?) OR (state='running' AND leaseUntil<=?) LIMIT 1`).get(now, now);
+    if (kind === 'artifact') return !!this.store.db.prepare("SELECT 1 FROM artifact_deliveries WHERE state IN ('pending','uploaded') LIMIT 1").get();
+    return !!this.store.db.prepare("SELECT 1 FROM artifact_intents WHERE state='pending' LIMIT 1").get();
   }
 }

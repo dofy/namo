@@ -1,3 +1,4 @@
+import { memoryJobs } from '../src/business-storage.js';
 import { waitFor } from './helpers.js';
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,7 +8,7 @@ import { join } from 'node:path';
 import { Engine } from '../src/engine.js';
 import { Store, type Incoming } from '../src/store.js';
 import { Memories } from '../src/memory.js';
-import { AUTO_MEMORY_JOB_PREFIX, type AutoMemoryInput } from '../src/auto-memory.js';
+import { type AutoMemoryInput } from '../src/auto-memory.js';
 import type { Runtime } from '../src/runtime.js';
 import type { Config } from '../src/config.js';
 
@@ -17,13 +18,12 @@ function message(key: string, overrides: Partial<Incoming> = {}): Incoming {
     envelope: { version: 1, type: 'text', kind: 'instruction', chatType: 'p2p', scopeKey: 'alice-dm', materials: [], limitations: [] }, ...overrides };
 }
 function jobs(store: Store): { key: string; value: any }[] {
-  return store.db.prepare('SELECT key,value FROM settings WHERE key LIKE ?').all(AUTO_MEMORY_JOB_PREFIX + '%')
-    .map(row => ({ key: String(row.key), value: JSON.parse(String(row.value)) }));
+  return memoryJobs(store.db).list().map(value => ({key:value.id,value}));
 }
 function forceDue(store: Store) {
   for (const row of jobs(store)) if (row.value.state === 'pending') {
     row.value.dueAt = 0;
-    store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(row.value), row.key);
+    memoryJobs(store.db).save(row.value);
   }
 }
 function fixture(t: TestContext, runtime: Runtime, concurrency = 1) {

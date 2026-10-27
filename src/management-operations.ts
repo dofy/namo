@@ -1,3 +1,4 @@
+import { approvals as approvalRecords } from './business-storage.js';
 import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config.js';
@@ -37,8 +38,7 @@ export function approvalView(record: GitApprovalRecord): ApprovalView {
 }
 export function listApprovals(store: Store): ApprovalView[] {
   // Reading history must not create an engine, run Git, expire records, or take a write lock.
-  return store.db.prepare("SELECT value FROM settings WHERE key LIKE 'git-approval:%' ORDER BY json_extract(value,'$.createdAt') DESC LIMIT 50")
-    .all().map(row => approvalView(JSON.parse(String(row.value)) as GitApprovalRecord));
+  return approvalRecords(store.db).list('1', [], 'ORDER BY createdAt DESC,id LIMIT 50').map(approvalView);
 }
 export async function changeApproval(store: Store, config: Config, revision: string, currentRevision: () => string, input: ApprovalAction): Promise<ApprovalView> {
   if (input.configRevision !== revision) throw new ApprovalError('approval_config_changed', tr('management.configurationChangedReviewAgainApplying'));

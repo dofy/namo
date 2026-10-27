@@ -1,3 +1,4 @@
+import { approvalJobs } from './business-storage.js';
 import { selectAgent, selectedPolicyHash } from './agent-registry.js';
 import type { Config } from './config.js';
 import type { Incoming } from './store.js';
@@ -5,9 +6,8 @@ import { Store } from './store.js';
 import { ApprovalError, ExecFileGitRunner, GitApprovals, type ApprovalTaskContext, type GitRunner } from './approvals.js';
 import { Tasks } from './tasks.js';
 
-const JOB_PREFIX = 'git-approval-job:';
 type Action = 'request' | 'approve' | 'reject' | 'status';
-interface ApprovalJob { version: 1; inboxKey: string; action: Action; args: string[]; state: 'queued' | 'running' | 'done'; createdAt: number; updatedAt: number; }
+export interface ApprovalJob { version: 1; inboxKey: string; action: Action; args: string[]; state: 'queued' | 'running' | 'done'; createdAt: number; updatedAt: number; }
 
 const unavailableRunner: GitRunner = { async run() { return { exitCode: null, stdout: '', stderr: '', timedOut: false }; } };
 
@@ -23,8 +23,7 @@ export class ApprovalService {
   }
   start(): void {
     this.approvals.recoverInterrupted();
-    this.store.db.prepare("UPDATE settings SET value=json_set(value,'$.state','queued','$.updatedAt',?) WHERE key LIKE ? AND json_extract(value,'$.state')='running'")
-      .run(Date.now(), `${JOB_PREFIX}%`);
+    this.store.db.prepare("UPDATE approval_jobs SET state='queued',updatedAt=? WHERE state='running'").run(Date.now());
     this.schedule();
   }
   private syntax(text: string): { action: Action; args: string[] } | undefined {
@@ -46,7 +45,7 @@ export class ApprovalService {
       if (!acceptedIdentity) { this.store.finish(message.key, '受控 push 只接受已配对本人的私聊命令；本条未进入审批。', 'approval_identity_rejected'); return; }
       if (!parsed) { this.store.finish(message.key, '用法：/push-request N-任务编号 remote refs/heads/分支；/push-approve AP-编号 --confirm；/push-reject AP-编号；/push-status AP-编号。', 'approval_command_invalid'); return; }
       const job: ApprovalJob = { version: 1, inboxKey: message.key, action: parsed.action, args: parsed.args, state: 'queued', createdAt: Date.now(), updatedAt: Date.now() };
-      this.store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`${JOB_PREFIX}${message.key}`, JSON.stringify(job));
+      approvalJobs(this.store.db).save(job, 'ignore');
     });
     // Engine.accept owns the outer durable-acceptance transaction. Defer the
     // reader/runner until that transaction has either committed or rolled back.
@@ -66,9 +65,7 @@ export class ApprovalService {
     } while (this.scheduled || this.pumping);
   }
   private next(): ApprovalJob | undefined {
-    const row = this.store.db.prepare("SELECT value FROM settings WHERE key LIKE ? AND json_extract(value,'$.state')='queued' ORDER BY json_extract(value,'$.createdAt') LIMIT 1")
-      .get(`${JOB_PREFIX}%`) as { value: string } | undefined;
-    return row ? JSON.parse(row.value) as ApprovalJob : undefined;
+    return approvalJobs(this.store.db).list("state='queued'", [], 'ORDER BY createdAt,inboxKey LIMIT 1')[0];
   }
   private task(id: string): ApprovalTaskContext & { state: string } {
     const row = this.store.db.prepare('SELECT id,ownerId,chatKey,project,cwd,policyHash,state FROM tasks WHERE id=?').get(id) as Record<string, unknown> | undefined;
@@ -117,7 +114,7 @@ export class ApprovalService {
   private finish(job: ApprovalJob, text: string, error?: string): void {
     this.store.transaction(() => {
       const next = { ...job, state: 'done' as const, updatedAt: Date.now() };
-      this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(next), `${JOB_PREFIX}${job.inboxKey}`);
+      approvalJobs(this.store.db).save(next);
       this.store.finish(job.inboxKey, text, error);
     });
   }
@@ -125,7 +122,7 @@ export class ApprovalService {
     for (;;) {
       const job = this.next(); if (!job) return;
       const running = { ...job, state: 'running' as const, updatedAt: Date.now() };
-      this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(running), `${JOB_PREFIX}${job.inboxKey}`);
+      approvalJobs(this.store.db).save(running);
       try { this.finish(running, await this.process(running)); }
       catch (error) {
         const message = error instanceof ApprovalError ? error.message : '受控 push 操作未完成；未自动重试。';

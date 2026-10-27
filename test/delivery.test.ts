@@ -173,7 +173,7 @@ test('artifact delivery rejects another owner and detects changes after authoriz
     delivery.enqueue(f.command, f.task, 'output/report.md');
     writeFileSync(f.file, 'changed bytes after authorization\n');
     await delivery.tick();
-    const row = JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`artifact:${f.command.key}`)?.value));
+    const row = f.store.db.prepare('SELECT * FROM artifact_deliveries WHERE id=?').get(`artifact:${f.command.key}`)!;
     assert.equal(row.state, 'failed');
     assert.equal(row.error, 'artifact_changed_since_authorization');
   } finally {
@@ -207,7 +207,7 @@ test('artifact upload gets frozen bytes and an uncertain send is never replayed'
     delivery.enqueue(f.command, f.task, 'output/report.md');
     await delivery.tick();
     for (let index = 0; index < 5; index++) await delivery.tick();
-    const row = JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`artifact:${f.command.key}`)?.value));
+    const row = f.store.db.prepare('SELECT * FROM artifact_deliveries WHERE id=?').get(`artifact:${f.command.key}`)!;
     assert.equal(row.state, 'unknown');
     assert.equal(row.error, 'artifact_send_unknown');
     assert.equal(uploads, 1);
@@ -263,8 +263,8 @@ test('/run delivery intent freezes the completed file and uploads and sends it e
   assert.equal(uploads, 1);
   assert.equal(artifactSends, 1);
   const taskId = store.get('intent')?.taskId;
-  const intent = JSON.parse(String(store.db.prepare('SELECT value FROM settings WHERE key=?').get(`artifact-intent:${taskId}`)?.value));
-  const delivery = JSON.parse(String(store.db.prepare("SELECT value FROM settings WHERE key='artifact:intent'").get()?.value));
+  const intent = store.db.prepare('SELECT * FROM artifact_intents WHERE taskId=?').get(taskId!)!;
+  const delivery = store.db.prepare("SELECT * FROM artifact_deliveries WHERE id='artifact:intent'").get()!;
   assert.equal(intent.state, 'processed');
   assert.equal(delivery.state, 'sent');
   assert.equal(delivery.sha256, createHash('sha256').update(original).digest('hex'));

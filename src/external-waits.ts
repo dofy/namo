@@ -1,3 +1,4 @@
+import { externalWaits } from './business-storage.js';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Store } from './store.js';
 
@@ -96,7 +97,6 @@ export class ExternalWaitError extends Error {
   constructor(readonly code: string) { super(code); this.name = 'ExternalWaitError'; }
 }
 
-const PREFIX = 'external-wait:';
 const NAME = /^[A-Za-z0-9_.-]{1,100}$/;
 const SHA = /^[a-f0-9]{40}$/;
 const IDENTITY = /^[^\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]{1,512}$/u;
@@ -161,7 +161,6 @@ function validateObservation(value: GitHubObservation): void {
   }
 }
 
-function settingKey(id: string): string { return `${PREFIX}${id}`; }
 
 async function beforeDeadline<T>(promise: Promise<T>, deadlineMs: number): Promise<T> {
   const remaining = deadlineMs - Date.now();
@@ -205,22 +204,20 @@ export class ExternalWaits {
   constructor(private store: Store) {}
 
   private save(wait: ExternalWait): void {
-    this.store.db.prepare(`INSERT INTO settings(key,value) VALUES(?,?)
-      ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(settingKey(wait.id), JSON.stringify(wait));
+    externalWaits(this.store.db).save(wait);
   }
 
   get(id: string): ExternalWait | undefined {
     if (!/^EXT-[A-F0-9]{16}$/.test(id)) return;
-    const wait = decode(this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(settingKey(id))?.value);
-    return wait?.id === id ? wait : undefined;
+    const row = externalWaits(this.store.db).get(id);
+    return row ? decode(JSON.stringify(row)) : undefined;
   }
 
-  list(taskId?: string): ExternalWait[] {
-    const rows = this.store.db.prepare("SELECT key,value FROM settings WHERE key LIKE 'external-wait:%' ORDER BY key").all();
-    return rows.flatMap(row => {
-      const wait = decode(row.value);
-      return wait && row.key === settingKey(wait.id) && (!taskId || wait.taskId === taskId) ? [wait] : [];
-    });
+  list(taskId?: string, state?: ExternalWaitState): ExternalWait[] {
+    return externalWaits(this.store.db).list([taskId ? 'taskId=?' : '1', state ? 'state=?' : '1'].join(' AND '),
+      [...(taskId ? [taskId] : []), ...(state ? [state] : [])], 'ORDER BY id').flatMap(row => {
+        const wait = decode(JSON.stringify(row)); return wait ? [wait] : [];
+      });
   }
 
   request(context: ExternalWaitContext, request: ExternalWaitRequest, now = Date.now()): ExternalWait {
@@ -271,7 +268,7 @@ export class ExternalWaits {
   expire(now = Date.now()): string[] {
     return this.store.transaction(() => {
       const expired: string[] = [];
-      for (const wait of this.list()) {
+      for (const wait of this.list(undefined, 'open')) {
         if (wait.state !== 'open' || wait.expiresAt > now) continue;
         wait.state = 'timed_out'; wait.updatedAt = now; wait.revision++; this.save(wait); expired.push(wait.id);
       }
@@ -279,7 +276,7 @@ export class ExternalWaits {
     });
   }
 
-  ready(): ExternalWait[] { return this.list().filter(wait => wait.state === 'ready'); }
+  ready(): ExternalWait[] { return this.list(undefined, 'ready'); }
 
   /** Queue the resume durably inside callback; callback and consumption commit atomically. */
   consume<T>(id: string, binding: ExternalWaitBinding, enqueue: (result: ExternalWaitResume) => T,
@@ -357,7 +354,7 @@ export class ExternalWaits {
     // before network access. A restart therefore continues the rotation even
     // if the process stopped between selection and observation.
     const selected = this.store.transaction(() => {
-      const allOpen = this.list().filter(item => item.state === 'open');
+      const allOpen = this.list(undefined, 'open');
       const open = allOpen.sort((left, right) => {
         const leftPoll = left.lastPolledAt ?? -1, rightPoll = right.lastPolledAt ?? -1;
         return leftPoll - rightPoll || left.createdAt - right.createdAt || left.id.localeCompare(right.id);

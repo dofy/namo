@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Engine, SendError, type Sender } from '../src/engine.js';
 import { RuntimeError, type RunRequest, type RunResult, type Runtime, type WaitRequest } from '../src/runtime.js';
-import { Store, SCHEMA_VERSION, type Incoming } from '../src/store.js';
+import { Store, type Incoming } from '../src/store.js';
 import { Tasks } from '../src/tasks.js';
 import { WaitInputError, Waits } from '../src/waits.js';
 import { Cards } from '../src/cards.js';
@@ -48,21 +48,6 @@ function fixture(t: { after: (fn: () => void | Promise<void>) => void }, runtime
   });
   return { dir, one, two, store, tasks, config, makeEngine };
 }
-
-test('schema 5 upgrades with durable waits and optional choices without disturbing existing rows', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'namo-wait-schema-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const file = join(dir, 'bot.sqlite'); const created = new Store(file);
-  created.enqueue(message('existing'));
-  created.db.exec('DROP TABLE task_waits; PRAGMA user_version=5'); created.close();
-  const upgraded = new Store(file);
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version, SCHEMA_VERSION);
-  assert.equal(upgraded.get('existing')?.text, 'ORIGINAL_MARKER');
-  assert.deepEqual((upgraded.db.prepare('PRAGMA table_info(task_waits)').all() as { name: string }[]).map(row => row.name),
-    ['id', 'taskId', 'runId', 'threadId', 'turnId', 'callId', 'question', 'inputVersion', 'state', 'createdAt',
-      'settledAt', 'replyInboxKey', 'replyVersion', 'choices']);
-  upgraded.close();
-});
 
 test('requested wait is persisted before acknowledgement, parks every state, and crash recovery makes an unparked request uncertain', async t => {
   let observedRequested = false; let calls = 0;
@@ -297,9 +282,8 @@ test('choice callbacks require the owner and exact delivered card, and expired o
   assert.equal(f.s.db.prepare("SELECT COUNT(*) n FROM inbox WHERE envelope LIKE '%card_action%'").get()?.n,0);
 });
 
-test('legacy open questions stay text-answerable and schema 6 waiting rows survive the choices migration',t=>{
+test('open questions without choices stay text-answerable after reopening',t=>{
   const f=waitChoicesFixture(t);assert.equal(f.payload.elements.filter((e:any)=>e.tag==='action').length,1);
-  f.s.db.exec('ALTER TABLE task_waits DROP COLUMN choices; PRAGMA user_version=6');
   const upgraded=new Store(f.file);try {
     const waits=new Waits(upgraded),w=waits.get(f.id)!;assert.equal(w.state,'open');assert.equal(w.choices,undefined);
     const input={key:'reply',messageId:'reply',chatId:'chat',chatKey:'chat',senderId:'alice',text:'自由回答',

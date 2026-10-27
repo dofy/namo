@@ -1,3 +1,4 @@
+import { memoryJobs } from '../src/business-storage.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -5,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store, type Incoming } from '../src/store.js';
 import { Memories } from '../src/memory.js';
-import { AutoMemories, AUTO_MEMORY_JOB_PREFIX, type AutoMemoryCandidate, type AutoMemoryInput, type AutoMemoryOptions } from '../src/auto-memory.js';
+import { AutoMemories, type AutoMemoryCandidate, type AutoMemoryInput, type AutoMemoryOptions } from '../src/auto-memory.js';
 
 function fixture(t: any, extract: AutoMemoryOptions['extract'], redact = (text: string) => text) {
   const root = mkdtempSync(join(tmpdir(), 'namo-auto-memory-')), file = join(root, 'db.sqlite'), store = new Store(file);
@@ -25,23 +26,14 @@ function candidate(messageId: string, quote: string, extra: Partial<AutoMemoryCa
     text: 'Alice prefers Chinese answers.', evidence: [{ messageId, quote }], ...extra };
 }
 function jobs(store: Store): Record<string, any>[] {
-  return store.db.prepare('SELECT value FROM settings WHERE key GLOB ?').all(AUTO_MEMORY_JOB_PREFIX + '*').map(row => JSON.parse(String(row.value)));
+  return memoryJobs(store.db).list();
 }
 function due(store: Store): void {
   for (const job of jobs(store)) {
     job.dueAt = 0;
-    store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(job), AUTO_MEMORY_JOB_PREFIX + job.id);
+    store.db.prepare('UPDATE memory_jobs SET dueAt=0 WHERE id=?').run(job.id);
   }
 }
-
-test('malformed legacy jobs cannot keep the foreground scheduler in a background pump loop', async t => {
-  let calls = 0;
-  const f = fixture(t, async () => { calls++; return { memories: [] }; });
-  f.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(AUTO_MEMORY_JOB_PREFIX + 'invalid', JSON.stringify({
-    version: 1, id: 'invalid', inboxKeys: [], state: 'pending', attempts: 0, dueAt: 0, leaseUntil: 0, createdAt: 1,
-  }));
-  assert.equal(f.queue.pending(), false); await f.queue.tick(); assert.equal(calls, 0);
-});
 
 test('automatic extraction persists once with source references and creates active memory without confirmation', async t => {
   let calls = 0;
@@ -120,7 +112,7 @@ test('lease excludes a concurrent worker, and retry budget terminates repeated e
   const failing = new AutoMemories(f.store, { ...f.options, extract: async () => { throw Error('failed'); } });
   failing.enqueue([source.key], null, 'failed-run');
   for (let index = 0; index < 3; index++) { due(f.store); await failing.tick(); }
-  assert.equal(jobs(f.store).find(job => job.sourceRunId === 'failed-run')!.state, 'failed'); assert.equal(failing.pending(), false);
+  assert.equal(jobs(f.store).find(job => job.sourceKey === 'failed-run')!.state, 'failed'); assert.equal(failing.pending(), false);
 });
 
 test('explicit correction updates one automatic memory and an explicitly deleted concept stays deleted', async t => {
@@ -150,8 +142,8 @@ test('receiver cancellation releases extraction for retry and last-attempt expir
   await ready; controller.abort(); await running;
   assert.equal(jobs(f.store)[0]!.state, 'pending'); assert.equal(jobs(f.store)[0]!.attempts, 0);
   const stuck = jobs(f.store)[0]!;
-  stuck.state = 'running'; stuck.attempts = 3; stuck.leaseUntil = 0; stuck.lease = 'dead-worker';
-  f.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(stuck), AUTO_MEMORY_JOB_PREFIX + stuck.id);
+  stuck.state = 'running'; stuck.attempts = 3; stuck.leaseUntil = 1; stuck.lease = 'dead-worker';
+  memoryJobs(f.store.db).save(stuck as any);
   assert.equal(f.queue.pending(), true); due(f.store); await f.queue.tick();
   assert.equal(jobs(f.store)[0]!.state, 'failed'); assert.equal(f.queue.pending(), false);
 });

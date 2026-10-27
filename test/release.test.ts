@@ -118,7 +118,7 @@ test('upgrade guard accounts for queue, runner, wait, outbox, and maintenance st
     CREATE TABLE outbox(state TEXT); CREATE TABLE settings(key TEXT); PRAGMA user_version=6;
   `);
   previousDb.close();
-  assert.deepEqual(releaseUpgradeBlockers(previous), []);
+  assert.deepEqual(releaseUpgradeBlockers(previous), ['database-schema']);
   const old = join(temp, 'old.sqlite');
   const oldDb = new DatabaseSync(old); oldDb.exec('PRAGMA user_version=5'); oldDb.close();
   assert.deepEqual(releaseUpgradeBlockers(old), ['database-schema']);

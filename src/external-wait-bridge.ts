@@ -49,10 +49,8 @@ export function requestWait(store: Store, taskId: string, runId: string, request
 }
 
 function taskWaitForExternal(store: Store, externalId: string): string | undefined {
-  const rows = store.db.prepare("SELECT key FROM settings WHERE key LIKE 'external-wait-link:%' AND value=? LIMIT 2").all(externalId);
-  if (rows.length !== 1) return;
-  const key = String(rows[0].key), id = key.slice('external-wait-link:'.length);
-  return /^WAIT-[A-F0-9]{12}$/.test(id) ? id : undefined;
+  const row = store.db.prepare('SELECT taskWaitId FROM external_wait_links WHERE externalWaitId=?').get(externalId);
+  return row ? String(row.taskWaitId) : undefined;
 }
 
 export type ExternalPollAction = Readonly<{ externalWaitId: string; taskWaitId?: string;

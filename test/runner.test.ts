@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config.js';
-import { Store, SCHEMA_VERSION, type Incoming } from '../src/store.js';
+import { Store, type Incoming } from '../src/store.js';
 import { Engine } from '../src/engine.js';
 import { RunnerRuntime } from '../src/runner.js';
 import { Tasks } from '../src/tasks.js';
@@ -334,7 +334,7 @@ test('duplicate worker claims fail closed and configuration changes before start
   assert.equal(runnerJob(f.store, run)?.error, 'task_configuration_changed'); assert.equal(f.calls(), 1);
 });
 
-test('unclaimed start timeout fences late starters without rerunning; schema 4 migration preserves old rows', async t => {
+test('unclaimed start timeout fences late starters without rerunning', async t => {
   const f = fixture(t), receiver = f.receiver(); receiver.accept(message('a'));
   const task = f.tasks.get(f.store.get('a')!.taskId!)!, run = f.tasks.start(task);
   f.store.db.prepare("INSERT INTO runner_jobs(runId,owner,state,createdAt,updatedAt,configRevision,prompt) VALUES(?,?,'starting',0,0,?,?)")
@@ -342,13 +342,7 @@ test('unclaimed start timeout fences late starters without rerunning; schema 4 m
   assert.equal(reconcileRunner(f.store, run)?.state, 'lost');
   const late = spawn(process.execPath, [fileURLToPath(new URL('../src/runner-worker.js', import.meta.url)), join(f.data, 'bot.sqlite'), f.file, run, 'late'], { stdio: 'ignore' });
   await new Promise<void>(resolve => late.once('exit', () => resolve())); assert.equal(f.calls(), 0);
-  const old = f.store.db.prepare('SELECT * FROM inbox').all();
-  f.store.db.exec('DROP TABLE runner_events; DROP TABLE runner_jobs; PRAGMA user_version=4');
-  const readonly = new Store(join(f.data, 'bot.sqlite'), true); assert.equal(readonly.db.prepare('PRAGMA user_version').get()?.user_version, 4); readonly.close();
-  const upgraded = new Store(join(f.data, 'bot.sqlite'));
-  assert.deepEqual(upgraded.db.prepare('SELECT * FROM inbox').all(), old);
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version, SCHEMA_VERSION);
-  assert.equal(upgraded.db.prepare('SELECT COUNT(*) n FROM runner_jobs').get()?.n, 0); upgraded.close();
+
 });
 
 test('worker factory uses the pinned profile binary and isolated home, never the changed default', async t => {

@@ -30,9 +30,8 @@ export function buildTaskRunPrompt(store: Store, task: Task, inbox: Inbox, confi
     message: inbox, identity, dateTimeRelevant: isDateTimeTask(inbox.text),
   }), continuing);
 
-  // No memory rows means an upgraded installation keeps its prior prompt and
-  // does not manufacture an empty memory audit record.
-  if (!store.db.prepare("SELECT 1 FROM settings WHERE key LIKE 'memory:meta:%' LIMIT 1").get()) return prompt;
+  // Avoid adding an empty context block or audit record when no memories exist.
+  if (!store.db.prepare("SELECT 1 FROM memories LIMIT 1").get()) return prompt;
   const memories = new Memories(store, makeRedactor([config.feishu.appSecret]));
   const snapshot = memories.snapshot(runId, {
     kind: 'verified-user', authenticated: paired.has(inbox.senderId), ownerId: inbox.senderId,

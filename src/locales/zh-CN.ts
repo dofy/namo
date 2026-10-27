@@ -1,6 +1,7 @@
 import type { MessageKey } from './en.js';
 
 export const chinese = {
+  "management.databaseSchemaUnsupported": "数据库版本不兼容。请使用匹配版本；旧测试库需停服备份后重建，配置和 Codex 登录可保留。",
   "operations.approvalInputInvalid": "请选择已完成的任务和有效的审批目标。",
   "cli.help": "Namo · 飞书与 Codex\n\n用法：namo <命令> [--config 路径] [--lang system|en|zh-CN]\n  init                 初始化飞书、项目权限和用户配对\n  login                登录独立的官方 Codex 账号\n  start                在当前终端运行接收服务\n  service <操作>       install / start / stop / restart / upgrade / uninstall\n  ui                   打开本机工作台\n\n导入已有 OpenClaw 配置使用 init --import。\n状态、诊断、日志、任务和审批统一在工作台查看。\n命令信息使用 --help 或 --version。",
   "cli.optionOnce": "{0} 只能指定一次。",
@@ -497,9 +498,7 @@ export const chinese = {
   "management.configurationChangedReviewAgainApplying": "配置已变化，请重新检查后应用",
   "management.configurationIncludesFieldsCannotEdited": "包含不允许编辑的配置项",
   "management.configurationValidationFailedCheckProjectDirectoriesDefault": "配置未通过校验：请核对项目目录、默认项目、权限、并发和超时；原配置没有覆盖",
-  "management.databaseUpgradeRequiredUpgradeReceiverDuringMaintenance": "当前数据库尚未升级。请在维护窗口升级接收服务；界面没有迁移或修改数据",
   "management.dataDirectoryChangedExternallyCloseRestartWorkbench": "数据目录已被外部修改，请关闭并重新启动管理界面",
-  "management.dataVersionNotSupportBrowsingInitializeUpgrade": "当前数据版本不支持浏览，请先完成服务初始化或升级",
   "management.independentRunnersLostRunnerSlotsRemainFinish": "仍有独立运行或失联占位，请完成或在本机核对后再应用配置",
   "management.invalidAppIdentity": "应用身份无效",
   "management.invalidCancellationRequest": "取消请求无效",
@@ -512,7 +511,6 @@ export const chinese = {
   "management.invalidOrganizationAccessSettings": "组织接入配置无效",
   "management.invalidSecretFormat": "Secret 格式无效",
   "management.invalidTaskId": "任务编号无效",
-  "management.liveDataNeedsUpgradeProfilesCanEdited": "在线数据尚未升级，档案暂不可编辑；请在维护窗口升级接收服务",
   "management.localGithubLoginMustLinkedExactlyOne": "本机 GitHub 登录只能绑定一个已配对用户",
   "management.localGithubLoginUnavailableRunGhAuth": "无法使用本机 GitHub 登录，请先在本机运行 gh auth login 后重试",
   "management.localUserRequestedStop": "本机用户请求停止",
@@ -522,7 +520,6 @@ export const chinese = {
   "management.memoryScopeNotAvailableSelectedPairedUser": "记忆范围不属于当前已配对用户、项目或聊天",
   "management.noServiceDatabaseCompleteSetupFirst": "尚无服务数据库，请先完成初始化",
   "management.noTaskDatabaseCompleteNamoSetupFirst": "尚无任务数据库，请先完成 Namo 初始化",
-  "management.onlineDataNotUpgradedMemoryEditingUnavailable": "在线数据尚未升级，记忆暂不可编辑；请在维护窗口升级接收服务",
   "management.operationIdAlreadyUsed": "操作编号已使用",
   "management.pairedUsersCurrentAppMayMemoryManaged": "只能管理当前应用中已配对用户的记忆",
   "management.profilesCannotContainCredentialsRemoveThemTry": "档案不能包含凭据，请移除后重试",
@@ -535,7 +532,6 @@ export const chinese = {
   "management.taskChangedItsRunnerFinishedLostContact": "任务已变化或独立运行已结束或失联，请刷新任务或通过异常入口核对；没有再发出停止请求",
   "management.taskChangedRefreshActing": "任务已变化，请刷新后操作",
   "management.tasksOutgoingMessagesStillPendingWaitCompletion": "仍有在途任务或待发送消息，请完成后再应用；没有中断任务",
-  "management.upgradeReceiverEnableIssueReview": "请先升级接收服务以启用异常核对",
   "memory.activate": "审阅并启用",
   "memory.active": "已启用",
   "memory.add": "手动新增记忆（可选）",

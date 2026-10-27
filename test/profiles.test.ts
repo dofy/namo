@@ -2,7 +2,7 @@ import { storeFixture } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { Store, SCHEMA_VERSION } from '../src/store.js';
+import { Store } from '../src/store.js';
 import { Profiles } from '../src/profiles.js';
 import { Engine } from '../src/engine.js';
 import { normalizeEvent } from '../src/feishu.js';
@@ -68,17 +68,6 @@ test('profile and audit writes roll back together on storage failure', t => {
   f.store.db.exec("CREATE TRIGGER reject_profile_audit BEFORE INSERT ON profile_changes BEGIN SELECT RAISE(ABORT,'audit_failed'); END");
   assert.throws(() => f.profiles.update(0, { name: 'rollback' }, owner), /audit_failed/);
   assert.equal(f.profiles.get().version, 0);
-});
-
-test('schema 2 migration preserves every old table and is repeatable', t => {
-  const f = fixture(t); f.store.bindAccount('app'); f.store.enqueue(message('old', 'keep'));
-  f.store.db.exec('DROP TABLE user_profiles; DROP TABLE profile_changes; PRAGMA user_version=2');
-  const snapshot = () => Object.fromEntries(f.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('user_profiles','profile_changes') ORDER BY name").all()
-    .map(({ name }) => [name, f.store.db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all()]));
-  const before = snapshot();
-  for (let i = 0; i < 2; i++) { const s = new Store(f.file); assert.equal(s.db.prepare('PRAGMA user_version').get()?.user_version, SCHEMA_VERSION); s.close(); assert.deepEqual(snapshot(), before); }
-  assert.equal(f.store.db.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok');
-  assert.deepEqual(f.store.db.prepare('PRAGMA foreign_key_check').all(), []);
 });
 
 test('private self-service is durable and duplicate commands do not repeat profile edits', t => {

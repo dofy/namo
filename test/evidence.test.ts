@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, symlinkSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { Store, SCHEMA_VERSION } from '../src/store.js';
+import { Store } from '../src/store.js';
 import { Tasks } from '../src/tasks.js';
 import { Engine, SendError } from '../src/engine.js';
 import { RuntimeError, type Runtime } from '../src/runtime.js';
@@ -83,20 +83,6 @@ test('crash recovery keeps completed evidence, marks unacknowledged actions unkn
   const old = new Store(f.file, true);
   assert.deepEqual(readEvidence(old, f.task.id), []);
   assert.equal(old.db.prepare('PRAGMA user_version').get()?.user_version, 3); old.close();
-});
-
-test('schema 3 upgrade preserves all old table rows and repeat opens do not manufacture evidence', t => {
-  const f = fixture(t); f.tasks.finish(f.task, f.run, 'original answer');
-  f.store.db.exec('DROP TABLE run_evidence; PRAGMA user_version=3');
-  const tables = f.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(r => String(r.name));
-  const snapshot = () => tables.map(name => f.store.db.prepare('SELECT * FROM "' + name + '" ORDER BY rowid').all());
-  const before = snapshot();
-  for (let n = 0; n < 2; n++) {
-    const upgraded = new Store(f.file);
-    assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version, SCHEMA_VERSION);
-    assert.deepEqual(readEvidence(upgraded, f.task.id), []); upgraded.close();
-    assert.deepEqual(snapshot(), before);
-  }
 });
 
 test('Git evidence observes HEAD changes without attributing commits or treating dirty files as new work', t => {

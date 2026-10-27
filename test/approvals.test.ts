@@ -1,3 +1,5 @@
+import { seedRun } from './helpers.js';
+import { approvals as approvalRecords } from '../src/business-storage.js';
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -27,6 +29,7 @@ function fixture(t: { after(fn: () => void): void }) {
   command(repo, ['remote', 'add', 'origin', bare]);
   const store = new Store(join(data, 'bot.sqlite')); t.after(() => store.close());
   const task: ApprovalTaskContext = { taskId: 'N-APPROVAL01', ownerId: 'ou_owner', chatKey: 'chat_owner', project: 'app', cwd: realpathSync(repo), policyHash: 'a'.repeat(64) };
+  seedRun(store, 'approval-run', task.taskId);
   const approvals = new GitApprovals(store, { remotes: [{ name: 'origin', url: bare, transport: 'local-test' }] }, new ExecFileGitRunner(git));
   const actor = { ownerId: task.ownerId, chatKey: task.chatKey, authority: 'verified-owner-command' as const };
   return { root, repo, bare, store, task, approvals, actor };
@@ -112,7 +115,7 @@ test('inspection disables fsmonitor, rejects executable filters before status, a
 test('an interrupted one-time attempt is reconciled by remote read and is never blindly retried', async t => {
   const f = fixture(t); const pending = await f.approvals.request(f.task, { remote: 'origin', ref: 'refs/heads/main', configRevision: CONFIG_REVISION }); f.approvals.approve(pending.id, f.actor);
   const record = f.approvals.get(pending.id)!; record.state = 'executing'; record.revision++; record.attemptId = 'simulated-crash';
-  f.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(record), `git-approval:${record.id}`);
+  approvalRecords(f.store.db).save(record);
   command(f.repo, ['push', f.bare, `${record.target.headSha}:refs/heads/main`]);
   assert.equal(f.approvals.recoverInterrupted(), 1); assert.equal(f.approvals.get(record.id)?.state, 'unknown');
   const reconciled = await f.approvals.reconcile(record.id, f.task, CONFIG_REVISION); assert.equal(reconciled.state, 'succeeded'); assert.equal(reconciled.reason, 'remote_ref_verified_after_unknown');

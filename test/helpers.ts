@@ -30,3 +30,17 @@ export function writable(path: string): void {
 export function put(path: string, body: string): void {
   mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, body);
 }
+
+/** Real task/run parents for tests focused on child ledgers. */
+export function seedRun(store: Store, runId: string, taskId = 'task:' + runId): void {
+  if (store.db.prepare('SELECT 1 FROM task_runs WHERE id=?').get(runId)) return;
+  store.transaction(() => {
+    const key = 'source:' + taskId;
+    store.enqueue({key,messageId:key,chatId:'fixture-chat',chatKey:'fixture-chat',senderId:'fixture-owner',text:'fixture source'});
+    store.db.prepare('INSERT OR IGNORE INTO workstreams(id,chatKey,scopeKey,ownerId,cwd,policyHash,createdAt) VALUES(?,?,?,?,?,?,?)')
+      .run(taskId,'fixture-chat','fixture-chat','fixture-owner','/fixture','policy',1);
+    store.db.prepare('INSERT OR IGNORE INTO tasks(id,inboxKey,workstreamId,ownerId,chatKey,scopeKey,cwd,policyHash) VALUES(?,?,?,?,?,?,?,?)')
+      .run(taskId,key,taskId,'fixture-owner','fixture-chat','fixture-chat','/fixture','policy');
+    store.db.prepare('INSERT INTO task_runs(id,taskId,inputVersion,state,startedAt) VALUES(?,?,1,\'succeeded\',1)').run(runId,taskId);
+  });
+}
