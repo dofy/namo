@@ -98,7 +98,7 @@ export function publicGitHubAccess(config?: GitHubAccessConfig) {
     ...(config?.grants ? {grants:structuredClone(config.grants)} : {}) };
 }
 
-/** Private access requires a verified owner task in a direct message; token mode also scopes repositories. */
+/** Shared access binds a durable task to an explicit repository audience; legacy grants remain DM-only. */
 export class ScopedGitHubAdapter implements GitHubObservationAdapter {
   private readonly config: GitHubAccessConfig | undefined;
   constructor(private readonly store: Store, config?: GitHubAccessConfig, private readonly fetcher?: typeof globalThis.fetch,

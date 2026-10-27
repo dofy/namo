@@ -7,7 +7,8 @@ import type { Config } from './config.js';
 import { digest } from './paths.js';
 import { codexEnvironment } from './safety.js';
 import { Store } from './store.js';
-import { RuntimeError, type Runtime, type RunRequest, type RunResult } from './runtime.js';
+import { extractConversationMemory, RuntimeError, type Runtime, type RunRequest, type RunResult } from './runtime.js';
+import type { AutoMemoryInput } from './auto-memory.js';
 import { runnerJob, runnerEvent, reconcileRunner } from './runner-store.js';
 import { saveRunImages } from './image-inputs.js';
 
@@ -15,6 +16,7 @@ import { saveRunImages } from './image-inputs.js';
 export class RunnerRuntime implements Runtime {
   readonly persistent = true;
   constructor(private store: Store, private config: Config) {}
+  extractMemory(input: AutoMemoryInput, signal: AbortSignal): Promise<unknown> { return extractConversationMemory(this.config.codex,input,signal); }
   reservations(): { runId: string; chatKey: string; cwd: string }[] {
     return this.store.db.prepare(`SELECT j.runId,t.chatKey,t.cwd FROM runner_jobs j JOIN task_runs r ON r.id=j.runId
       JOIN tasks t ON t.id=r.taskId WHERE j.state IN ('starting','running','lost')`).all() as unknown as { runId: string; chatKey: string; cwd: string }[];

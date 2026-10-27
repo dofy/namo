@@ -17,6 +17,7 @@ import { evidenceBrief, taskStateLabel, taskStatus } from './presentation.js';
 import { Waits, WaitInputError } from './waits.js';
 import { memoryCommand } from './memory-commands.js';
 import { buildTaskRunPrompt } from './task-context.js';
+import { AutoMemories } from './auto-memory.js';
 import { requestWait, pollAndResume } from './external-wait-bridge.js';
 import { ScopedGitHubAdapter } from './github-access.js';
 import { ArtifactDelivery } from './artifact-delivery.js';
@@ -28,6 +29,7 @@ import { richPost, openFence, hasMarkdown } from './richtext.js';
 import { Feedback, recordActivity } from './feedback.js';
 import { admitted, projectAllowed, executionPolicy } from './access.js';
 import { assertReviewDelivery, readReview } from './github-review.js';
+import { recordProgress } from './public-progress.js';
 
 export interface DeliveryRoute { messageId: string; thread: boolean; }
 export interface Sender {
@@ -66,12 +68,23 @@ export class Engine {
   private approvals?: ApprovalService;
   private externalPolling?: Promise<unknown>;
   private nextExternalPoll = 0;
+  private autoMemories?: AutoMemories;
+  private memoryRunning?: Promise<void>;
+  private memoryAbort?: AbortController;
   constructor(readonly store: Store, private runtime: Runtime, private sender: Sender,
     private config: Pick<Config, 'dataDir' | 'concurrency' | 'github'> & { file?:string; codex?: Config['codex']; feishu?: Partial<Config['feishu']> },
     private redact: (s: string) => string = s => s,
     private log: Log = () => {},
-    private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); this.feedback = new Feedback(store, sender); this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined,id=>{const task=this.tasks.get(id);return !!task&&this.taskAccessible(task);});
-      if(config.file){const file=config.file;this.approvals=new ApprovalService(store,loadConfig(file),digest(readFileSync(file,'utf8')),()=>digest(readFileSync(file,'utf8')));} }
+    private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); this.feedback = new Feedback(store, sender,task=>this.taskAccessible(task)); this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined,id=>{const task=this.tasks.get(id);return !!task&&this.taskAccessible(task);});
+      if(config.file){const file=config.file;this.approvals=new ApprovalService(store,loadConfig(file),digest(readFileSync(file,'utf8')),()=>digest(readFileSync(file,'utf8')));}
+      if(runtime.extractMemory&&(config.feishu?.access||config.feishu?.allowedUserIds?.length))this.autoMemories=new AutoMemories(store,{
+        allowedUsers:config.feishu?.allowedUserIds??[],authorize:row=>{
+          try {
+            const f=config.file?loadConfig(config.file).feishu:config.feishu as Config['feishu'];
+            return admitted(f,row.senderId,row.chatId,row.envelope?.tenantKey);
+          } catch { return false; }
+        },redact,extract:(input,signal)=>runtime.extractMemory!(input,signal)});
+    }
 
   private fatal(code: string): void {
     this.stopped = true; clearInterval(this.interval);
@@ -90,6 +103,7 @@ export class Engine {
         kind: 'material', scopeKey: scopeOf(safe), materials: safe.envelope?.materials ?? [], limitations: safe.envelope?.limitations ?? [] };
       if (!this.store.enqueue(safe)) return false;
       if (!this.handleControl(safe)) this.route(this.store.get(safe.key)!);
+      this.autoMemories?.enqueue([safe.key],this.tasks.binding(safe)?.project??null,`message:${safe.key}`);
       if (this.store.get(safe.key)?.taskId && this.config.feishu?.reactions !== false) this.feedback.accepted(safe.key);
       return true;
     });
@@ -260,10 +274,18 @@ export class Engine {
       }
       void this.artifacts.tick().catch(()=>this.fatal('artifact_storage_error'));
       void this.feedback.tick({progress:this.config.feishu?.progressUpdates,cadenceMs:this.config.feishu?.progressIntervalMs,heartbeatMs:this.config.feishu?.progressHeartbeatMs}).catch(()=>this.fatal('feedback_storage_error'));
+      // Extraction is background work: yield its slot when a user task arrives.
+      if(this.memoryRunning){
+        const activeIds=new Set([...this.active.values()].map(a=>a.run));
+        const reservations=(this.runtime.reservations?.()??[]).filter(r=>!activeIds.has(r.runId));
+        const blocked=[...this.active.values(),...reservations];
+        const ready=this.tasks.candidates().some(t=>!this.active.has(t.chatKey)&&!blocked.some(a=>('chatKey' in a&&a.chatKey===t.chatKey)||pathsOverlap(a.cwd,t.cwd)));
+        if(ready&&this.active.size+reservations.length+1>=this.config.concurrency)this.memoryAbort?.abort('foreground_task');
+      }
       for (;;) {
         const activeRuns = new Set([...this.active.values()].map(a => a.run));
         const reservations = (this.runtime.reservations?.() ?? []).filter(r => !activeRuns.has(r.runId));
-        if (this.active.size + reservations.length >= this.config.concurrency) break;
+        if (this.active.size + reservations.length + (this.memoryRunning ? 1 : 0) >= this.config.concurrency) break;
         const claimed=this.store.transaction(()=>{
           if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
           const next=this.tasks.candidates().find(t=>!this.active.has(t.chatKey)&&![...this.active.values(), ...reservations].some(a=>('chatKey' in a && a.chatKey===t.chatKey)||pathsOverlap(a.cwd,t.cwd)));
@@ -272,6 +294,16 @@ export class Engine {
         if (!claimed) break;
         const {next,run}=claimed;
         this.track(next, run);
+      }
+      const reserved=this.runtime.reservations?.()??[];
+      const runs=new Set([...this.active.values()].map(a=>a.run));
+      if(!this.memoryRunning&&this.autoMemories?.pending()
+        &&this.active.size+reserved.filter(r=>!runs.has(r.runId)).length<this.config.concurrency
+        &&!this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get()) {
+        this.memoryAbort=new AbortController();
+        this.memoryRunning=this.autoMemories.tick(this.memoryAbort.signal)
+          .catch(()=>this.log('memory_extraction_failed'))
+          .finally(()=>{this.memoryRunning=undefined;this.memoryAbort=undefined;void this.pump();});
       }
       if (!this.outputBusy) {
         this.outputBusy = true;
@@ -322,6 +354,7 @@ export class Engine {
         prompt, images,
         ...(this.config.file?{onReview:(args:unknown)=>readReview(this.store,this.config.file!,task,args,signal)}:{}),
         onActivity: phase => recordActivity(this.store, run, phase),
+        onProgress: event => recordProgress(this.store, run, event, this.redact),
         onThread: threadId => { this.store.saveThread(sessionKey(task.workstreamId), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
         onTurn: turnId => { const threadId = this.store.thread(sessionKey(task.workstreamId)); if (threadId) { this.store.saveRun(m.key, threadId, turnId); this.tasks.saveRun(run, threadId, turnId); } },
         onReady: controls => { const slot = this.active.get(m.chatKey); if (slot?.task.id === task.id) { slot.controls = controls; void this.steer(slot).catch(() => this.fatal('revision_storage_error')); } },
@@ -437,7 +470,7 @@ export class Engine {
         return next && this.store.sending(next.id) ? next : undefined;
       });
       if (!output) return;
-      if (this.config.file && (output.kind==='result'||output.kind.startsWith('card-status:'))) {
+      if (this.config.file) {
         const taskId=this.store.get(output.inboxKey)?.taskId, task=taskId?this.tasks.get(taskId):undefined;
         if (task) try {
           const current=loadConfig(this.config.file), message=this.store.get(task.inboxKey)!;
@@ -448,7 +481,7 @@ export class Engine {
           this.log('reply_withheld',{outboxId:output.id,code:'access_changed'}); continue;
         }
       }
-      if(output.kind==='result'&&this.config.feishu?.progressUpdates!==false){const task=this.store.get(output.inboxKey)?.taskId;if(task)await this.feedback.finalize(task);}
+      if(output.kind==='result'&&this.config.feishu?.progressUpdates!==false){const task=this.store.get(output.inboxKey)?.taskId;if(task)void this.feedback.finalize(task).catch(()=>this.fatal('feedback_storage_error'));}
       this.nextSendAt = Date.now() + 300;
       let platformId: string;
       let card: object|undefined;
@@ -480,12 +513,14 @@ export class Engine {
   }
   async stop(): Promise<void> {
     this.stopped = true; clearInterval(this.interval);
+    this.memoryAbort?.abort();
     const tasks = [...this.active.values()];
     for (const task of tasks) task.abort.abort(this.runtime.persistent ? 'receiver_stopped' : undefined);
     await Promise.allSettled(tasks.map(t => t.promise));
     await this.feedback.settle();
     await this.artifacts.settle();
     await this.externalPolling;
+    await this.memoryRunning;
     await this.approvals?.idle();
     while (this.outputBusy) await new Promise(r => setTimeout(r, 20));
   }

@@ -5,10 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexRuntime, RuntimeError } from '../src/runtime.js';
 import type { EvidenceItem } from '../src/ui-contract.js';
+import type { PublicProgressEvent } from '../src/public-progress.js';
 
 const FAKE = `#!/usr/bin/env node
 import { createInterface } from 'node:readline';
 const write = m => process.stdout.write(JSON.stringify(m)+'\\n');
+let waitAfterLate=false;
 createInterface({input:process.stdin}).on('line', line=>{
  const m=JSON.parse(line);
  if(m.id===99&&!m.method){
@@ -18,6 +20,11 @@ createInterface({input:process.stdin}).on('line', line=>{
  if(!m.method || m.id===undefined)return;
  if(m.method==='initialize')return write({id:m.id,result:{}});
  if(m.method==='thread/start'||m.method==='thread/resume')return write({id:m.id,result:{thread:{id:m.params.threadId||'thread-one'}}});
+ if(m.method==='turn/interrupt'&&waitAfterLate){
+  write({id:m.id,result:{}});
+  write({method:'item/started',params:{threadId:m.params.threadId,turnId:'turn-one',item:{id:'cmd',type:'commandExecution',command:'pnpm test',status:'inProgress'}}});
+  return write({method:'turn/completed',params:{threadId:m.params.threadId,turn:{id:'turn-one',status:'interrupted',items:[{id:'wait-call',type:'dynamicToolCall',namespace:null,tool:'wait_for_user',status:'completed',success:true}]}}});
+ }
  if(m.method==='turn/steer'){
   if(m.params.expectedTurnId!=='turn-one')return write({id:m.id,error:{code:-32602,message:'wrong turn'}});
   if(m.params.input[0].text==='reject')return write({id:m.id,error:{code:-32600,message:'rejected'}});
@@ -36,6 +43,45 @@ createInterface({input:process.stdin}).on('line', line=>{
   if(prompt==='hang')return write({id:m.id,result:{turn:{id:'turn-one'}}});
   if(prompt==='disconnect')return process.exit(1);
   const threadId=m.params.threadId;
+  if(prompt==='late-start-wait'){
+   waitAfterLate=true;
+   const cmd={id:'cmd',type:'commandExecution',command:'pnpm test',status:'inProgress'};
+   for(const [method,item] of [['item/started',cmd],['item/completed',{...cmd,status:'completed',exitCode:0}],['item/started',cmd]])
+    write({method,params:{threadId,turnId:'turn-one',item}});
+   write({id:901,method:'item/tool/call',params:{threadId,turnId:'turn-one',callId:'wait-call',namespace:null,tool:'wait_for_user',arguments:{question:'请选择目标'}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
+  }
+  if(prompt==='active-snapshot'){
+   const items=[{id:'active',type:'commandExecution',command:'pnpm test',status:'inProgress'},
+    {id:'unknown',type:'mcpToolCall',status:'futureStatus'},
+    {id:'final',type:'agentMessage',phase:'final_answer',text:'answer'}];
+   write({method:'turn/completed',params:{threadId,turn:{id:'turn-one',status:'completed',items}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
+  }
+  if(prompt==='public-progress'){
+   const item=(method,value,tid='turn-one',thread=threadId)=>write({method,params:{threadId:thread,turnId:tid,item:value}});
+   const plan=(tid,thread=threadId)=>write({method:'turn/plan/updated',params:{threadId:thread,turnId:tid,explanation:'PRIVATE_EXPLANATION',plan:[{step:'PRIVATE_STEP',status:'completed'},{step:'PRIVATE_NEXT',status:'inProgress'}]}});
+   plan('old-turn'); plan('turn-one','another-thread'); plan('turn-one');
+   item('item/completed',{id:'stale',type:'agentMessage',phase:'commentary',text:'PRIVATE_STALE'},'old-turn');
+   item('item/completed',{id:'foreign',type:'agentMessage',phase:'commentary',text:'PRIVATE_FOREIGN'},'turn-one','another-thread');
+   item('item/agentMessage/delta',{id:'delta',type:'agentMessage',phase:'commentary',text:'PRIVATE_DELTA'});
+   item('item/reasoning/summaryTextDelta',{id:'summary',type:'reasoning',text:'PRIVATE_SUMMARY'});
+   item('item/reasoning/textDelta',{id:'thought',type:'reasoning',text:'PRIVATE_THOUGHT'});
+   item('item/completed',{id:'reason',type:'reasoning',summary:['PRIVATE_REASON'],content:['PRIVATE_CONTENT']});
+   item('item/started',{id:'comment',type:'agentMessage',phase:'commentary',text:'PRIVATE_PARTIAL'});
+   item('item/completed',{id:'async-comment',type:'agentMessage',phase:'commentary',delivery:'async',text:'PRIVATE_ASYNC'});
+   item('item/completed',{id:'comment',type:'agentMessage',phase:'commentary',text:'已检查现有实现，接下来验证修改。'});
+   for(const [id,command,exitCode] of [['test','pnpm test --password PRIVATE_ARGUMENT',0],['lint','pnpm lint --token PRIVATE_TOKEN',2]]){
+    const cmd={id,type:'commandExecution',command,status:'inProgress',cwd:'/PRIVATE_CWD',aggregatedOutput:'PRIVATE_OUTPUT'};
+    item('item/started',cmd); item('item/completed',{...cmd,status:'completed',exitCode});
+   }
+   item('item/started',{id:'tool',type:'mcpToolCall',server:'PRIVATE_SERVER',tool:'PRIVATE_TOOL',arguments:{token:'PRIVATE_ARGS'},status:'inProgress'});
+   item('item/completed',{id:'tool',type:'mcpToolCall',server:'PRIVATE_SERVER',tool:'PRIVATE_TOOL',status:'completed',success:false,result:'PRIVATE_RESULT'});
+   item('item/completed',{id:'files',type:'fileChange',status:'completed',changes:[{path:'/PRIVATE_FILE',kind:{type:'update'},diff:'PRIVATE_DIFF'}]});
+   write({method:'turn/plan/updated',params:{threadId,turnId:'turn-one',plan:[{step:'PRIVATE_STEP',status:'completed'},{step:'PRIVATE_NEXT',status:'completed'}]}});
+   write({method:'turn/completed',params:{threadId,turn:{id:'turn-one',status:'completed',items:[{id:'final',type:'agentMessage',phase:'final_answer',text:'answer'}]}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
+  }
   if(prompt==='evidence'||prompt==='evidence-fail'){
    const command={id:'cmd',type:'commandExecution',command:'pnpm test --password PRIVATE_ARGUMENT',cwd:process.cwd(),status:'inProgress',aggregatedOutput:'PRIVATE_OUTPUT'};
    write({method:'item/completed',params:{threadId,turnId:'old-turn',item:{...command,id:'stale'}}});
@@ -148,4 +194,49 @@ test('PR review tool handles buffered calls asynchronously and sanitizes errors 
  const failure=await run('review',async()=>{throw new Error('PRIVATE_TOKEN in upstream error');});
  assert.match(failure.text,/github_review_unavailable/);assert.doesNotMatch(failure.text,/PRIVATE_TOKEN/);
  await run('review-invalid',async()=>{throw new Error('should not run');});
+});
+
+test('public progress before start receipt keeps only scoped commentary, plan counts and safe tool summaries', async t => {
+  const { dir, runtime } = fixture(t), progress: PublicProgressEvent[] = [], phases: string[] = [];
+  let bound = false;
+  const result = await runtime.run({ cwd: dir, prompt: 'public-progress', signal: new AbortController().signal,
+    onThread() {}, onTurn() { bound = true; }, onActivity: phase => phases.push(phase),
+    onProgress: event => { assert.equal(bound, true); progress.push(event); } });
+  assert.equal(result.text, 'answer'); assert.equal(progress.length, 10);
+  assert.ok(progress.every(event => event.threadId === 'thread-one' && event.turnId === 'turn-one'));
+  assert.deepEqual(progress.filter(event => event.kind === 'commentary').map(event => event.text), ['已检查现有实现，接下来验证修改。']);
+  assert.deepEqual(progress.filter(event => event.kind === 'plan').map(event => [event.status, event.text]), [
+    ['running', '计划：已完成 1/2 项，正在处理 1 项'], ['completed', '计划：已完成 2/2 项'],
+  ]);
+  assert.deepEqual(progress.filter(event => event.id === 'test').map(event => [event.status, event.text]), [
+    ['running', 'pnpm test：执行中'], ['completed', 'pnpm test：已结束，退出码 0'],
+  ]);
+  assert.deepEqual(progress.filter(event => event.id === 'lint').map(event => [event.status, event.text]), [
+    ['running', 'pnpm lint：执行中'], ['failed', 'pnpm lint：未成功结束，退出码 2'],
+  ]);
+  assert.equal(progress.findLast(event => event.id === 'tool')?.status, 'failed');
+  assert.equal(progress.find(event => event.id === 'files')?.text, '修改文件：已结束');
+  assert.equal(phases[0], 'working'); assert.doesNotMatch(JSON.stringify(progress), /PRIVATE/);
+});
+
+test('late starts cannot reopen a completed operation, regress activity or block a subsequent wait', async t => {
+  const { dir, runtime } = fixture(t), progress: PublicProgressEvent[] = [], phases: string[] = [], evidence: EvidenceItem[] = [];
+  let waits = 0;
+  const result = await runtime.run({ cwd: dir, prompt: 'late-start-wait', signal: new AbortController().signal,
+    onThread() {}, onTurn() {}, onActivity: phase => phases.push(phase), onProgress: event => progress.push(event),
+    onEvidence: item => evidence.push(item), onWait() { waits++; return 'stored-wait'; } });
+  assert.equal(result.waiting?.id, 'stored-wait'); assert.equal(waits, 1);
+  assert.deepEqual(progress.map(event => event.status), ['running', 'completed']);
+  assert.deepEqual(evidence.map(item => item.status), ['running', 'completed']);
+  // The two delayed starts (before and after wait persistence) are both ignored.
+  assert.deepEqual(phases, ['command', 'working', 'working']);
+});
+
+test('an explicit active or unknown tool status in a terminal snapshot never becomes a completed action', async t => {
+  const { dir, runtime } = fixture(t), progress: PublicProgressEvent[] = [];
+  const result = await runtime.run({ cwd: dir, prompt: 'active-snapshot', signal: new AbortController().signal,
+    onThread() {}, onTurn() {}, onProgress: event => progress.push(event) });
+  assert.equal(result.text, 'answer'); assert.equal(progress.length, 1);
+  assert.equal(progress[0].id, 'active'); assert.equal(progress[0].status, 'running');
+  assert.equal(progress[0].text, 'pnpm test：执行中');
 });

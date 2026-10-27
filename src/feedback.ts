@@ -2,38 +2,55 @@ import type { Store } from './store.js';
 import type { Sender } from './engine.js';
 import type { Task } from './tasks.js';
 import { renderTaskCard } from './cards.js';
+import { readProgress } from './public-progress.js';
+import { readEvidence } from './evidence.js';
 
 export type ActivityPhase = 'connecting' | 'working' | 'command' | 'file' | 'tool' | 'answering';
-const labels: Record<string, string> = { queued:'排队中', connecting:'正在连接执行器', working:'正在处理', command:'正在运行命令', file:'正在修改文件', tool:'正在调用工具', answering:'正在整理回复', waiting:'等待你补充', succeeded:'已完成', failed:'执行失败', cancelled:'已停止', interrupted:'运行中断', needs_attention:'需要核对', lost:'执行器失联' };
+const labels: Record<string, string> = { queued:'排队中', connecting:'正在连接执行器', working:'正在处理', command:'正在运行命令', file:'正在修改文件', tool:'正在调用工具', answering:'正在整理回复', waiting:'等待你补充', succeeded:'已完成', failed:'执行失败', cancelled:'已停止', interrupted:'运行中断', needs_attention:'需要核对', lost:'执行器失联', finishing:'执行已结束，正在整理回复', execution_failed:'执行未完成，正在整理结果' };
 export function recordActivity(store: Store, runId: string, phase: ActivityPhase): void {
   store.db.prepare('INSERT INTO run_activity(runId,phase,updatedAt) VALUES(?,?,?) ON CONFLICT(runId) DO UPDATE SET phase=excluded.phase,updatedAt=excluded.updatedAt').run(runId,phase,Date.now());
 }
-export function progressState(store: Store, task: Task, now = Date.now()): { phase: string; content: string; terminal: boolean } {
-  const run = store.db.prepare(`SELECT r.id,a.phase,a.updatedAt,j.state AS worker,j.updatedAt AS heartbeat FROM task_runs r LEFT JOIN run_activity a ON a.runId=r.id LEFT JOIN runner_jobs j ON j.runId=r.id WHERE r.taskId=? ORDER BY r.startedAt DESC LIMIT 1`).get(task.id);
+export function progressState(store: Store, task: Task, now = Date.now()): { phase: string; content: string; terminal: boolean; revision: string } {
+  const run = store.db.prepare(`SELECT r.id,a.phase,a.updatedAt,j.state AS worker,j.updatedAt AS heartbeat FROM task_runs r LEFT JOIN run_activity a ON a.runId=r.id LEFT JOIN runner_jobs j ON j.runId=r.id WHERE r.taskId=? ORDER BY r.rowid DESC LIMIT 1`).get(task.id);
   const terminal = !['queued','running','waiting'].includes(task.state);
-  const phase = terminal || task.state !== 'running' ? task.state : run?.worker === 'lost' ? 'lost' : String(run?.phase ?? 'connecting');
+  const phase = terminal || task.state !== 'running' ? task.state : run?.worker === 'lost' ? 'lost'
+    : run?.worker === 'completed' ? 'finishing' : run?.worker === 'failed' ? 'execution_failed' : String(run?.phase ?? 'connecting');
+  const executing = task.state==='running'&&!['lost','finishing','execution_failed'].includes(phase);
   const stamp = (time: number) => new Date(time).toISOString().replace('T',' ').slice(0,19)+' UTC';
   const elapsed = task.startedAt ? `${Math.max(0,Math.floor(((task.finishedAt??now)-task.startedAt)/1000))} 秒` : '尚未开始';
-  return {phase,terminal,content:[labels[phase]??'状态待核对',`开始：${task.startedAt?stamp(task.startedAt):'尚未开始'}`,`耗时：${elapsed}`,
+  const progress = run ? readProgress(store,String(run.id)) : undefined;
+  const events = progress?.events ?? [];
+  const files = run ? readEvidence(store,task.id).find(e=>e.runId===run.id)?.items
+    .filter(i=>i.kind==='files'&&i.status==='completed').flatMap(i=>(i.files??[]).map(f=>f.path))??[] : [];
+  const recent = events.map(e=>`${e.kind==='plan'?'计划 · ':e.kind==='commentary'?'进展 · ':e.status==='running'?'进行 · ':e.status==='failed'?'失败 · ':'结束 · '}${Array.from(e.text).slice(0,36).join('')}${Array.from(e.text).length>36?'…':''}`);
+  return {phase,terminal,revision:`${task.inputVersion}:${run?.id??''}:${phase}:${progress?.revision??0}`,content:[labels[phase]??'状态待核对',`开始：${task.startedAt?stamp(task.startedAt):'尚未开始'}`,`耗时：${elapsed}`,
+    recent.length?'最近公开进展：\n'+recent.join('\n'):null,
+    files.length?'已应用文件补丁：'+[...new Set(files)].slice(-3).map(f=>Array.from(f).slice(0,60).join('')).join('、'):null,
     `最近执行活动：${run?.updatedAt?stamp(Number(run.updatedAt)):'尚无执行事件'}`,
-    !terminal&&task.state==='running'&&run?.heartbeat&&now-Number(run.heartbeat)>30_000?'执行器心跳已过期，执行状态待核对。':null,
-    terminal?'最终结果以独立结果消息为准。':`状态核对：${stamp(now)}`].filter(Boolean).join('\n')};
+    executing&&run?.heartbeat&&now-Number(run.heartbeat)>30_000?'执行器心跳已过期，执行状态待核对。':null,
+    terminal?'最终结果以独立结果消息为准。':executing&&now-Number(progress?.updatedAt??run?.updatedAt??now)>=30_000
+      ?run?.heartbeat&&now-Number(run.heartbeat)>30_000?'执行状态待核对，暂无新的公开进展。':'仍在运行，暂无新的公开进展。':null,
+    terminal?null:`状态核对：${stamp(now)}`].filter(Boolean).join('\n')};
 }
 /** One receiver-owned writer. No retry after uncertain side effects. */
 export class Feedback {
-  private busy = false;
-  constructor(private store: Store, private sender: Sender) {}
+  private progressBusy = false;
+  private reactionBusy = false;
+  private finalizers = 0;
+  constructor(private store: Store, private sender: Sender, private canAccess:(task:Task)=>boolean=()=>true) {}
   accepted(key: string): void {this.store.db.prepare('INSERT OR IGNORE INTO message_feedback(inboxKey,updatedAt) VALUES(?,?)').run(key,Date.now());}
   recover(): void {
     this.store.db.prepare("UPDATE message_feedback SET state='unknown',error='receiver_stopped' WHERE state IN ('adding','removing')").run();
     this.store.db.prepare("UPDATE progress_updates SET state='unknown',error='receiver_stopped' WHERE state='sending'").run();
   }
   async tick(options: { progress?: boolean; cadenceMs?: number; heartbeatMs?: number } = {}): Promise<void> {
-    if(this.busy)return;this.busy=true;
-    try {await this.reactions(); if(options.progress!==false)await this.progress(options.cadenceMs??5000,options.heartbeatMs??30000);}
-    finally {this.busy=false;}
+    // Independent lanes: a slow reaction must never hold up readable progress.
+    const work:Promise<void>[]=[];
+    if(!this.reactionBusy){this.reactionBusy=true;work.push(this.reactions().finally(()=>{this.reactionBusy=false;}));}
+    if(options.progress!==false&&!this.progressBusy){this.progressBusy=true;work.push(this.progress(options.cadenceMs??5000,options.heartbeatMs??30000).finally(()=>{this.progressBusy=false;}));}
+    await Promise.all(work);
   }
-  async settle(): Promise<void> {while(this.busy)await new Promise(r=>setTimeout(r,20));}
+  async settle(): Promise<void> {while(this.progressBusy||this.reactionBusy||this.finalizers)await new Promise(r=>setTimeout(r,20));}
   private async reactions(): Promise<void> {
     if(!this.sender.react)return;
     const row=this.store.db.prepare(`SELECT f.*,i.messageId,t.state AS taskState FROM message_feedback f JOIN inbox i ON i.key=f.inboxKey LEFT JOIN tasks t ON t.id=i.taskId WHERE f.state='pending' OR (f.state='added' AND t.state NOT IN ('queued','running')) ORDER BY f.updatedAt LIMIT 1`).get();
@@ -52,13 +69,17 @@ export class Feedback {
     });}
   }
   async finalize(taskId:string):Promise<void>{
-    await this.settle();this.busy=true;
-    try {await this.progress(0,30000,taskId);}finally {this.busy=false;}
+    this.finalizers++;
+    try {
+      while(this.progressBusy)await new Promise(r=>setTimeout(r,20));this.progressBusy=true;
+      try {await this.progress(0,30000,taskId);}finally {this.progressBusy=false;}
+    } finally {this.finalizers--;}
   }
   private async progress(cadence: number, heartbeat: number, taskId?:string): Promise<void> {
     if(!this.sender.updateCard)return;
-    const rows=this.store.db.prepare(`SELECT o.id AS outputId,o.platformId,o.payload,t.* FROM outbox o JOIN tasks t ON t.inboxKey=o.inboxKey WHERE o.kind='progress' AND o.mutableProgress=1 AND o.state='sent' AND o.payload IS NOT NULL AND (? IS NULL OR t.id=?) ORDER BY o.id`).all(taskId??null,taskId??null);
+    const rows=this.store.db.prepare(`SELECT o.id AS outputId,o.platformId,o.payload,o.acceptedAt,t.* FROM outbox o JOIN tasks t ON t.inboxKey=o.inboxKey WHERE o.kind='progress' AND o.mutableProgress=1 AND o.state='sent' AND o.payload IS NOT NULL AND (? IS NULL OR t.id=?) ORDER BY o.id`).all(taskId??null,taskId??null);
     for(const row of rows){
+      if(!this.canAccess(row as unknown as Task))continue;
       const original=JSON.parse(String(row.payload)); if(original.textOnly)continue;
       const last=this.store.db.prepare('SELECT * FROM progress_updates WHERE outboxId=? ORDER BY version DESC LIMIT 1').get(row.outputId);
       if(last&&['unknown','failed','sending'].includes(String(last.state))){
@@ -69,16 +90,19 @@ export class Feedback {
         continue;
       }
       const task=row as unknown as Task, state=progressState(this.store,task), now=Date.now();
-      if(last?.phase===state.phase&&(state.terminal||task.state==='waiting'))continue;
-      if(last&&now-Number(last.createdAt)<(last.phase===state.phase?heartbeat:cadence))continue;
+      const changed=last?.revision!==state.revision;
+      if(last&&!changed&&(state.terminal||task.state==='waiting'))continue;
+      const important=state.terminal||task.state==='waiting';
+      if(!important&&now-Number(last?.createdAt??row.acceptedAt??0)<(changed?cadence:heartbeat))continue;
       const card=renderTaskCard(task,state.content,'progress',0);
       // Preserve only the original authorized action tokens, whose acceptance rechecks current task/version.
       if(!state.terminal){const actions=original.elements?.filter((x:{tag:string})=>x.tag==='action')??[];(card as {elements:unknown[]}).elements.push(...actions);}
       const content=JSON.stringify(card),version=Number(last?.version??0)+1;
-      this.store.db.prepare("INSERT INTO progress_updates(outboxId,version,state,phase,content,createdAt) VALUES(?,?,'sending',?,?,?)").run(row.outputId,version,state.phase,content,now);
+      this.store.db.prepare("INSERT INTO progress_updates(outboxId,version,state,phase,content,createdAt,revision) VALUES(?,?,'sending',?,?,?,?)").run(row.outputId,version,state.phase,content,now,state.revision);
       try {await this.sender.updateCard(String(row.platformId),card);this.store.db.prepare("UPDATE progress_updates SET state='sent' WHERE outboxId=? AND version=?").run(row.outputId,version);}
       catch(e){const error=e as {unknown?:boolean;code?:string};this.store.db.prepare('UPDATE progress_updates SET state=?,error=? WHERE outboxId=? AND version=?').run(error.unknown===false?'failed':'unknown',error.code??'update_unknown',row.outputId,version);}
-      // A terminal commit may race this HTTP request. Correct it in this same writer before final delivery.
+      // A terminal commit may race this HTTP request. Correct it in this same
+      // writer; independent final delivery never waits on this HTTP lane.
       const current=this.store.db.prepare('SELECT state FROM tasks WHERE id=?').get(task.id);
       if(current&&current.state!==task.state&&!['queued','running','waiting'].includes(String(current.state)))await this.progress(0,heartbeat,task.id);
       return;

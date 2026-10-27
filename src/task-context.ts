@@ -36,7 +36,7 @@ export function buildTaskRunPrompt(store: Store, task: Task, inbox: Inbox, confi
   const snapshot = memories.snapshot(runId, {
     kind: 'verified-user', authenticated: paired.has(inbox.senderId), ownerId: inbox.senderId,
     chatKey: inbox.chatKey, chatType: inbox.envelope?.chatType, project: task.project ?? null,
-  });
+  }, { relevantText: inbox.text });
   prompt = composeMemoryPrompt(prompt, snapshot);
   return prompt;
 }
