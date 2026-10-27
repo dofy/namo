@@ -4,7 +4,7 @@ import { Tasks, type Task } from './tasks.js';
 import { digest } from './paths.js';
 import { readEvidence } from './evidence.js';
 import { hasExecution, taskStateLabel, taskStatus } from './presentation.js';
-import { progressState } from './feedback.js';
+import { progressState } from './task-progress.js';
 import { cardMarkdown, hasMarkdown, openFence } from './richtext.js';
 import { Waits, WaitInputError, linkedExternalWait } from './waits.js';
 

@@ -1,3 +1,4 @@
+import { BackgroundWork } from './background-work.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Inbox, Store } from './store.js';
 import { Memories, MemoryError, type MemoryKind } from './memory.js';
@@ -25,6 +26,7 @@ export interface AutoMemoryInput {
 export interface AutoMemoryOptions {
   allowedUsers: string[];
   authorize?: (row:Inbox)=>boolean;
+  allowedProjects?: (row: Inbox) => readonly string[] | undefined;
   redact: (text: string) => string;
   extract: (input: AutoMemoryInput, signal: AbortSignal) => Promise<unknown>;
 }
@@ -89,7 +91,8 @@ export class AutoMemories {
 
   pending(): boolean {
     const now = Date.now();
-    return this.jobs().some(job => this.runnable(job, now));
+    // Decode only the indexed due set: a malformed legacy row must not create a busy pump loop.
+    return this.jobs(now).some(job => this.runnable(job, now));
   }
 
   /** One leased, bounded extraction. Retrying this operation never replays a user task. */
@@ -99,7 +102,7 @@ export class AutoMemories {
     let job: Job | undefined;
     try {
       job = this.store.transaction(() => {
-        const now = Date.now(), next = this.jobs().filter(value => this.runnable(value, now))
+        const now = Date.now(), next = this.jobs(now).filter(value => this.runnable(value, now))
           .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))[0];
         if (!next) return;
         if (next.attempts >= MAX_ATTEMPTS) {
@@ -167,7 +170,8 @@ export class AutoMemories {
     }
     const memory = new Memories(this.store, this.options.redact);
     const existing = memory.search({ kind: 'verified-user', authenticated: true, ownerId: job.ownerId,
-      chatKey: job.chatKey, chatType: job.chatType, project: job.project }, { limit: 20 })
+      chatKey: job.chatKey, chatType: job.chatType, project: job.project,
+      allowedProjects: this.store.get(job.inboxKeys[0]) ? this.options.allowedProjects?.(this.store.get(job.inboxKeys[0])!) : [] }, { limit: 20 })
       .filter(record => record.scope.ownerId === job.ownerId).map(record => {
       const extended = record as typeof record & { automatic?: { key: string }; visibility?: { privacy: AutoMemoryCandidate['privacy'] } };
       return { id: record.id, key: extended.automatic?.key, version: record.version, kind: record.kind, ownerId: record.scope.ownerId,
@@ -238,9 +242,8 @@ export class AutoMemories {
     }
   }
 
-  private jobs(): Job[] {
-    return this.store.db.prepare("SELECT value FROM settings WHERE key GLOB ? AND CASE WHEN json_valid(value) THEN json_extract(value,'$.state') END IN ('pending','running')")
-      .all(AUTO_MEMORY_JOB_PREFIX + '*').flatMap(row => {
+  private jobs(now?: number): Job[] {
+    return new BackgroundWork(this.store).records('memory', now).flatMap(row => {
       try {
         const job = JSON.parse(String(row.value)) as Job;
         return job.version === 1 && /^[a-f0-9]{64}$/.test(job.id) && Array.isArray(job.inboxKeys)

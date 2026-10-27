@@ -2,7 +2,8 @@ import { selectAgent, selectedPolicyHash, AgentRegistryError, agentCodexConfig }
 import { runtimeFor } from './agents.js';
 import { readFileSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { loadConfig } from './config.js';
+import { loadConfig, type Config } from './config.js';
+import { authorizationRevision, readWorkerSnapshot } from './runtime-config.js';
 import { digest } from './paths.js';
 import { makeRedactor } from './safety.js';
 import { Store } from './store.js';
@@ -20,7 +21,7 @@ import { readReview, assertReviewDelivery } from './github-review.js';
 
 process.umask(0o077);
 async function main(): Promise<void> {
-  const [database, file, runId, owner] = process.argv.slice(2);
+  const [database, file, runId, owner, mode] = process.argv.slice(2);
   if (!database || !file || !runId || !owner) return;
   const store = new Store(database), tasks = new Tasks(store);
   const abort = new AbortController();
@@ -48,7 +49,13 @@ async function main(): Promise<void> {
     const task = tasks.get(String(run.taskId))!;
     let result: RunResult | undefined, error: string | undefined;
     try {
-      const config = loadConfig(file), revision = digest(readFileSync(file, 'utf8'));
+      const snapshot = mode === '--snapshot' ? await readWorkerSnapshot() : undefined;
+      const config: Config = snapshot === undefined ? loadConfig(file) : JSON.parse(snapshot);
+      const revision = digest(snapshot ?? readFileSync(file, 'utf8'));
+      const accessRevision = authorizationRevision(config);
+      const current = loadConfig(file);
+      if (config.file !== file || (config.feishu.access || current.feishu.access) && authorizationRevision(current) !== accessRevision)
+        throw new RuntimeError('task_configuration_changed');
       const policy = executionPolicy(config.codex,config.feishu,store.get(task.inboxKey)!,task.project??undefined,config.github);
       const effectiveConfig = {...config,codex:policy};
       const selection = tasks.selection(task.id) ?? selectAgent(effectiveConfig, 'codex');
@@ -82,7 +89,10 @@ async function main(): Promise<void> {
       timer = setInterval(() => {
         try {
           write(() => { store.db.prepare('UPDATE runner_jobs SET updatedAt=? WHERE runId=?').run(Date.now(), runId); });
-          if (config.feishu.access && digest(readFileSync(file,'utf8'))!==revision) abort.abort('access_configuration_changed');
+          try {
+            const current = loadConfig(file);
+            if ((config.feishu.access || current.feishu.access) && authorizationRevision(current) !== accessRevision) abort.abort('access_configuration_changed');
+          } catch { abort.abort('access_configuration_changed'); }
           if (store.get(task.inboxKey)?.cancelRequested) abort.abort('user_cancelled');
           steer();
         } catch { storageFailed = true; abort.abort('storage_failed'); }

@@ -10,7 +10,7 @@
     "build": "pnpm run build:server && pnpm run build:ui",
     "start": "node dist/src/cli.js start",
     "check": "node dist/src/cli.js check",
-    "test": "pnpm run build && node --test dist/test/*.test.js",
+    "test": "pnpm run build && node --test --test-concurrency=4 dist/test/*.test.js",
     "smoke:codex": "pnpm run build && node dist/scripts/smoke-codex.js",
     "smoke:skills": "pnpm run build:server && node dist/scripts/smoke-skills.js",
     "login": "node dist/src/cli.js login",

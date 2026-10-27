@@ -64,6 +64,19 @@ function sentProgress(f:ReturnType<typeof fixture>){
   return output.id;
 }
 
+test('completed progress cards leave the polling set and stay retired after reopening', async t => {
+  const f = fixture(t); f.tasks.start(f.task); sentProgress(f);
+  f.store.db.prepare("UPDATE tasks SET state='succeeded',finishedAt=? WHERE id=?").run(Date.now(), f.task.id);
+  let checks = 0, updates = 0;
+  const sender = { async send() { return 'unused'; }, async updateCard() { updates++; } };
+  const authorized = () => { checks++; return true; };
+  await new Feedback(f.store, sender, authorized).tick();
+  assert.equal(updates, 1); checks = 0;
+  const restarted = new Feedback(f.store, sender, authorized); restarted.recover();
+  await restarted.tick(); await restarted.tick();
+  assert.equal(checks, 0); assert.equal(updates, 1);
+});
+
 test('same-phase tool content updates at cadence while unchanged activity waits for heartbeat',async t=>{
   let now=1_800_000_000_000;t.mock.method(Date,'now',()=>now);
   const f=fixture(t),run=f.tasks.start(f.task);recordActivity(f.store,run,'command');sentProgress(f);

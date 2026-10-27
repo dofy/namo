@@ -16,7 +16,8 @@ export interface Outbox {
   payload?: string | null;
   route?: string | null;
 }
-export const SCHEMA_VERSION = 10;
+export { SCHEMA_VERSION } from './schema-migrations.js';
+import { SCHEMA_VERSION, migrateScheduling } from './schema-migrations.js';
 
 export class Store {
   readonly db: DatabaseSync;
@@ -169,7 +170,7 @@ export class Store {
         DROP TABLE task_waits;
         ALTER TABLE task_waits_scoped RENAME TO task_waits;`);
       }
-      this.db.exec(`CREATE TABLE IF NOT EXISTS execution_bindings (subjectId TEXT PRIMARY KEY, selection TEXT NOT NULL); PRAGMA user_version=10`);
+      this.db.exec(`CREATE TABLE IF NOT EXISTS execution_bindings (subjectId TEXT PRIMARY KEY, selection TEXT NOT NULL);`);
       const outputColumns = new Set((this.db.prepare('PRAGMA table_info(outbox)').all() as { name: string }[]).map(x => x.name));
       if (!outputColumns.has('payload')) this.db.exec('ALTER TABLE outbox ADD COLUMN payload TEXT');
       if (!outputColumns.has('mutableProgress')) this.db.exec('ALTER TABLE outbox ADD COLUMN mutableProgress INTEGER NOT NULL DEFAULT 0');
@@ -178,6 +179,7 @@ export class Store {
       if (!outputColumns.has('acceptedAt')) this.db.exec('ALTER TABLE outbox ADD COLUMN acceptedAt INTEGER');
       const progressColumns = new Set(this.db.prepare('PRAGMA table_info(progress_updates)').all().map(row => row.name));
       if (!progressColumns.has('revision')) this.db.exec('ALTER TABLE progress_updates ADD COLUMN revision TEXT');
+      migrateScheduling(this.db);
     });
   }
   transaction<T>(fn: () => T): T {

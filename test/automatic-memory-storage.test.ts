@@ -25,6 +25,34 @@ function candidate(overrides: Partial<AutomaticMemoryInput> = {}): AutomaticMemo
 }
 const ids = (memory: Memories, who: MemoryAccess) => memory.search(who, { limit: 20 }).map(row => row.id).sort();
 
+test('organization project ACL limits shared overviews, model misclassification, and derived handoffs', t => {
+  const f = fixture(t);
+  const overview = f.memory.upsertAutomatic(candidate({ kind: 'project_knowledge', project: 'atlas' }), authority())!;
+  const mislabeled = f.memory.upsertAutomatic(candidate({ key: 'other', kind: 'user_fact', project: null }), authority())!;
+  const who = access({ ownerId: 'bob', project: 'other', allowedProjects: [] });
+  assert.deepEqual(ids(f.memory, who), []);
+  assert.deepEqual(ids(f.memory, { ...who, allowedProjects: ['atlas'] }), [overview.id, mislabeled.id].sort());
+  const handoff = f.memory.saveHandoff({ scope: { kind: 'chat', ownerId: 'bob', project: 'other', chatKey: 'dm-alice' },
+    goal: 'Continue', limitations: [], decisions: [], evidence: [], unfinished: [], dependsOn: [{ id: overview.id, version: overview.version }] },
+    authority({ ownerId: 'bob', project: 'other' }));
+  assert.ok(!ids(f.memory, who).includes(handoff.id));
+});
+
+test('legacy global memories recover project provenance from the source audit after a local correction', t => {
+  const f = fixture(t), saved = f.memory.upsertAutomatic(candidate({ project: null }), authority())!;
+  f.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run('auto-memory:job:auto-job-one', JSON.stringify({ project: 'atlas', state: 'completed' }));
+  const meta = JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(MEMORY_META_PREFIX + saved.id)!.value));
+  delete meta.resourceProjects;
+  meta.source = { kind: 'local-owner', ref: 'legacy-correction' };
+  f.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(meta), MEMORY_META_PREFIX + saved.id);
+  const who = access({ ownerId: 'bob', allowedProjects: [] });
+  assert.deepEqual(ids(f.memory, who), []);
+  assert.deepEqual(ids(f.memory, { ...who, allowedProjects: ['atlas'] }), [saved.id]);
+  f.memory.correct(saved.id, saved.version, { text: 'Corrected overview.' }, authority({ source: { kind: 'local-owner', ref: 'current-correction' } }));
+  assert.deepEqual(ids(f.memory, who), []);
+  assert.deepEqual(f.memory.manage({ kind: 'local-owner', authenticated: true, ownerId: 'alice' })[0]?.resourceProjects, ['atlas']);
+});
+
 test('handoffs can depend on shared global facts without carrying private or another project details', t => {
   const f=fixture(t);
   const shared=f.memory.upsertAutomatic(candidate(),authority())!;

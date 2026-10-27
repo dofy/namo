@@ -62,6 +62,8 @@ export interface MemoryMetadata {
   updatedAt: number;
   expiresAt: number | null;
   visibility?: MemoryVisibility;
+  /** Host-owned provenance, independent of model labels. */
+  resourceProjects?: string[];
   automatic?: { key: string; sourceMessageIds: string[]; evidence: string[]; observedAt: number };
 }
 
@@ -89,6 +91,7 @@ export interface MemoryAuthority {
 }
 
 export interface MemoryAccess {
+  allowedProjects?: readonly string[];
   kind: 'local-owner' | 'verified-user';
   authenticated: boolean;
   ownerId: string;
@@ -249,13 +252,14 @@ function parseJson(raw: string, label: string): Record<string, unknown> {
 function parseMeta(raw: string): MemoryMetadata {
   const value = parseJson(raw, 'memory metadata');
   const fields = ['schema', 'id', 'version', 'kind', 'status', 'scope', 'source', 'dependsOn', 'contentChars', 'createdAt', 'updatedAt', 'expiresAt'];
-  if (Object.keys(value).some(key => ![...fields, 'visibility', 'automatic'].includes(key)) || fields.some(key => !(key in value)) || value.schema !== 1 || !idPattern.test(String(value.id)) || !Number.isSafeInteger(value.version) || Number(value.version) < 1
+  if (Object.keys(value).some(key => ![...fields, 'visibility', 'automatic', 'resourceProjects'].includes(key)) || fields.some(key => !(key in value)) || value.schema !== 1 || !idPattern.test(String(value.id)) || !Number.isSafeInteger(value.version) || Number(value.version) < 1
     || !kinds.includes(value.kind as MemoryKind) || !statuses.includes(value.status as MemoryStatus) || !Array.isArray(value.dependsOn)
     || !Number.isSafeInteger(value.contentChars) || Number(value.contentChars) < 0 || Number(value.contentChars) > MEMORY_LIMITS.entryChars
     || !Number.isSafeInteger(value.createdAt) || Number(value.createdAt) < 1 || !Number.isSafeInteger(value.updatedAt) || Number(value.updatedAt) < Number(value.createdAt)
     || !(value.expiresAt === null || (Number.isSafeInteger(value.expiresAt) && Number(value.expiresAt) > 0))) {
     throw new MemoryError('storage_invalid', 'Stored memory metadata uses an unsupported format');
   }
+  if (value.resourceProjects !== undefined && (!Array.isArray(value.resourceProjects) || value.resourceProjects.some(p => typeof p !== 'string' || !p || p.length > 48))) throw new MemoryError('storage_invalid', 'Invalid memory resource provenance');
   const dependsOn = value.dependsOn.map(validateRef);
   if ((value.kind !== 'handoff' && dependsOn.length > 0) || new Set(dependsOn.map(ref => ref.id)).size !== dependsOn.length) {
     throw new MemoryError('storage_invalid', 'Stored memory lineage is invalid');
@@ -279,7 +283,7 @@ function parseMeta(raw: string): MemoryMetadata {
   return { schema: 1, id: String(value.id), version: Number(value.version), kind: value.kind as MemoryKind, status: value.status as MemoryStatus,
     scope: validateScope(value.scope), source: validateSource(value.source), dependsOn, contentChars: Number(value.contentChars),
     createdAt: Number(value.createdAt), updatedAt: Number(value.updatedAt), expiresAt: value.expiresAt === null ? null : Number(value.expiresAt),
-    ...(visibility ? {visibility} : {}), ...(automatic ? {automatic} : {}) };
+    ...(visibility ? {visibility} : {}), ...(automatic ? {automatic} : {}), ...(value.resourceProjects ? {resourceProjects: [...value.resourceProjects as string[]]} : {}) };
 }
 
 function parseContent(raw: string, expected: MemoryMetadata): string {
@@ -303,6 +307,7 @@ function coversScope(source:MemoryScope,target:MemoryScope,privateChat:boolean):
 function freezeRecord<T extends MemoryRecord>(record: T): T {
   Object.freeze(record.scope); Object.freeze(record.source); record.dependsOn.forEach(Object.freeze); Object.freeze(record.dependsOn);
   if(record.visibility)Object.freeze(record.visibility);
+  if(record.resourceProjects)Object.freeze(record.resourceProjects);
   if(record.automatic){Object.freeze(record.automatic.sourceMessageIds);Object.freeze(record.automatic.evidence);Object.freeze(record.automatic);}
   return Object.freeze(record);
 }
@@ -359,7 +364,8 @@ export class Memories {
         else {visibility.privacy='chat';visibility.chatKey=before.visibility.chatKey;}
       }
       if (visibility.privacy !== 'chat') visibility.chatKey=null;
-      if (before && this.requireContent(before) === text && JSON.stringify(before.visibility) === JSON.stringify(visibility)) {
+      const resourceProjects = [...new Set([...(before ? this.resources(before) : []), ...(actor.project ? [actor.project] : [])])].sort();
+      if (before && JSON.stringify(before.resourceProjects) === JSON.stringify(resourceProjects) && this.requireContent(before) === text && JSON.stringify(before.visibility) === JSON.stringify(visibility)) {
         const automatic={key,observedAt:input.observedAt,sourceMessageIds:[...new Set([...before.automatic!.sourceMessageIds,...sourceMessageIds])].slice(-16),
           evidence:[...new Set([...before.automatic!.evidence,...evidence])].slice(-16)};
         const meta={...before,automatic};
@@ -369,9 +375,9 @@ export class Memories {
       this.assertCapacity(scope, count(text), before);
       const now=Date.now(), automatic={key,sourceMessageIds,evidence,observedAt:input.observedAt};
       const meta: MemoryMetadata = before
-        ? {...before,version:before.version+1,source:actor.source,contentChars:count(text),updatedAt:now,visibility,automatic}
+        ? {...before,version:before.version+1,source:actor.source,contentChars:count(text),updatedAt:now,visibility,automatic,resourceProjects}
         : {schema:1,id:`M-${randomBytes(8).toString('hex').toUpperCase()}`,version:1,kind:input.kind,status:'active',scope,
-          source:actor.source,dependsOn:[],contentChars:count(text),createdAt:now,updatedAt:now,expiresAt:null,visibility,automatic};
+          source:actor.source,dependsOn:[],contentChars:count(text),createdAt:now,updatedAt:now,expiresAt:null,visibility,automatic,resourceProjects};
       this.write(meta,text,before?'corrected':'saved');
       return freezeRecord({...meta,text});
     });
@@ -429,7 +435,7 @@ export class Memories {
       let id: string;
       do { id = `M-${randomBytes(8).toString('hex').toUpperCase()}`; } while (this.meta(id));
       const meta: MemoryMetadata = { schema: 1, id, version: 1, kind: 'handoff', status: 'active', scope, source: actor.source,
-        dependsOn, contentChars: count(text), createdAt: now, updatedAt: now, expiresAt };
+        dependsOn, resourceProjects: [...new Set([...(scope.project ? [scope.project] : []), ...dependsOn.flatMap(ref => this.resources(this.requireMeta(ref.id)))])], contentChars: count(text), createdAt: now, updatedAt: now, expiresAt };
       this.write(meta, text, 'saved');
       return freezeRecord({ ...meta, text });
     });
@@ -443,7 +449,7 @@ export class Memories {
       if (before.status === 'deleted') throw new MemoryError('conflict', 'Deleted memory cannot be restored; save a new memory explicitly');
       const expiresAt = input.expiresAt === undefined ? before.expiresAt : validateExpiry(input.expiresAt, before.kind, now);
       this.assertCapacity(before.scope, count(text), before);
-      const meta: MemoryMetadata = { ...before, version: before.version + 1, source: actor.source, contentChars: count(text), updatedAt: now, expiresAt };
+      const meta: MemoryMetadata = { ...before, resourceProjects: this.resources(before), version: before.version + 1, source: actor.source, contentChars: count(text), updatedAt: now, expiresAt };
       this.write(meta, text, 'corrected');
       return freezeRecord({ ...meta, text });
     });
@@ -659,9 +665,35 @@ export class Memories {
     safeLine(access.ownerId, 'Owner ID', 256);
   }
 
+  private resources(meta: MemoryMetadata, seen = new Set<string>()): string[] {
+    if (seen.has(meta.id)) throw new MemoryError('storage_invalid', 'Cyclic memory resource lineage');
+    const branch = new Set(seen); branch.add(meta.id);
+    const projects = new Set(meta.resourceProjects ?? []);
+    if (meta.scope.project) projects.add(meta.scope.project);
+    // Legacy automatic entries did not persist provenance independently of model labels.
+    // Their original source ledger remains available after queue migration.
+    if (!meta.resourceProjects && meta.automatic) {
+      const sources = [meta.source, ...this.store.db.prepare('SELECT value FROM settings WHERE key GLOB ?')
+        .all(`${MEMORY_CHANGE_PREFIX}${meta.id}:*`).map(row => this.parseChange(String(row.value), meta.id).source)];
+      for (const ref of new Set(sources.filter(source => source.kind === 'automatic').map(source => source.ref))) {
+        const row = this.store.db.prepare('SELECT value FROM settings WHERE key=?').get('auto-memory:job:' + ref);
+        if (row) {
+          const source = parseJson(String(row.value), 'automatic memory source');
+          if (typeof source.project === 'string') projects.add(source.project);
+        }
+      }
+    }
+    for (const ref of meta.dependsOn) {
+      const parent = this.meta(ref.id);
+      if (parent) for (const project of this.resources(parent, branch)) projects.add(project);
+    }
+    return [...projects];
+  }
+
   private authorized(meta: MemoryMetadata, access: MemoryAccess): boolean {
     if (access.authenticated !== true) return false;
     if (access.kind === 'local-owner') return access.ownerId === meta.scope.ownerId;
+    if (access.allowedProjects && this.resources(meta).some(project => !access.allowedProjects!.includes(project))) return false;
     if (access.chatType !== 'p2p' && access.chatType !== 'group') return false;
     if (meta.scope.kind === 'global' || meta.scope.kind === 'local') {
       if (meta.scope.kind === 'local' && access.project !== meta.scope.project) return false;

@@ -1,11 +1,10 @@
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
 import { digest } from './paths.js';
-import { codexEnvironment } from './safety.js';
+import { workerEnvironment } from './runtime-config.js';
 import { Store } from './store.js';
 import { extractConversationMemory, RuntimeError, type Runtime, type RunRequest, type RunResult } from './runtime.js';
 import type { AutoMemoryInput } from './auto-memory.js';
@@ -26,21 +25,22 @@ export class RunnerRuntime implements Runtime {
     const runId = r.runId;
     let launch = false;
     const owner = randomUUID();
+    const snapshot = JSON.stringify(this.config);
     this.store.transaction(() => {
       const run = this.store.db.prepare('SELECT taskId,state FROM task_runs WHERE id=?').get(runId);
       if (!run || run.taskId !== r.taskId || run.state !== 'running') throw new RuntimeError('runner_identity_mismatch');
       if (runnerJob(this.store, runId)) return;
       if (r.signal.aborted) throw new RuntimeError(r.signal.reason === 'receiver_stopped' ? 'receiver_detached' : 'cancelled');
       this.store.db.prepare("INSERT INTO runner_jobs(runId,owner,state,createdAt,updatedAt,configRevision,prompt) VALUES(?,?,'starting',?,?,?,?)")
-        .run(runId, owner, Date.now(), Date.now(), digest(readFileSync(this.config.file, 'utf8')), r.prompt);
+        .run(runId, owner, Date.now(), Date.now(), digest(snapshot), r.prompt);
       saveRunImages(this.store,runId,r.images??[]);
       runnerEvent(this.store, runId, 'reserved'); launch = true;
     });
     if (launch) {
       const child = spawn(process.execPath, [fileURLToPath(new URL('./runner-worker.js', import.meta.url)),
-        join(this.config.dataDir, 'bot.sqlite'), this.config.file, runId, owner], {
-        detached: true, stdio: 'ignore', cwd: this.config.dataDir,
-        env: codexEnvironment(this.config.codex.home),
+        join(this.config.dataDir, 'bot.sqlite'), this.config.file, runId, owner, '--snapshot'], {
+        detached: true, stdio: ['pipe', 'ignore', 'ignore'], cwd: this.config.dataDir,
+        env: workerEnvironment(this.config),
       });
       // Registration is written by the worker before it can invoke the model.
       child.on('error', () => {
@@ -49,6 +49,9 @@ export class RunnerRuntime implements Runtime {
             runnerEvent(this.store, runId, 'spawn_failed');
         }); } catch { /* Closed receiver: startup reconciliation keeps the reservation. */ }
       });
+      // A private pipe carries the receiver's applied config. No credential snapshot is stored on disk.
+      child.stdin.on('error', () => {});
+      child.stdin.end(snapshot);
       child.unref();
     }
     return new Promise<RunResult>((resolve, reject) => {

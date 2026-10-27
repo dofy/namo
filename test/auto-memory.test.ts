@@ -34,6 +34,15 @@ function due(store: Store): void {
   }
 }
 
+test('malformed legacy jobs cannot keep the foreground scheduler in a background pump loop', async t => {
+  let calls = 0;
+  const f = fixture(t, async () => { calls++; return { memories: [] }; });
+  f.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(AUTO_MEMORY_JOB_PREFIX + 'invalid', JSON.stringify({
+    version: 1, id: 'invalid', inboxKeys: [], state: 'pending', attempts: 0, dueAt: 0, leaseUntil: 0, createdAt: 1,
+  }));
+  assert.equal(f.queue.pending(), false); await f.queue.tick(); assert.equal(calls, 0);
+});
+
 test('automatic extraction persists once with source references and creates active memory without confirmation', async t => {
   let calls = 0;
   const source = message('m1', '我长期偏好中文回答。');

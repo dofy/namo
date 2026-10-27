@@ -76,6 +76,68 @@ function fixture(t: { after(fn: () => Promise<void>): void }) {
   return { dir, data, project, file, config, store, tasks, receiver, deliveries, job, calls };
 }
 
+function organization(f: ReturnType<typeof fixture>, github?: object) {
+  const raw = JSON.parse(readFileSync(f.file, 'utf8'));
+  raw.feishu.access = { mode: 'organization', tenantKey: 'tenant' };
+  raw.codex.projectAccess = { one: { organization: false, userIds: ['alice'], chatIds: [], permission: 'workspace-write' } };
+  if (github) raw.github = github;
+  writeFileSync(f.file, JSON.stringify(raw)); Object.assign(f.config, loadConfig(f.file));
+  const input = message('organization'); input.envelope!.tenantKey = 'tenant'; return input;
+}
+
+test('saving presentation settings does not cancel an organization worker; revocation still does', async t => {
+  const f = fixture(t), input = organization(f), receiver = f.receiver(); receiver.start(); receiver.accept(input);
+  await wait(() => f.calls() === 1);
+  const manager = new Management(f.file, { status: () => ({ running: false, mode: 'stopped' }) });
+  manager.save(manager.config().revision, { progressIntervalMs: 9000 });
+  const heartbeat = f.job().updatedAt;
+  await wait(() => f.job().state !== 'running' || f.job().updatedAt > heartbeat + 400);
+  assert.equal(f.job().state, 'running');
+  manager.save(manager.config().revision, { projectAccess: { one: { organization: false, userIds: [], chatIds: [], permission: 'workspace-write' } } });
+  await wait(() => f.job().state === 'failed');
+  assert.equal(f.calls(), 1); assert.equal(f.job().result, null);
+});
+
+test('environment credentials reach only the trusted worker, including after a presentation save', async t => {
+  const f = fixture(t), name = 'NAMO_GITHUB_RUNNER_TEST';
+  const previous = process.env[name]; process.env[name] = 'runner-test-credential';
+  t.after(async () => { if (previous === undefined) delete process.env[name]; else process.env[name] = previous; });
+  const input = organization(f, { tokenEnv: name, repositories: ['example/repo'], allowedUserIds: ['alice'] });
+  writeFileSync(f.config.codex.bin, fake.replace("appendFileSync(join(cwd,'calls'),'turn\\n');",
+    "appendFileSync(join(cwd,'calls'),'turn\\n');appendFileSync(join(cwd,'env-isolated'),String(process.env.NAMO_GITHUB_RUNNER_TEST===undefined));"), { mode: 0o700 });
+  const receiver = f.receiver(); receiver.start(); receiver.accept(input);
+  await wait(() => f.calls() === 1 || f.job()?.state === 'failed');
+  assert.equal(f.job().state, 'running'); assert.equal(f.calls(), 1);
+  assert.equal(readFileSync(join(f.project, 'env-isolated'), 'utf8'), 'true');
+  writeFileSync(join(f.project, 'release'), 'release');
+  await wait(() => f.store.get(input.key)?.state === 'replied');
+  assert.equal(f.tasks.get(f.store.get(input.key)!.taskId!)?.state, 'succeeded');
+});
+
+test('unapplied execution defaults do not change a queued worker or withhold its result', async t => {
+  const f = fixture(t), input = organization(f), receiver = f.receiver();
+  receiver.accept(input);
+  const manager = new Management(f.file, { status: () => ({ running: false, mode: 'stopped' }) });
+  manager.save(manager.config().revision, { model: 'pending-model', timeoutMs: 15000, progressIntervalMs: 9000 });
+  receiver.start(); await wait(() => f.calls() === 1 || f.job()?.state === 'failed');
+  assert.equal(f.job().state, 'running');
+  writeFileSync(join(f.project, 'release'), 'release');
+  await wait(() => f.store.get(input.key)?.state === 'replied');
+  assert.equal(f.tasks.get(f.store.get(input.key)!.taskId!)?.state, 'succeeded');
+  assert.equal(f.config.codex.model, undefined); assert.equal(loadConfig(f.file).codex.model, 'pending-model');
+});
+
+test('switching out of organization mode cannot deliver a saved result to a now-unpaired user', async t => {
+  const f = fixture(t), input = organization(f), receiver = f.receiver(); receiver.start(); receiver.accept(input);
+  await wait(() => f.calls() === 1); await receiver.stop();
+  writeFileSync(join(f.project, 'release'), 'release'); await wait(() => f.job().state === 'completed');
+  const raw = JSON.parse(readFileSync(f.file, 'utf8')); delete raw.feishu.access; raw.feishu.allowedUserIds = [];
+  writeFileSync(f.file, JSON.stringify(raw));
+  const next = f.receiver(); next.start();
+  await wait(() => !!f.store.db.prepare("SELECT 1 FROM outbox WHERE kind='result' AND state='failed' AND error='access_changed'").get());
+  assert.equal(f.deliveries.filter(text => text.includes('saved answer')).length, 0); assert.equal(f.calls(), 1);
+});
+
 test('detached worker finishes offline with delayed feedback; restart consumes one saved result and evidence', async t => {
   const f = fixture(t); f.config.feishu.progressDelayMs=12_000;
   const first = f.receiver(); first.start(); first.accept(message('first'));

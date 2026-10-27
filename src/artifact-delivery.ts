@@ -1,3 +1,4 @@
+import { BackgroundWork } from './background-work.js';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import type { Store, Incoming } from './store.js';
@@ -5,7 +6,7 @@ import type { Task } from './tasks.js';
 import type { Sender } from './engine.js';
 import { prepareArtifact, ArtifactError, type PreparedArtifact } from './artifacts.js';
 import { chatWorkspace } from './safety.js';
-import { pathsOverlap } from './engine.js';
+import { pathsOverlap } from './path-policy.js';
 
 interface Delivery {id:string; inboxKey:string; taskId:string; ownerId:string; chatId:string; projectRoot:string; path:string; state:string; uuid:string; createdAt:number; sha256?:string; size?:number; fileKey?:string; platformId?:string; error?:string;}
 export class ArtifactDelivery {
@@ -35,7 +36,7 @@ export class ArtifactDelivery {
     this.store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`artifact-intent:${task.id}`,JSON.stringify({inboxKey:input.key,taskId:task.id,path,state:'pending'}));
   }
   private completeIntents():void{
-    const intents=this.store.db.prepare("SELECT key,value FROM settings WHERE key LIKE 'artifact-intent:%' AND json_extract(value,'$.state')='pending'").all();
+    const intents=new BackgroundWork(this.store).records('artifact-intent');
     for(const entry of intents){const intent=JSON.parse(String(entry.value)),task=this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(intent.taskId) as unknown as Task|undefined;
       if(!task||['queued','running','waiting'].includes(task.state))continue;
       this.store.transaction(()=>{try{if(task.state!=='succeeded')throw new ArtifactError('artifact_task_not_succeeded');this.enqueue(this.store.get(intent.inboxKey)!,task,intent.path);}
@@ -44,8 +45,12 @@ export class ArtifactDelivery {
       });
     }
   }
-  recover():void{for(const row of this.rows())if(['uploading','sending'].includes(row.state)){row.state='unknown';row.error='receiver_stopped_during_delivery';this.save(row);}}
-  private rows():Delivery[]{return this.store.db.prepare("SELECT value FROM settings WHERE key LIKE 'artifact:%'").all().map(row=>JSON.parse(String(row.value)));}
+  recover():void{for(const row of this.rows(true))if(['uploading','sending'].includes(row.state)){row.state='unknown';row.error='receiver_stopped_during_delivery';this.save(row);}}
+  private rows(recovery = false):Delivery[]{
+    const rows = recovery ? this.store.db.prepare("SELECT value FROM settings WHERE key GLOB 'artifact:*'").all()
+      : new BackgroundWork(this.store).records('artifact');
+    return rows.map(row=>JSON.parse(String(row.value)));
+  }
   private save(row:Delivery):void{this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(row),row.id);}
   async settle():Promise<void>{while(this.busy)await new Promise(r=>setTimeout(r,20));}
   async tick():Promise<void>{
