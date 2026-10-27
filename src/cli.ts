@@ -9,7 +9,7 @@ import { FeishuTransport } from './feishu.js';
 import { configFile, atomicJson, receiverDir, digest } from './paths.js';
 import { Management } from './management.js';
 import { randomUUID } from 'node:crypto';
-import { detectAgents, loginAgent, probeAgent, liveAgentTest } from './agents.js';
+import { detectAgents, loginAgent, probeAgent, probeAgentProfile, liveAgentTest } from './agents.js';
 import { RunnerRuntime } from './runner.js';
 import { doctor } from './doctor.js';
 import { TerminalPrompter, Cancelled } from './prompts.js';
@@ -19,28 +19,31 @@ import { currentRuntimeRelease } from './release.js';
 import { parseLocale, systemLocale } from './i18n.js';
 import { PROJECT_URL } from './project.js';
 import { ExecFileGitRunner, GitApprovals, type ApprovalTaskContext } from './approvals.js';
-import { policyHash } from './tasks.js';
+import { Tasks } from './tasks.js';
+import { getAgentRegistry, selectAgent, selectedPolicyHash } from './agent-registry.js';
 
 process.umask(0o077);
 const args = process.argv.slice(2);
-const positional = args.filter((a, i) => !a.startsWith('-') && (i === 0 || !['--config', '--lang'].includes(args[i - 1])));
+const positional = args.filter((a, i) => !a.startsWith('-') && (i === 0 || !['--config', '--lang', '--profile'].includes(args[i - 1])));
 const startupRelease = positional[0] === 'start' ? currentRuntimeRelease(import.meta.url) : undefined;
 function flag(name: string): string | undefined {
   const i = args.indexOf(name);
   if (i < 0) return;
-  if (!args[i + 1] || args[i + 1].startsWith('--')) throw new Error(tr("{0} 需要一个路径", name));
+  if (!args[i + 1] || args[i + 1].startsWith('--')) throw new Error(tr("{0} 需要一个值", name));
   return args[i + 1];
 }
-const help = () => tr("Namo · 飞书连接本地 Agent（首版支持 Codex）\n\n用法：namo <命令> [--config 路径]\n  init                 可恢复的交互初始化、飞书引导和用户配对\n  doctor [--live]       分层诊断；--live 会调用模型并使用账号额度\n  agent list           探测本机执行器，标明尚未支持的后端\n  agent test --live     真实 Codex 响应测试（会使用账号额度）\n  login                登录 Namo 独立的官方 Codex 环境\n  start                前台接收（Ctrl+C 停止接收，已开工任务继续）\n  status               消息队列和后台服务状态\n  logs                 最近 80 行日志（自动脱敏）\n  service <操作>       install / status / start / stop / restart / upgrade / uninstall\n  ui                   打开仅本机可访问的管理界面（Ctrl+C 关闭）\n  issues               列出待核对异常\n  issue <编号>         查看异常与核对版本\n  resolve <编号> <版本> <动作> <依据> --confirm\n                       received / retry / dismiss / reviewed；不会重跑模型\n  config path          显示当前配置文件位置\n\n--json 可用于 doctor / agent list / status。未指定配置时优先使用\nNAMO_CONFIG、当前目录已有 config.local.json，再使用系统用户目录。\n首版后台服务管理仅支持 macOS；其他平台可使用前台模式。\n初始化不会自动安装 Agent、迁移 OpenClaw 或发布应用。");
+const help = () => tr("Namo · 飞书连接本地 Agent（首版支持 Codex）\n\n用法：namo <命令> [--config 路径]\n  init                 可恢复的交互初始化、飞书引导和用户配对\n  doctor [--live]       分层诊断；--live 会调用模型并使用账号额度\n  agent list           探测本机执行器，标明尚未支持的后端\n  agent profiles       查看已配置的 Agent 注册表\n  agent probe --profile ID [--json]\n                       只读检查安装、协议和登录状态；不调用模型\n  agent use --profile ID\n                       设置新工作流的默认 Agent 配置\n  agent test --live [--profile ID]\n                       真实 Agent 响应测试（会使用账号额度）\n  login [--profile ID] 登录指定的 Namo 独立官方 Agent 环境\n  start                前台接收（Ctrl+C 停止接收，已开工任务继续）\n  status               消息队列和后台服务状态\n  logs                 最近 80 行日志（自动脱敏）\n  service <操作>       install / status / start / stop / restart / upgrade / uninstall\n  ui                   打开仅本机可访问的管理界面（Ctrl+C 关闭）\n  issues               列出待核对异常\n  issue <编号>         查看异常与核对版本\n  resolve <编号> <版本> <动作> <依据> --confirm\n                       received / retry / dismiss / reviewed；不会重跑模型\n  config path          显示当前配置文件位置\n\n--json 可用于 doctor / agent list / agent profiles / agent probe / agent use / status。未指定配置时优先使用\nNAMO_CONFIG、当前目录已有 config.local.json，再使用系统用户目录。\n首版后台服务管理仅支持 macOS；其他平台可使用前台模式。\n初始化不会自动安装 Agent、迁移 OpenClaw 或发布应用。");
 function finish(code: number): void { process.exitCode = code; setTimeout(() => process.exit(code), 250).unref(); }
 let redact = makeRedactor();
 async function main(): Promise<void> {
   const command = positional[0] ?? 'help';
   const requestedLocale = flag('--lang') ?? process.env.NAMO_LANG;
+  const requestedProfile = flag('--profile');
   if (requestedLocale !== undefined && requestedLocale !== 'system' && !parseLocale(requestedLocale)) throw new Error(tr('语言支持 system、en 或 zh-CN；使用 --lang 或 NAMO_LANG 设置'));
   if (args.filter(arg => arg === '--lang').length > 1) throw new Error(tr('请只指定一次 --lang'));
+  if (args.filter(arg => arg === '--profile').length > 1) throw new Error(tr('请只指定一次 --profile'));
   for (let i = 0; i < args.length; i++) {
-    if (['--config', '--lang'].includes(args[i])) { flag(args[i]); i++; continue; }
+    if (['--config', '--lang', '--profile'].includes(args[i])) { flag(args[i]); i++; continue; }
     if (args[i].startsWith('-') && !['--help', '-h', '--version', '-v', '--json', '--live', '--confirm'].includes(args[i])) throw new Error(tr("未知选项，运行 namo --help 查看用法"));
   }
   if (args.includes('--version') || args.includes('-v')) { console.log(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version); return; }
@@ -53,6 +56,7 @@ async function main(): Promise<void> {
   if (!['resolve','migrate','approval'].includes(command)&&positional.length > (['agent', 'service', 'config','issue','github'].includes(command) ? 2 : 1)) throw new Error(tr("命令参数过多，运行 namo --help 查看用法"));
   const known = ['github','approval','migrate','ui','issues','issue','resolve','init', 'doctor', 'agent', 'login', 'start', 'status', 'logs', 'service', 'config', 'check'];
   if (!known.includes(command)) throw new Error(tr("未知命令：{0}。运行 namo --help", command));
+  if(requestedProfile&&!(command==='login'||command==='agent'&&['probe','use','test'].includes(positional[1]??'')))throw new Error(tr('--profile 仅用于 login、agent probe、agent use 或 agent test'));
   const file = configFile(flag('--config'));
   if (command === 'config') { if (positional[1] !== 'path') throw new Error(tr("用法：namo config path")); console.log(file); return; }
   if (command === 'migrate') {
@@ -111,6 +115,39 @@ async function main(): Promise<void> {
   const configRevision=digest(readFileSync(file,'utf8'));
   const config = loadConfig(file); redact = makeRedactor([config.feishu.appSecret,config.github?.token??'']);
   if(configRevision!==digest(readFileSync(file,'utf8')))throw new Error(tr("配置正在修改，请重试"));
+  if(command==='agent'&&positional[1]==='profiles') {
+    const registry=getAgentRegistry(config),safe={defaultProfile:registry.defaultProfile,memoryProfile:registry.memoryProfile,
+      profiles:registry.profiles.map(({id,adapter,enabled,bin,home,model,timeoutMs,revision,available})=>({id,adapter,enabled,bin:redact(bin),home:redact(home),...(model?{model:redact(model)}:{}),timeoutMs,revision,available}))};
+    if(args.includes('--json'))console.log(JSON.stringify(safe,null,2));
+    else {console.log(`${tr('默认配置')}: ${safe.defaultProfile}\n${tr('记忆配置')}: ${safe.memoryProfile}`);for(const profile of safe.profiles)console.log(`${profile.id}: ${profile.adapter} · ${profile.enabled?tr('已启用'):tr('已停用')} · ${profile.available?tr('运行适配器已接入'):tr('等待后续版本')}\n  ${profile.bin}\n  ${profile.home}`);}
+    return;
+  }
+  if(command==='agent'&&positional[1]==='probe') {
+    if(!requestedProfile)throw new Error(tr('用法：namo agent probe --profile ID [--json]'));
+    const result=await probeAgentProfile(config,requestedProfile);
+    if(args.includes('--json'))console.log(JSON.stringify(result,null,2));
+    else {
+      console.log(`${tr('配置')}: ${result.profileId} · ${result.adapter}`);
+      for(const check of result.checks??[])console.log(`${check.status==='ok'?'✓':check.status==='warn'?'!':'×'} ${check.message}${check.next?`\n  ${check.next}`:''}`);
+      if(result.report){
+        for(const [label,item] of [[tr('安装'),result.report.installed],[tr('协议'),result.report.protocol],[tr('登录'),result.report.auth]] as const)
+          console.log(`${label}: ${tr(item.status)} · ${item.evidence}`);
+        for(const [capability,item] of Object.entries(result.report.capabilities))console.log(`${capability}: ${tr(item.status)} · ${item.evidence}`);
+        console.log(tr('此探测结果不会启用执行后端；Claude Code 与 Cursor 在当前版本仍不能运行任务。'));
+      }
+    }
+    return;
+  }
+  if(command==='agent'&&positional[1]==='use') {
+    if(!requestedProfile)throw new Error(tr('用法：namo agent use --profile ID'));
+    selectAgent(config,requestedProfile);
+    const manager=new Management(file),view=manager.config();
+    const saved=manager.save(view.revision,{agents:{defaultProfile:requestedProfile,memoryProfile:view.agents.memoryProfile,profiles:view.agents.specs}});
+    const result={defaultProfile:saved.agents.defaultProfile,restartRequired:true,scope:'new_workstreams'};
+    if(args.includes('--json'))console.log(JSON.stringify(result,null,2));
+    else console.log(tr('默认 Agent 配置已保存为 {0}。没有自动重启；重启接收服务后只影响新工作流，既有工作流及其排队或等待任务继续使用已绑定版本。',requestedProfile));
+    return;
+  }
   const dbFile = join(config.dataDir, 'bot.sqlite');
   if (command === 'approval') {
     const sub = positional[1] ?? '', policy = config.gitApprovals ?? { remotes: [], maxTtlMs: 900_000 };
@@ -123,7 +160,8 @@ async function main(): Promise<void> {
         const row = approvalStore.db.prepare('SELECT id,ownerId,chatKey,project,cwd,policyHash,state FROM tasks WHERE id=?').get(id.toUpperCase()) as Record<string, unknown> | undefined;
         if (!row) throw new Error(tr('任务不存在'));
         const project = row.project == null ? undefined : String(row.project), cwd = String(row.cwd), savedPolicy = String(row.policyHash), projects = config.codex.projects ?? {};
-        if (savedPolicy !== policyHash(config.codex)) throw new Error(tr('任务创建后的项目权限配置已更改，不能申请或执行 push'));
+        const selection=new Tasks(approvalStore).selection(String(row.id))??selectAgent(config,'codex');
+        if (savedPolicy !== selectedPolicyHash(config,selection)) throw new Error(tr('任务创建后的 Agent 或项目权限配置已更改，不能申请或执行 push'));
         if (project && (!Object.hasOwn(projects, project) || projects[project] !== cwd)) throw new Error(tr('任务绑定的项目已移除或路径已更改，不能申请或执行 push'));
         return { taskId: String(row.id), ownerId: String(row.ownerId), chatKey: String(row.chatKey), project, cwd, policyHash: savedPolicy, state: String(row.state) };
       };
@@ -155,10 +193,10 @@ async function main(): Promise<void> {
     } finally { approvalStore.close(); }
     return;
   }
-  if (command === 'login') { await loginAgent(config); return; }
+  if (command === 'login') { await loginAgent(config,requestedProfile); return; }
   if (command === 'agent') {
     if (positional[1] !== 'test' || !args.includes('--live')) throw new Error(tr("真实测试请使用 namo agent test --live（会使用账号额度）"));
-    const ok = await liveAgentTest(config); console.log(JSON.stringify({ modelTurnVerified: ok })); if (!ok) process.exitCode = 1; return;
+    const ok = await liveAgentTest(config,requestedProfile); console.log(JSON.stringify({ profileId:selectAgent(config,requestedProfile).profileId,modelTurnVerified: ok })); if (!ok) process.exitCode = 1; return;
   }
   if (command === 'service') { console.log(JSON.stringify(await serviceAction(positional[1] ?? 'status', config), null, 2)); return; }
   if (command === 'logs') {

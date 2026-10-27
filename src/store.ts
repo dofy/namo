@@ -16,7 +16,7 @@ export interface Outbox {
   payload?: string | null;
   route?: string | null;
 }
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export class Store {
   readonly db: DatabaseSync;
@@ -150,7 +150,23 @@ export class Store {
       `);
       const waitColumns = new Set(this.db.prepare('PRAGMA table_info(task_waits)').all().map(row => row.name));
       if (!waitColumns.has('choices')) this.db.exec('ALTER TABLE task_waits ADD COLUMN choices TEXT');
-      this.db.exec('PRAGMA user_version=8');
+      // Native IDs belong to an executor instance. runId already uniquely scopes
+      // every wait; a global (thread,turn,call) constraint aliases other profiles.
+      const waitSchema = String(this.db.prepare("SELECT sql FROM sqlite_master WHERE name='task_waits'").get()?.sql ?? '');
+      if (waitSchema.includes('UNIQUE(threadId,turnId,callId)')) {
+        this.db.exec(`CREATE TABLE task_waits_scoped (
+          id TEXT PRIMARY KEY, taskId TEXT NOT NULL REFERENCES tasks(id),
+          runId TEXT NOT NULL UNIQUE REFERENCES task_runs(id),
+          threadId TEXT NOT NULL, turnId TEXT NOT NULL, callId TEXT NOT NULL,
+          question TEXT NOT NULL, inputVersion INTEGER NOT NULL,
+          state TEXT NOT NULL, createdAt INTEGER NOT NULL, settledAt INTEGER,
+          replyInboxKey TEXT UNIQUE REFERENCES inbox(key), replyVersion INTEGER, choices TEXT
+        );
+        INSERT INTO task_waits_scoped SELECT id,taskId,runId,threadId,turnId,callId,question,inputVersion,state,createdAt,settledAt,replyInboxKey,replyVersion,choices FROM task_waits;
+        DROP TABLE task_waits;
+        ALTER TABLE task_waits_scoped RENAME TO task_waits;`);
+      }
+      this.db.exec(`CREATE TABLE IF NOT EXISTS execution_bindings (subjectId TEXT PRIMARY KEY, selection TEXT NOT NULL); PRAGMA user_version=9`);
       const outputColumns = new Set((this.db.prepare('PRAGMA table_info(outbox)').all() as { name: string }[]).map(x => x.name));
       if (!outputColumns.has('payload')) this.db.exec('ALTER TABLE outbox ADD COLUMN payload TEXT');
       if (!outputColumns.has('mutableProgress')) this.db.exec('ALTER TABLE outbox ADD COLUMN mutableProgress INTEGER NOT NULL DEFAULT 0');

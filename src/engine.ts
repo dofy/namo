@@ -1,3 +1,4 @@
+import { selectAgent, selectedPolicyHash, AgentRegistryError, type AgentSelection } from './agent-registry.js';
 import { mkdirSync, realpathSync, readFileSync } from 'node:fs';
 import { relative, isAbsolute, sep } from 'node:path';
 import { loadConfig, type Config } from './config.js';
@@ -6,7 +7,7 @@ import { ApprovalService } from './approval-service.js';
 import { chatWorkspace } from './safety.js';
 import { Store, type Incoming, type Inbox } from './store.js';
 import { RuntimeError, type Runtime, type RunControls } from './runtime.js';
-import { Tasks, TaskInputError, policyHash, scopeOf, sessionKey, type Task, type ProjectBinding } from './tasks.js';
+import { Tasks, TaskInputError, policyHash, scopeOf, type Task, type ProjectBinding } from './tasks.js';
 import { randomUUID } from 'node:crypto';
 import { Recovery, RecoveryError } from './recovery.js';
 import { Cards, type CardEvent } from './cards.js';
@@ -69,7 +70,7 @@ export class Engine {
   private memoryRunning?: Promise<void>;
   private memoryAbort?: AbortController;
   constructor(readonly store: Store, private runtime: Runtime, private sender: Sender,
-    private config: Pick<Config, 'dataDir' | 'concurrency' | 'github'> & { file?:string; codex?: Config['codex']; feishu?: Partial<Config['feishu']> },
+    private config: Pick<Config, 'dataDir' | 'concurrency' | 'github'> & { file?:string; codex?: Config['codex']; agents?: Config['agents']; feishu?: Partial<Config['feishu']> },
     private redact: (s: string) => string = s => s,
     private log: Log = () => {},
     private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); this.feedback = new Feedback(store, sender); this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined);
@@ -195,8 +196,20 @@ export class Engine {
     } catch (e) { if (!(e instanceof ProfileError)) throw e; return e.message; }
   }
   private projectScope(m: Incoming): string { return m.envelope ? `${scopeOf(m)}:user:${m.senderId}` : m.chatKey; }
+  private selectedAgent(m: Incoming, reference?: Task): AgentSelection | undefined {
+    if (!this.config.codex) return;
+    const c = {...this.config, codex: this.config.codex};
+    const bound = reference ?? this.tasks.binding(m);
+    return bound ? this.tasks.selection(bound.id) ?? selectAgent(c, 'codex') : selectAgent(c);
+  }
   private project(m: Incoming, reference?: Task): ProjectBinding {
     const c = this.config.codex;
+    let selection: AgentSelection | undefined, hash: string;
+    try {
+      selection = this.selectedAgent(m, reference);
+      hash = c && selection ? selectedPolicyHash({...this.config, codex:c}, selection) : policyHash(c);
+    } catch (e) { if (e instanceof AgentRegistryError) throw new RuntimeError(e.code); throw e; }
+    const agent = selection && selection.profileId !== 'codex' ? {agentSelection:selection} : {};
     const bound = reference ?? this.tasks.binding(m);
     const legacy = !m.envelope?.threadId ? this.store.project(m.chatKey) : undefined;
     const name = bound?.project ?? this.store.project(this.projectScope(m)) ?? legacy ?? c?.defaultProject;
@@ -205,11 +218,11 @@ export class Engine {
       try { if (realpathSync(c.projects[name]) !== c.projects[name]) throw new Error(); }
       catch { throw new RuntimeError('project_unavailable'); }
       if (bound && bound.cwd !== c.projects[name]) throw new RuntimeError('project_changed');
-      return { project: name, cwd: c.projects[name], policyHash: policyHash(c) };
+      return { project: name, cwd: c.projects[name], policyHash: hash, ...agent };
     }
     const cwd = bound?.cwd ?? chatWorkspace(this.config.dataDir, this.projectScope(m));
     mkdirSync(cwd, { recursive: true, mode: 0o700 });
-    return { cwd: realpathSync(cwd), policyHash: policyHash(c) };
+    return { cwd: realpathSync(cwd), policyHash: hash, ...agent };
   }
   private workspaceLabel(m: Incoming): string {
     try { return this.project(m).cwd; }
@@ -332,8 +345,8 @@ export class Engine {
         threadId: this.tasks.thread(task), cwd, signal,
         prompt, images,
         onActivity: phase => recordActivity(this.store, run, phase),
-        onThread: threadId => { this.store.saveThread(sessionKey(task.workstreamId), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
-        onTurn: turnId => { const threadId = this.store.thread(sessionKey(task.workstreamId)); if (threadId) { this.store.saveRun(m.key, threadId, turnId); this.tasks.saveRun(run, threadId, turnId); } },
+        onThread: threadId => { this.store.saveThread(this.tasks.sessionKey(task), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
+        onTurn: turnId => { const threadId = this.store.thread(this.tasks.sessionKey(task)); if (threadId) { this.store.saveRun(m.key, threadId, turnId); this.tasks.saveRun(run, threadId, turnId); } },
         onReady: controls => { const slot = this.active.get(m.chatKey); if (slot?.task.id === task.id) { slot.controls = controls; void this.steer(slot).catch(() => this.fatal('revision_storage_error')); } },
         onEvidence: item => evidence!.observe(item),
         onWait: request => requestWait(this.store, task.id, run, { ...request, question: this.redact(request.question), choices: request.choices?.map(value => this.redact(value)) }),
@@ -393,7 +406,7 @@ export class Engine {
         this.tasks.amend(ref, m); this.reply(m, `补充已保存到 ${ref.id}。${ref.state === 'running' ? '正在尝试追加给执行器；提交结果会另行提示，不表示此前操作已撤销。' : '将在开工时一并处理。'}`); return;
       }
       const delivery=/^\/run\s+--deliver\s+(\S+)\s+--\s+\S/.exec(m.text);
-      this.store.transaction(()=>{const task=this.tasks.create(m,project,ref);if(delivery)this.artifacts.intent(m,task,delivery[1]);});
+      this.store.transaction(()=>{const task=this.tasks.create(m,project,ref,this.selectedAgent(m,ref));if(delivery)this.artifacts.intent(m,task,delivery[1]);});
       if (this.config.feishu?.progressUpdates !== false) {
         this.store.addOutput(m.key, 'progress', '正在处理，完成后会在这里回复。');
         this.store.db.prepare("UPDATE outbox SET state='deferred' WHERE inboxKey=? AND kind='progress' AND state='pending'").run(m.key);

@@ -1,8 +1,9 @@
+import { selectAgent, selectedPolicyHash } from './agent-registry.js';
 import type { Config } from './config.js';
 import type { Incoming } from './store.js';
 import { Store } from './store.js';
 import { ApprovalError, ExecFileGitRunner, GitApprovals, type ApprovalTaskContext, type GitRunner } from './approvals.js';
-import { policyHash } from './tasks.js';
+import { Tasks } from './tasks.js';
 
 const JOB_PREFIX = 'git-approval-job:';
 type Action = 'request' | 'approve' | 'reject' | 'status';
@@ -74,7 +75,7 @@ export class ApprovalService {
     if (!row) throw new ApprovalError('task_missing', '任务不存在。');
     const project = row.project == null ? undefined : String(row.project), cwd = String(row.cwd), savedPolicy = String(row.policyHash);
     const projects = this.config.codex.projects ?? {};
-    if (savedPolicy !== policyHash(this.config.codex)) throw new ApprovalError('task_configuration_changed', '任务创建后的项目权限配置已更改，不能申请或执行 push。');
+    if (savedPolicy !== selectedPolicyHash(this.config, new Tasks(this.store).selection(id) ?? selectAgent(this.config, 'codex'))) throw new ApprovalError('task_configuration_changed', '任务创建后的项目权限配置已更改，不能申请或执行 push。');
     if (project && (!Object.hasOwn(projects, project) || projects[project] !== cwd)) {
       throw new ApprovalError('task_configuration_changed', '任务绑定的项目已移除或路径已更改，不能申请或执行 push。');
     }

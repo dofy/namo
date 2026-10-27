@@ -24,13 +24,15 @@
 - [独立运行进程](runner.md) · [等待用户回复](waits.md) · [GitHub 检查等待](external-waits.md)
 - [执行证据](result-evidence.md) · [受控 Git push](approvals.md)
 - [后续计划与验收缺口](development-plan.md)
-- [多执行器接入与任务路由计划](agent-adapters-plan.md)：Claude / Cursor 官方接入、能力差异、切换和交接，尚未实现。
+- [多执行器接入与任务路由计划](agent-adapters-plan.md)：Claude / Cursor 接入、能力差异、切换和交接的分期计划。
+- [执行器注册表](agent-registry.md) · [兼容性验证基线](agent-compatibility.md)：R7.1 配置和安全边界、R7.0 的实测证据与缺口。
 - [品牌资源](brand.md) · [字体与许可证](../assets/fonts/README.md)
 
 ## 历史记录
 
 - [M1 验收](archive/m1-verification.md)
 - [M2 分批验收](archive/m2-verification.md)
+- [R7 注册表隔离验证](archive/r7-registry-verification-20261027.md)
 - [R0–R6 交付台账](archive/roadmap-delivery.md)
 - [发布历史补充](archive/release-history.md)
 

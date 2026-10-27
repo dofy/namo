@@ -19,6 +19,7 @@ import type { ProfileState, UserProfile } from './ui-contract.js';
 import { Browse, BrowseError } from './browse.js';
 import { parseGitHubAccessConfig, publicGitHubAccess } from './github-access.js';
 import { discoverLocalGh, type LocalGhConfig } from './github-local.js';
+import { getAgentRegistry, type AgentProfileInput } from './agent-registry.js';
 
 export class ManagementError extends Error { constructor(message:string,readonly status=409){super(message);} }
 export interface ManagementDeps {
@@ -26,6 +27,22 @@ export interface ManagementDeps {
   localGh: typeof discoverLocalGh;
 }
 const defaults:ManagementDeps={status:serviceStatus,action:serviceAction,wait:waitForService,diagnose:doctor,localGh:discoverLocalGh};
+function publicAgentSpecs(value:unknown):Record<string,AgentProfileInput> {
+  if(!value||typeof value!=='object'||Array.isArray(value))return {};
+  const result:Record<string,AgentProfileInput>={};
+  for(const [id,entry] of Object.entries(value)) {
+    if(!/^[a-z][a-z0-9_-]{0,47}$/.test(id)||['codex','constructor','prototype','__proto__'].includes(id))continue;
+    if(!entry||typeof entry!=='object'||Array.isArray(entry))continue;
+    const profile=entry as Record<string,unknown>;
+    if(!['codex','claude','cursor'].includes(String(profile.adapter)))continue;
+    result[id]={adapter:profile.adapter as AgentProfileInput['adapter'],
+      ...(typeof profile.enabled==='boolean'?{enabled:profile.enabled}:{}),
+      ...(typeof profile.bin==='string'?{bin:profile.bin}:{}),
+      ...(typeof profile.model==='string'?{model:profile.model}:{}),
+      ...(Number.isSafeInteger(profile.timeoutMs)?{timeoutMs:Number(profile.timeoutMs)}:{})};
+  }
+  return result;
+}
 export class Management {
   readonly dataDir: string;
   private deps:ManagementDeps;
@@ -67,11 +84,13 @@ export class Management {
   }
   config():any {
     const {raw,revision}=this.source(),c=raw.codex??{},f=raw.feishu??{};
-    let valid=true;try{parseConfig(raw,this.file);}catch{valid=false;}
+    let valid=true,parsed:ReturnType<typeof parseConfig>|undefined;try{parsed=parseConfig(raw,this.file);}catch{valid=false;}
     let github=publicGitHubAccess();try {github=publicGitHubAccess(parseGitHubAccessConfig(raw.github,process.env));}catch{/* Keep an invalid credential out of the projection. */}
     const service=this.status();let applied:string|undefined;
     try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid)applied=h.configRevision;}catch{/* Not yet instrumented. */}
-    return {revision,valid,github,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
+    const registry=parsed?getAgentRegistry(parsed):undefined,rawAgents=raw.agents&&typeof raw.agents==='object'&&!Array.isArray(raw.agents)?raw.agents:{};
+    return {revision,valid,github,agents:this.sanitize({defaultProfile:registry?.defaultProfile??(typeof rawAgents.defaultProfile==='string'?rawAgents.defaultProfile:'codex'),memoryProfile:'codex' as const,
+        profiles:registry?.profiles??[],specs:publicAgentSpecs(rawAgents.profiles)}),application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
       values:{projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.allowLocalCommits??false,
         concurrency:raw.concurrency??2,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
         reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??12000,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},
@@ -247,12 +266,17 @@ export class Management {
     try {
       const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError(tr("配置已被其他页面或程序修改，请刷新后重试"));
       if(!patch||typeof patch!=='object'||Array.isArray(patch))throw new ManagementError(tr("配置内容无效"));
-      const allowed=['projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken'];
+      const allowed=['projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','agents'];
       if(Object.keys(patch).some(k=>!allowed.includes(k)))throw new ManagementError(tr("包含不允许编辑的配置项"));
       const next=structuredClone(raw);next.codex??={};next.feishu??={};
-      for(const key of allowed.filter(k=>!['concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
+      for(const key of allowed.filter(k=>!['concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','agents'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
       if(next.codex.defaultProject==='')delete next.codex.defaultProject;
       if(Object.hasOwn(patch,'concurrency'))next.concurrency=patch.concurrency;
+      if(Object.hasOwn(patch,'agents')){
+        const encoded=JSON.stringify(patch.agents);
+        if(encoded!==this.redactor()(encoded))throw new ManagementError(tr('Agent 配置不能包含凭据，请移除后重试'),400);
+        next.agents=structuredClone(patch.agents);
+      }
       for(const k of ['cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs'])if(Object.hasOwn(patch,k))next.feishu[k]=patch[k];
       if(patch.newSecret!==undefined) {
         if(typeof patch.newSecret!=='string'||patch.newSecret.length>256)throw new ManagementError(tr("Secret 格式无效"));

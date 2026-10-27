@@ -1,7 +1,9 @@
+import { probeClaudeAgent, probeCursorAcp, type AgentProbeReport } from './agent-probes.js';
+import { agentCodexConfig, selectAgent, getAgentRegistry, type AgentSelection } from './agent-registry.js';
 import { t as tr } from './locale.js';
 import { accessSync, constants, existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
-import { spawnSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import type { Config } from './config.js';
 import { CodexRuntime, probeRuntime, RuntimeError, type Runtime } from './runtime.js';
 import { codexEnvironment } from './safety.js';
@@ -14,23 +16,22 @@ export function findExecutable(bin: string, path = process.env.PATH ?? ''): stri
 }
 export function detectAgents(codexBin = 'codex'): AgentInfo[] {
   return [{ id: 'codex', bin: codexBin, kind: 'local-cli' as const, supported: true },
+    { id: 'cursor', bin: findExecutable('agent') ? 'agent' : 'cursor-agent', kind: 'local-cli' as const, supported: false },
     { id: 'claude', bin: 'claude', kind: 'local-cli' as const, supported: false },
     { id: 'openclaw', bin: 'openclaw', kind: 'gateway' as const, supported: false }].map(a => {
     const path = findExecutable(a.bin);
-    let version: string | undefined;
-    if (path) {
-      const r = spawnSync(path, ['--version'], { timeout: 5000, encoding: 'utf8', maxBuffer: 64_000 });
-      // Never echo arbitrary program output (a broken wrapper can print env).
-      version = `${r.stdout ?? ''} ${r.stderr ?? ''}`.match(/\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b/)?.[0];
-    }
-    return { id: a.id, kind: a.kind, supported: a.supported, path: path ? realpathSync(path) : undefined, version, installed: !!path };
+    // Discovery must not execute an arbitrary PATH command or inherit host
+    // credentials. Explicit profile probes own bounded protocol/version checks.
+    return { id: a.id, kind: a.kind, supported: a.supported, path: path ? realpathSync(path) : undefined, installed: !!path };
   });
 }
-export function runtimeFor(config: Config): Runtime {
-  if (config.agent !== 'codex') throw new Error(tr("当前版本仅支持 Codex 执行后端"));
-  return new CodexRuntime(config.codex);
+export function runtimeFor(config: Config, profile?: string | AgentSelection): Runtime {
+  return new CodexRuntime(agentCodexConfig(config, typeof profile === 'string' ? selectAgent(config, profile) : profile));
 }
-export async function probeAgent(c: Config): Promise<Check[]> {
+export async function probeAgent(source: Config, profileId?: string): Promise<Check[]> {
+  let c: Config;
+  try { c = {...source, codex: agentCodexConfig(source, selectAgent(source, profileId))}; }
+  catch { return [{id:'agent.profile',status:'fail',message:tr('所选执行器未实现、已禁用或不存在；没有自动切换后端')}]; }
   const checks: Check[] = [];
   const path = findExecutable(c.codex.bin);
   if (!path) return [{ id: 'agent.binary', status: 'fail', message: tr("未找到 Codex 可执行文件"), next: tr("安装官方 Codex，或通过 namo init 指定完整路径：https://learn.chatgpt.com/docs/cli") }];
@@ -49,7 +50,8 @@ export async function probeAgent(c: Config): Promise<Check[]> {
   } else checks.push({ id: 'agent.project', status: 'warn', message: tr("未配置项目，将使用隔离会话目录"), next: tr("运行 namo init 选择项目") });
   return checks;
 }
-export async function loginAgent(c: Config): Promise<void> {
+export async function loginAgent(source: Config, profileId?: string): Promise<void> {
+  const c = {...source, codex:agentCodexConfig(source, selectAgent(source, profileId))};
   const path = findExecutable(c.codex.bin); if (!path) throw new Error(tr("未找到 Codex，请先安装官方 Codex CLI"));
   mkdirSync(c.codex.home, { recursive: true, mode: 0o700 });
   await new Promise<void>((resolve, reject) => {
@@ -58,9 +60,9 @@ export async function loginAgent(c: Config): Promise<void> {
     p.once('exit', code => code === 0 ? resolve() : reject(new Error(tr("Codex 登录未完成，可重新运行 namo login"))));
   });
 }
-export async function liveAgentTest(c: Config): Promise<boolean> {
+export async function liveAgentTest(c: Config, profileId?: string): Promise<boolean> {
   const cwd = c.codex.defaultProject && c.codex.projects?.[c.codex.defaultProject] || join(c.dataDir, 'workspaces', 'health');
-  const result = await runtimeFor(c).run({ cwd, prompt: 'Do not call tools. Reply with exactly NAMO_AGENT_OK.', signal: new AbortController().signal, onThread() {}, onTurn() {} });
+  const result = await runtimeFor(c, profileId).run({ cwd, prompt: 'Do not call tools. Reply with exactly NAMO_AGENT_OK.', signal: new AbortController().signal, onThread() {}, onTurn() {} });
   return result.text === 'NAMO_AGENT_OK';
 }
 export function toolchainPaths(): string[] {
@@ -69,4 +71,13 @@ export function toolchainPaths(): string[] {
   if (process.platform === 'darwin' && node.startsWith('/opt/homebrew/')) paths.add('/opt/homebrew');
   else if (!node.startsWith('/usr/')) paths.add(dirname(dirname(node)));
   return [...paths];
+}
+
+/** Discovery and authentication evidence never enables an unimplemented runtime. */
+export async function probeAgentProfile(c: Config, profileId?: string): Promise<{profileId:string;adapter:string;checks?:Check[];report?:AgentProbeReport}> {
+  const registry=getAgentRegistry(c), profile=registry.profiles.find(p=>p.id===(profileId??registry.defaultProfile));
+  if(!profile)throw new Error('agent_profile_unavailable');
+  if(profile.adapter==='codex')return {profileId:profile.id,adapter:profile.adapter,checks:await probeAgent(c,profile.id)};
+  const options={bin:profile.bin,home:profile.home,configDir:join(profile.home,'config')};
+  return {profileId:profile.id,adapter:profile.adapter,report:profile.adapter==='claude'?await probeClaudeAgent(options):await probeCursorAcp(options)};
 }
