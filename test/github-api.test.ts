@@ -1,7 +1,8 @@
+import { storeFixture } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { Tasks } from '../src/tasks.js';
@@ -13,8 +14,8 @@ import { Management } from '../src/management.js';
 
 const credential='synthetic-github-account-token';
 function fixture(t:any,chatType:'p2p'|'group'='p2p',owner='alice',tenant='tenant'){
-  const dir=mkdtempSync(join(tmpdir(),'namo-github-simple-')),file=join(dir,'config.json'),store=new Store(join(dir,'bot.sqlite'));
-  t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true});});
+  const { dir, store } = storeFixture(t, 'namo-github-simple-');
+  const file = join(dir, 'config.json');
   writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'synthetic-feishu',allowedUserIds:['alice'],access:{mode:'organization',tenantKey:'tenant'}},
     codex:{home:join(dir,'auth'),sandbox:'workspace-write',networkAccess:true,allowLocalCommits:true,projects:{app:dir},defaultProject:'app',projectAccess:{app:{organization:true,userIds:[],chatIds:[],permission:'workspace-write'}}},
     github:{mode:'simple',ownerUserId:'alice',token:credential,repositories:[],allowedUserIds:[]}}));

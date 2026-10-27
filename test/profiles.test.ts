@@ -1,8 +1,7 @@
+import { storeFixture } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+
 import { Store, SCHEMA_VERSION } from '../src/store.js';
 import { Profiles } from '../src/profiles.js';
 import { Engine } from '../src/engine.js';
@@ -13,8 +12,7 @@ import type { ProfileIdentity } from '../src/ui-contract.js';
 const identity: ProfileIdentity = { channel: 'feishu', appId: 'app', userId: 'alice' };
 const owner = { source: 'local-owner' as const };
 function fixture(t: any) {
-  const dir = mkdtempSync(join(tmpdir(), 'namo-profiles-')), file = join(dir, 'bot.sqlite');
-  const store = new Store(file); t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  const { dir, file, store } = storeFixture(t, 'namo-profiles-');
   return { dir, file, store, profiles: new Profiles(store, identity) };
 }
 const feishu = { appId: 'app', domain: 'feishu' as const, allowedUserIds: ['alice', 'bob'], allowedChatIds: [], requireMention: false, appSecret: '' };

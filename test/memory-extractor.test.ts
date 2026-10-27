@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { Config } from '../src/config.js';
 import type { AutoMemoryInput } from '../src/auto-memory.js';
 import { extractConversationMemory, RuntimeError } from '../src/runtime.js';
+import { waitFor } from './helpers.js';
 
 const input: AutoMemoryInput = { ownerId: 'fixture-user', chatKey: 'fixture-dm', chatType: 'p2p', project: 'fixture-project', existing: [],
   messages: [{ messageId: 'fixture-message', text: 'I prefer concise answers.' }] };
@@ -43,7 +44,8 @@ record({kind:'ready'});
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const config: Config['codex'] = { bin, home, sandbox: 'workspace-write', timeoutMs: 3000, networkAccess: true,
     readPaths: ['/fixture-host-path'], model: 'fixture-model' };
-  const records = () => existsSync(trace) ? readFileSync(trace, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
+  // The subprocess may still be appending the last line when the parent polls.
+  const records = () => existsSync(trace) ? readFileSync(trace, 'utf8').split('\n').slice(0, -1).map(line => JSON.parse(line)) : [];
   return { home, config, records };
 }
 
@@ -87,12 +89,12 @@ test('aborting an in-flight extraction rejects promptly and leaves no subprocess
   const f = fixture(t, 'hang'), controller = new AbortController();
   const running = extractConversationMemory(f.config, input, controller.signal);
   void running.catch(() => {});
-  const deadline = Date.now() + 3000;
-  while (!f.records().some(row => row.method === 'turn/start')) {
-    assert.ok(Date.now() < deadline, 'fake extractor did not start');
-    await new Promise(resolve => setTimeout(resolve, 10));
+  try {
+    await waitFor(() => f.records().some(row => row.method === 'turn/start'), 3000);
+  } finally {
+    controller.abort();
+    await running.catch(() => {});
   }
-  controller.abort();
   await assert.rejects(running, (error: unknown) => error instanceof RuntimeError && /cancelled|disconnected/.test(error.code));
   const spawn = f.records().find(row => row.kind === 'spawn');
   assert.throws(() => process.kill(spawn.pid, 0), (error: unknown) => (error as NodeJS.ErrnoException).code === 'ESRCH');
@@ -109,11 +111,7 @@ for (const [mode, pendingMethod] of [['ignore-init', 'initialize'], ['ignore-thr
     void running.catch(() => {});
     let pid: number | undefined, limit: ReturnType<typeof setTimeout> | undefined;
     try {
-      const readyDeadline = Date.now() + 3000;
-      while (!f.records().some(row => row.kind === 'ready') || !f.records().some(row => row.method === pendingMethod)) {
-        assert.ok(Date.now() < readyDeadline, 'fake extractor did not reach the intended unresolved request');
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
+      await waitFor(() => f.records().some(row => row.kind === 'ready') && f.records().some(row => row.method === pendingMethod), 3000);
       pid = f.records().find(row => row.kind === 'spawn').pid;
       const cancelledAt = Date.now(); controller.abort();
       await assert.rejects(Promise.race([running, new Promise<never>((_resolve, reject) => {

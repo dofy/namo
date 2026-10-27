@@ -1,3 +1,4 @@
+import { waitFor } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, realpathSync } from 'node:fs';
@@ -8,7 +9,7 @@ import { RuntimeError, type Runtime } from '../src/runtime.js';
 import { Store, type Incoming } from '../src/store.js';
 
 const msg = (key: string, chatKey = 'chat', text = 'hello'): Incoming => ({ key, chatKey, chatId: chatKey, messageId: key, senderId: 'user', text });
-const wait = async (fn: () => boolean) => { const end = Date.now() + 4000; while (!fn()) { if (Date.now() > end) throw new Error('condition_timeout'); await new Promise(r => setTimeout(r, 10)); } };
+const wait = (condition: () => boolean, timeoutMs = 4000) => waitFor(condition, timeoutMs);
 
 test('recovered control commands never run as model prompts', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'bot-engine-')); const store = new Store(join(dir, 'bot.sqlite'));

@@ -1,3 +1,4 @@
+import { waitFor } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -15,13 +16,7 @@ import { Waits, linkedExternalWait } from '../src/waits.js';
 import { ExternalWaits } from '../src/external-waits.js';
 import { Recovery } from '../src/recovery.js';
 
-const until = async (predicate: () => boolean, timeout = 8000) => {
-  const end = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() > end) throw new Error('condition_timeout');
-    await new Promise(resolve => setTimeout(resolve, 20));
-  }
-};
+const until = (condition: () => boolean, timeoutMs = 8000) => waitFor(condition, timeoutMs);
 
 const FAKE_CODEX = `#!/usr/bin/env node
 import { createInterface } from 'node:readline';

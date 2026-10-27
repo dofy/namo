@@ -1,10 +1,10 @@
+import { storeFixture } from './helpers.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {chmodSync,mkdtempSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
-import {join} from 'node:path';
-import {tmpdir} from 'node:os';
+import { chmodSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+
 import {crc32} from 'node:zlib';
-import {Store} from '../src/store.js';
+
 import {Tasks} from '../src/tasks.js';
 import {TaskImages,inspectImage,loadRunImages,saveRunImages,verifyImageInput} from '../src/image-inputs.js';
 import {taskMaterials} from '../src/task-materials.js';
@@ -15,7 +15,7 @@ const PNG=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4n
 const JPEG=Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAACAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAZEAADAQEBAAAAAAAAAAAAAAAAAQIDEUH/xAAVAQEBAAAAAAAAAAAAAAAAAAACBP/EABkRAAEFAAAAAAAAAAAAAAAAAAABAgMzcf/aAAwDAQACEQMRAD8Al6aWtKSuudfoAFDW3ELprXap/9k=','base64');
 const PROGRESSIVE_JPEG=Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wgARCAACAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAT/xAAVAQEBAAAAAAAAAAAAAAAAAAABA//aAAwDAQACEAMQAAABlDf/xAAVEAEBAAAAAAAAAAAAAAAAAAABIf/aAAgBAQABBQJb/8QAFxEAAwEAAAAAAAAAAAAAAAAAAAECMv/aAAgBAwEBPwG9M//EABcRAAMBAAAAAAAAAAAAAAAAAAABAjL/2gAIAQIBAT8BjKP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/An//xAAXEAEAAwAAAAAAAAAAAAAAAAABABEh/9oACAEBAAE/IUtrP//aAAwDAQACAAMAAAAQA//EABYRAAMAAAAAAAAAAAAAAAAAAAABof/aAAgBAwEBPxCpn//EABYRAAMAAAAAAAAAAAAAAAAAAAABof/aAAgBAgEBPxCBH//EABcQAQEBAQAAAAAAAAAAAAAAAAERAEH/2gAIAQEAAT8QCBKvd//Z','base64');
 const source:MaterialSource={appId:'app',ownerId:'alice',chatId:'chat',messageId:'image-message'};
-function fixture(t:any){const dir=mkdtempSync(join(tmpdir(),'namo-images-')),store=new Store(join(dir,'db'));t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true});});return {dir,store};}
+function fixture(t:any){const { dir, store } = storeFixture(t, 'namo-images-');return {dir,store};}
 function adapter(bytes:Uint8Array=PNG):MaterialReadAdapter{return {async readMessage(){throw Error('no history');},async readResource(request){assert.equal(request.kind,'image');assert.equal(request.chatId,'chat');assert.ok(request.maxBytes<=5_000_000);return {bytes};}};}
 const limits=()=>({maxBytes:10_000_000,deadlineMs:Date.now()+5000});
 function pngChunk(type:string,data:Buffer):Buffer {

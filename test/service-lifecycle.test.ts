@@ -1,10 +1,11 @@
+import { writable, put } from './helpers.js';
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
 import os from 'node:os';
 import { syncBuiltinESMExports } from 'node:module';
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { initialConfig } from '../src/onboarding.js';
 import { loadConfig } from '../src/config.js';
@@ -15,17 +16,6 @@ import { databaseFingerprint } from '../src/upgrade-backup.js';
 import { DatabaseSync } from 'node:sqlite';
 import { acquireLock } from '../src/safety.js';
 
-function writable(path: string): void {
-  const stat = lstatSync(path);
-  if (stat.isSymbolicLink()) return;
-  if (stat.isDirectory()) {
-    chmodSync(path, 0o700);
-    for (const name of readdirSync(path)) writable(join(path, name));
-  } else chmodSync(path, 0o600);
-}
-function put(path: string, body: string): void {
-  mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, body);
-}
 interface BootstrapReceipt { status: number | null; registered: boolean; timeout?: boolean }
 async function fixture(t: TestContext) {
   const dir = mkdtempSync(join(os.tmpdir(), 'namo-service-lifecycle-'));
@@ -84,7 +74,7 @@ createInterface({input:process.stdin}).on('line', line => {
     // package fixture. No source checkout, live registration or SDK is modified.
     cpSync(fileURLToPath(new URL('../src/', import.meta.url)), join(root, 'dist/src'), { recursive: true });
     put(join(root, 'dist/ui/index.html'), `<main>${name}</main>`);
-    put(join(root, 'dist/scripts/launchd.js'), 'export {};');
+    put(join(root, 'dist/scripts/smoke-codex.js'), 'export {};');
     put(join(root, 'bin/namo.js'), 'export {};');
     put(join(root, 'assets/logo.png'), 'fixture');
     const toml = realpathSync(fileURLToPath(new URL('../../node_modules/smol-toml/', import.meta.url)));
@@ -167,7 +157,6 @@ test('isolated install, stopped upgrade and same-schema rollback preserve newer 
   assert.equal(f.bootstrapCount, 2, 'upgrade and rollback never bootstrap or replay work');
   assert.deepEqual(readFileSync(f.calls, 'utf8').trim().split('\n'), ['initialize', 'initialized', 'plugin/list', 'skills/list', 'account/read', 'permissionProfile/list']);
 });
-
 
 test('backup failure aborts upgrade before changing release, bootstrap or registration', { skip: process.platform !== 'darwin' }, async t => {
   const f = await fixture(t); await f.service.serviceAction('install', f.config); await f.service.serviceAction('stop', f.config);

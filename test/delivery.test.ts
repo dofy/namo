@@ -1,3 +1,4 @@
+import { waitFor } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -11,13 +12,7 @@ import type { Runtime } from '../src/runtime.js';
 import { Store, type Incoming } from '../src/store.js';
 import { Tasks, type Task } from '../src/tasks.js';
 
-const waitFor = async (condition: () => boolean, timeoutMs = 5_000): Promise<void> => {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error('condition_timeout');
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-};
+
 
 const message = (key: string, overrides: Partial<Incoming> = {}): Incoming => ({
   key,

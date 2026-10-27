@@ -71,7 +71,8 @@ test('CLI follows system language, supports explicit overrides, and keeps machin
     assert.equal(moved.status, 1);
     assert.match(moved.stderr, language === 'en' ? /workbench/ : /工作台/);
     assert.equal(moved.stdout, '');
-    assert.match(run(['--help', '--lang', language]).stdout, /init.*\n.*login.*\n.*start.*\n.*service.*\n.*ui/s);
-    assert.doesNotMatch(run(['--help', '--lang', language]).stdout, /agent list|doctor|logs\s+|approval request/);
+    const help = language === 'en' ? en.stdout : zh.stdout;
+    assert.match(help, /init.*\n.*login.*\n.*start.*\n.*service.*\n.*ui/s);
+    assert.doesNotMatch(help, /agent (list|profiles|probe|use)|Claude|Cursor|doctor|logs\s+|approval request/);
   }
 });

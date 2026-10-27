@@ -1,3 +1,4 @@
+import { storeFixture } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -7,12 +8,16 @@ import { normalizeEvent, type FeishuEvent } from '../src/feishu.js';
 import { parseConfig, validateFeishu, type Config } from '../src/config.js';
 import { audienceAllows, executionPolicy, projectAllowed } from '../src/access.js';
 import { ScopedGitHubAdapter, parseGitHubAccessConfig } from '../src/github-access.js';
-import { Store } from '../src/store.js';
+import { Store, type Incoming } from '../src/store.js';
 import { Tasks, policyHash } from '../src/tasks.js';
 import { Management } from '../src/management.js';
 import { Engine } from '../src/engine.js';
 import { assertReviewDelivery } from '../src/github-review.js';
-import { selectAgent,selectedPolicyHash,agentCodexConfig } from '../src/agent-registry.js';
+import { selectAgent, selectedPolicyHash, agentCodexConfig } from '../src/agent-registry.js';
+import { Memories } from '../src/memory.js';
+import { memoryProjects } from '../src/memory-access.js';
+import { memoryCommand } from '../src/memory-commands.js';
+import { buildTaskRunPrompt } from '../src/task-context.js';
 
 const f:Config['feishu']={appId:'app',appSecret:'fake',domain:'feishu',allowedUserIds:['legacy'],allowedChatIds:[],requireMention:true,access:{mode:'organization',tenantKey:'tenant'}};
 const event=(user='alice',tenant='tenant'):FeishuEvent=>({sender:{sender_type:'user',tenant_key:tenant,sender_id:{open_id:user}},message:{message_id:`message-${user}`,chat_id:'group',chat_type:'group',message_type:'text',content:'{"text":"@bot review PR"}',mentions:[{key:'@bot',id:{open_id:'bot'}}]}});
@@ -20,7 +25,7 @@ const member=(user='alice')=>normalizeEvent(event(user),f,'bot')!;
 const grant={organization:false,userIds:['alice'],chatIds:['group'],repository:'org/private'};
 const github={source:'gh' as const,localGh:{executable:'/usr/bin/gh',configDir:'/tmp/test-gh',login:'service',userId:42},repositories:[],allowedUserIds:[],grants:[grant]};
 const target={owner:'org',repo:'private',pullNumber:1,headSha:'a'.repeat(40)};
-function fixture(t:any){const dir=mkdtempSync(join(tmpdir(),'namo-org-')),store=new Store(join(dir,'bot.sqlite'));t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true});});return{dir,store};}
+function fixture(t:any){const { dir, store } = storeFixture(t, 'namo-org-');return{dir,store};}
 
 test('organization admits unpaired members, rejects outsiders/missing tenant/bots and still requires group mentions',()=>{
   assert.ok(member());assert.equal(member().envelope?.tenantKey,'tenant');
@@ -81,7 +86,6 @@ test('management saves shared credentials without a paired owner, detects revisi
   assert.equal(manager.config().feishu.access,null);
 });
 
-
 test('organization policies remain binding across agent profile selection',t=>{
   const{dir}=fixture(t),file=join(dir,'config.json');
   const c=parseConfig({dataDir:dir,feishu:f,codex:{networkAccess:true,readPaths:[dir]},agents:{profiles:{review:{adapter:'codex',enabled:true,model:'test-model'}}}},file);
@@ -93,7 +97,6 @@ test('organization policies remain binding across agent profile selection',t=>{
   const revoked={...c,codex:executionPolicy(c.codex,f,member(),undefined,{...github,grants:[]})};
   assert.notEqual(selectedPolicyHash(effective,selection),selectedPolicyHash(revoked,selection));
 });
-
 
 test('a revoked legacy project gives a safe new-session path without inheriting its workspace or thread',t=>{
   const{dir,store}=fixture(t),file=join(dir,'config.json');
@@ -113,4 +116,32 @@ test('a revoked legacy project gives a safe new-session path without inheriting 
   const current=tasks.get(store.get(fresh.key)!.taskId!)!;
   assert.ok(current);assert.equal(current.project,null);assert.notEqual(current.cwd,old.cwd);assert.notEqual(current.workstreamId,old.workstreamId);
   assert.equal(tasks.thread(current),undefined);assert.equal(tasks.thread(old),'legacy-private-thread');
+});
+
+test('organization memory ACL reaches prompts and commands, distinguishes group grants and revocation', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'namo-memory-acl-')), store = new Store(join(dir, 'db'));
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  const config = parseConfig({ feishu: { appId: 'app', access: { mode: 'organization', tenantKey: 'tenant' } },
+    codex: { projects: { atlas: dir }, defaultProject: 'atlas', projectAccess: {
+      atlas: { organization: false, userIds: ['alice'], chatIds: ['authorized-team'], permission: 'read-only' } } } }, join(dir, 'config.json'));
+  const memory = new Memories(store);
+  const saved = memory.upsertAutomatic({ key: 'atlas.overview', kind: 'project_knowledge', level: 'global', privacy: 'shared',
+    project: 'atlas', text: 'ATLAS_RESOURCE_ONLY', evidence: ['Atlas overview'], sourceMessageIds: ['source'], observedAt: 1 },
+    { kind: 'local-owner', authenticated: true, ownerId: 'alice', project: 'atlas', chatKey: 'alice', chatType: 'p2p', source: { kind: 'automatic', ref: 'seed' } })!;
+  const input = (id: string, user: string, chat = user, group = false): Incoming => ({ key: id, messageId: id, chatId: chat,
+    chatKey: 'app:' + chat, senderId: user, text: 'atlas overview', envelope: { version: 1, type: 'text', kind: 'instruction',
+      scopeKey: 'app:' + chat, chatType: group ? 'group' : 'p2p', tenantKey: 'tenant', materials: [], limitations: [] } });
+  for (const [m, permitted] of [[input('bob', 'bob'), false], [input('alice', 'alice'), true],
+    [input('private-grant-in-group', 'alice', 'other-team', true), false], [input('group-grant', 'bob', 'authorized-team', true), true]] as const) {
+    store.enqueue(m); const tasks = new Tasks(store), task = tasks.create(store.get(m.key)!, { cwd: dir, policyHash: 'fixture' });
+    const prompt = buildTaskRunPrompt(store, task, store.get(m.key)!, config, tasks.start(task));
+    assert.equal(prompt.includes('ATLAS_RESOURCE_ONLY'), permitted);
+  }
+  const m = input('command', 'bob'); m.text = '/memories';
+  assert.doesNotMatch(memoryCommand(store, m, ['bob'], null, s => s, memoryProjects(config, m))!, /ATLAS_RESOURCE_ONLY/);
+  config.codex.projectAccess!.atlas.userIds = [];
+  const who = input('revoked', 'alice');
+  assert.deepEqual(memory.search({ kind: 'verified-user', authenticated: true, ownerId: 'alice', chatType: 'p2p', chatKey: who.chatKey,
+    allowedProjects: memoryProjects(config, who) }).map(r => r.id), []);
+  assert.equal(memory.manage({ kind: 'local-owner', authenticated: true, ownerId: 'alice' })[0]?.id, saved.id);
 });

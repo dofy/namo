@@ -14,7 +14,7 @@ Namo connects an organization’s chats to an agent running on a workstation or 
 
 Namo manages messages, queues, projects, sessions and execution boundaries. The official **Codex app-server** handles reasoning and tools. Code, task state and execution stay on your machine; model inference uses the service associated with your Codex account.
 
-**Status: early access.** Supports organization admission with explicit project and repository grants. Real Feishu messaging has been verified, but you maintain the host yourself. No npm package has been published yet.
+**Status: early access.** Supports organization admission, explicit project grants and configured GitHub access. Real Feishu messaging has been verified, but you maintain the host yourself. No npm package has been published yet.
 
 ## What it does
 
@@ -26,7 +26,7 @@ Namo manages messages, queues, projects, sessions and execution boundaries. The 
 - **Questions and answers:** the agent can pause for your input; answer by replying to the question or choosing a matching card option.
 - **Independent runners:** active tasks run separately from the receiver. Uncertain or interrupted work is retained for review instead of blindly rerunning it.
 - **Execution evidence:** file patches, command exit codes, artifact checks and Git HEAD snapshots, with capture limits made explicit.
-- **Assistant and scoped memory:** opt-in assistant identity and style, versioned owner/project/chat memories, explicit correction/disable/delete, and bounded handoffs. Memories never grant operation authority.
+- **Assistant and scoped memory:** opt-in assistant identity and style, automatic extraction of sourced long-term facts with scope and privacy controls, explicit correction/disable/delete, and bounded handoffs. Memories never grant operation authority.
 - **Materials and artifacts:** bounded reading of merged-forward text and direct UTF-8 text files, plus authorized delivery of selected task files. Direct PNG/JPEG images are passed to Codex as bounded, immutable image inputs.
 - **Local workbench:** a dashboard, searchable task and session lists, user/project/status/date filters, pagination, details, profiles, assistant settings, memory review, configuration and connection diagnostics.
 - **Concise chat replies:** durable acceptance reactions, original-message/topic routing, safe rich text and a single updatable progress card. Buttons require the Feishu callback subscription.
@@ -35,9 +35,9 @@ Namo manages messages, queues, projects, sessions and execution boundaries. The 
 
 The workbench and CLI support **English and Simplified Chinese**. They follow the system language by default and fall back to English for unsupported languages. Task content, user input and execution logs retain their original language.
 
-Schema 8 includes the roadmap integrations above and has passed review and deployment on the maintained local instance. Existing installations require an explicit service upgrade. PDF/Office/audio material interpretation, reminders, background delegation and offline message backfill remain unsupported. See the [development plan](docs/development-plan.md) for deployment status and outstanding real-world acceptance checks.
+PDF/Office/audio material interpretation, reminders, autonomous delegation and offline message backfill remain unsupported. See the [roadmap](docs/development-plan.md) for implemented capabilities and remaining acceptance checks; check the workbench for the running service version.
 
-Organization setup: open **Connections** in the workbench to configure organization access and choose a GitHub account and paired owner. Existing installations retain their access rules until an administrator changes them. See [organization access](docs/organization-access.md).
+Organization setup: open **Connections** in the workbench to configure organization access and choose a GitHub account and paired owner. Existing installations retain their access rules until an administrator changes them. See [organization access](docs/operations.md#配置与权限).
 
 ## Get started
 
@@ -53,7 +53,7 @@ pnpm run build
 pnpm cli init
 ```
 
-The resumable wizard guides you through agent detection, isolated login, project permissions, app credentials and user pairing. A live model/messaging check is optional and may use account quota.
+The resumable wizard guides you through Codex detection, isolated login, project permissions, app credentials and user pairing. A live model/messaging check is optional and may use account quota.
 
 To build a local CLI package:
 
@@ -95,16 +95,16 @@ See the [command reference (Chinese)](docs/getting-started.md#聊天命令) and 
 
 - The template defaults to read-only access. Use setup or the workbench to grant access to specific project directories, network commands and local Git commits.
 - Configuration, runtime data and isolated Codex login files remain excluded from agent access. Do not grant access to your entire home directory to fix a toolchain issue.
-- Skills receive read-only access to individual enabled skill directories and canonical symlink targets. Personal Codex skill opt-outs remain disabled in Namo. Run `pnpm run smoke:skills` to check the actual sandbox boundaries; see [skill access](docs/skills.md).
+- Skills receive read-only access to individual enabled skill directories and canonical symlink targets. Personal Codex skill opt-outs remain disabled in Namo. Run `pnpm run smoke:skills` to check the actual sandbox boundaries; see [skill access](docs/architecture.md#模块与约束).
 - Write permission also permits file deletion. Cancellation, timeout or context reset does not undo completed actions.
 - Git push approvals bind an exact task, owner/chat, project, configured remote, branch, HEAD SHA, configuration revision and expiry, then allow a single execution attempt. This is **limited protection**, not complete enforcement: a generally networked agent or another credential path could bypass the approval entrypoint. Deployment is not implemented as a generic target.
 - OpenClaw import requires an explicitly selected source file, supported version and application. It never imports provider authentication, gateways, plugins or tasks, and it cannot automatically take over a receiver; cutover and rollback remain an explicit, verified manual gate.
-- GitHub waits default to anonymous public access. In **Connections → GitHub**, select a local `gh` login and one paired owner: admitted groups get read-only repository access; the owner's private chat can use all account API permissions. Other private chats cannot borrow the account. No repository grant lists are needed; a separate token remains available. CI waits never trigger writes. See [private GitHub setup](docs/private-github.md).
+- GitHub waits default to anonymous public access. In **Connections → GitHub**, select a local `gh` login and one paired owner: admitted groups get read-only repository access; the owner's private chat can use all account API permissions. Other private chats cannot borrow the account. No repository grant lists are needed; a separate token remains available. CI waits never trigger writes. See [private GitHub setup](docs/operations.md#github-连接).
 - A platform send receipt means the platform accepted the message, not that the user read it. Ambiguous sends are retained for review.
 - A sleeping or disconnected host cannot provide continuous service. There is no offline history backfill.
 - Never commit `config.local.json`, `data/`, logs, tokens or authentication files. Namo does not automatically import personal MCP servers, plugins or third-party model gateways.
 
-The CLI keeps only `init`, `login`, `start`, `service`, and `ui`. Status, logs, diagnostics, and Git push approvals are available in the workbench. Inspect OpenClaw sources under **Connections → Runtime and maintenance**; import with `namo init --import`. Migration never switches receivers automatically. Approvals still bind preconfigured targets and require explicit confirmation. See [OpenClaw migration](docs/openclaw-migration.md) and [Git approvals](docs/approvals.md).
+The CLI keeps only `init`, `login`, `start`, `service`, and `ui`. Status, logs, diagnostics, and Git push approvals are available in the workbench. Inspect OpenClaw sources under **Connections → Runtime and maintenance**; import with `namo init --import`. Migration never switches receivers automatically. Approvals still bind preconfigured targets and require explicit confirmation. See [OpenClaw migration](docs/operations.md#openclaw-导入) and [Git approvals](docs/operations.md#git-推送审批).
 
 Background service management currently supports macOS. Other systems can use foreground mode but have not completed full platform acceptance. Codex is the only execution backend. Other agents are reserved for future plugins; no additional agent SDKs or probes are included.
 
@@ -118,6 +118,6 @@ pnpm run smoke:codex          # Protocol handshake; no inference
 pnpm run smoke:codex -- --run # Explicit real inference test
 ```
 
-See the [documentation index](docs/README.md), [developer guide](docs/development.md), and [remaining work](docs/development-plan.md). Detailed guides are currently in Chinese.
+See the [documentation index](docs/README.md), [developer guide](docs/architecture.md#开发与验证), and [remaining work](docs/development-plan.md). Detailed guides are currently in Chinese.
 
 Project: [github.com/dofy/namo](https://github.com/dofy/namo). Report reproducible issues without credentials, private configuration or raw conversation data.

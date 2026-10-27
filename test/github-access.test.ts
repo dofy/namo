@@ -1,13 +1,14 @@
+import { storeFixture } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Store } from '../src/store.js';
+
 import { Tasks } from '../src/tasks.js';
-import { GitHubAccessError, ScopedGitHubAdapter, parseGitHubAccessConfig, publicGitHubAccess,
-  type GitHubAccessConfig } from '../src/github-access.js';
-import type { RequiredCheck } from '../src/external-waits.js';
+import { GitHubAccessError, ScopedGitHubAdapter, parseGitHubAccessConfig, publicGitHubAccess, type GitHubAccessConfig } from '../src/github-access.js';
+import { type RequiredCheck } from '../src/external-waits.js';
+import { localGhEnvironment, localGhToken, executeGh, parseLocalGh, type LocalGhConfig } from '../src/github-local.js';
 
 const target = { owner: 'octo-org', repo: 'private-app', pullNumber: 7, headSha: 'a'.repeat(40) };
 const checks: RequiredCheck[] = [{ kind: 'check_run', context: 'build', appId: 12 }];
@@ -16,8 +17,7 @@ const config: GitHubAccessConfig = { token: credential, repositories: ['octo-org
 const localConfig:GitHubAccessConfig={source:'gh',localGh:{executable:'/usr/bin/gh',configDir:'/tmp/gh-test',login:'owner',userId:42},repositories:[],allowedUserIds:['alice']};
 
 function fixture(t: any, chatType?: 'p2p' | 'group') {
-  const dir = mkdtempSync(join(tmpdir(), 'namo-github-access-')), store = new Store(join(dir, 'bot.sqlite'));
-  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  const { dir, store } = storeFixture(t, 'namo-github-access-');
   store.enqueue({ key: 'app:input', messageId: 'input', chatId: 'chat', chatKey: 'app:chat', senderId: 'alice', text: 'Wait for build',
     envelope: { version: 1, kind: 'instruction', type: 'text', scopeKey: 'app:chat', chatType, materials: [], limitations: [] } });
   const tasks = new Tasks(store), task = tasks.create(store.get('app:input')!, { cwd: dir, policyHash: 'test' });
@@ -189,4 +189,27 @@ test('local gh verifies token identity and rejects stale ready observations afte
     loggedIn=failure!=='logout';permitted=failure!=='permission';identity=failure==='identity'?43:42;conclusion=failure==='check'?'failure':'success';
     await assert.rejects(adapter.validateResume(initial,checks,f.context,Date.now()+5000));
   }
+});
+
+const githubLocalConfig:LocalGhConfig={executable:'/usr/local/bin/gh',configDir:'/tmp/isolated-gh',login:'alice',userId:12};
+
+test('local gh pins its executable, config directory and account without ambient token/debug/proxy overrides',async()=>{
+  const env=localGhEnvironment(githubLocalConfig);
+  for(const key of ['GH_TOKEN','GITHUB_TOKEN','GH_DEBUG','HTTPS_PROXY','NODE_OPTIONS','GIT_CONFIG','XDG_CONFIG_HOME'])assert.equal(env[key],undefined);
+  assert.equal(env.GH_CONFIG_DIR,githubLocalConfig.configDir);assert.equal(env.GH_HOST,'github.com');
+  const result=await localGhToken(githubLocalConfig,Date.now()+5000,async(c,args)=>{
+    assert.deepEqual(c,githubLocalConfig);assert.deepEqual(args,['auth','token','--hostname','github.com','--user','alice']);return ' synthetic-credential\n';
+  });assert.equal(result,'synthetic-credential');
+  for(const patch of [{executable:'gh'},{configDir:'relative'},{login:'--evil'},{userId:0},{extra:'value'}])assert.throws(()=>parseLocalGh({...githubLocalConfig,...patch}));
+});
+
+test('gh process failures, excessive output and timeout never expose captured output or child errors',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'namo-gh-exec-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const executable=join(dir,'gh');
+  writeFileSync(executable,'#!/bin/sh\necho DO_NOT_LEAK\necho DO_NOT_LEAK >&2\nexit 1\n',{mode:0o700});
+  await assert.rejects(executeGh({...githubLocalConfig,executable},[],Date.now()+2000),e=>{assert.equal(String(e),'LocalGhError: github_local_unavailable');return true;});
+  writeFileSync(executable,'#!/bin/sh\nexec /bin/sleep 2\n',{mode:0o700});
+  await assert.rejects(executeGh({...githubLocalConfig,executable},[],Date.now()+50),/github_local_unavailable/);
+  await assert.rejects(executeGh(githubLocalConfig,[],Date.now()-1),/github_local_timeout/);
+  await assert.rejects(localGhToken(githubLocalConfig,Date.now()+2000,async()=> 'one\ntwo'),/github_local_unavailable/);
 });

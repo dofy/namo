@@ -1,3 +1,4 @@
+import { waitFor } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync, renameSync } from 'node:fs';
@@ -16,10 +17,7 @@ import { digest } from '../src/paths.js';
 import { Management } from '../src/management.js';
 import { Cards } from '../src/cards.js';
 
-const wait = async (predicate: () => boolean, timeout = 7000) => {
-  const end = Date.now() + timeout;
-  while (!predicate()) { if (Date.now() > end) throw new Error('condition_timeout'); await new Promise(r => setTimeout(r, 20)); }
-};
+const wait = (condition: () => boolean, timeoutMs = 7000) => waitFor(condition, timeoutMs);
 const fake = `#!/usr/bin/env node
 import {createInterface} from 'node:readline';
 import {appendFileSync,existsSync} from 'node:fs';

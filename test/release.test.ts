@@ -1,37 +1,26 @@
+import { writable, put } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
-  symlinkSync, writeFileSync, existsSync, renameSync,
-} from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, renameSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import sqlite, { DatabaseSync } from 'node:sqlite';
 import { createRuntimeRelease, verifyRuntimeRelease } from '../src/release.js';
 import { releaseUpgradeBlockers, renderLaunchAgent, serviceStatus, verifyServiceRegistration } from '../src/service.js';
 import { initialConfig } from '../src/onboarding.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, parseConfig } from '../src/config.js';
 import { acquireLock } from '../src/safety.js';
 import { atomicJson } from '../src/paths.js';
 import { SCHEMA_VERSION } from '../src/store.js';
 import { spawnSync } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { createUpgradeBackup, databaseFingerprint } from '../src/upgrade-backup.js';
 
-function writable(path: string): void {
-  const info = lstatSync(path);
-  if (info.isSymbolicLink()) return;
-  if (!info.isDirectory()) { chmodSync(path, 0o600); return; }
-  for (const name of readdirSync(path)) writable(join(path, name));
-  chmodSync(path, 0o700);
-}
-function put(file: string, value: string): void {
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, value);
-}
 function source(root: string): { root: string; dependency: string } {
   put(join(root, 'dist/src/cli.js'), 'export const build = "one";\n');
   put(join(root, 'dist/src/runner-worker.js'), 'export const worker = "one";\n');
   put(join(root, 'dist/src/service-bootstrap.js'), readFileSync(new URL('../src/service-bootstrap.js', import.meta.url), 'utf8'));
-  put(join(root, 'dist/scripts/launchd.js'), 'export {};\n');
+  put(join(root, 'dist/scripts/smoke-codex.js'), 'export {};\n');
   put(join(root, 'dist/ui/index.html'), '<main>one</main>\n');
   put(join(root, 'bin/namo.js'), '#!/usr/bin/env node\n');
   put(join(root, 'assets/namo-logo.png'), 'fixture-logo');
@@ -157,4 +146,51 @@ test('service bootstrap validates pinned identity before loading application or 
     writeFileSync(target,original);chmodSync(target,0o400);
   }
   assert.equal(launch().status,0);
+});
+
+function fixture(t: {after(fn:()=>void):void}) {
+  const root=mkdtempSync(join(tmpdir(),'namo-backup-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const file=join(root,'config.json'),plist=join(root,'service.plist'),dataDir=join(root,'data');mkdirSync(dataDir);
+  writeFileSync(file,'{"private":"fixture"}');writeFileSync(plist,'original registration');
+  return {root,file,plist,dataDir,config:parseConfig({dataDir},file),database:join(dataDir,'bot.sqlite')};
+}
+test('verified backup includes WAL rows, registration, config and original schema without migrating',async t=>{
+  const f=fixture(t),db=new DatabaseSync(f.database);
+  db.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=9; CREATE TABLE history(id INTEGER PRIMARY KEY, body TEXT); INSERT INTO history VALUES(1,'private row')");
+  const before=databaseFingerprint(db),result=await createUpgradeBackup(f.config,f.plist),copy=new DatabaseSync(join(result,'bot.sqlite'),{readOnly:true});
+  assert.equal(databaseFingerprint(copy),before);assert.equal(databaseFingerprint(db),before);copy.close();db.close();
+  assert.equal(statSync(result).mode&0o777,0o700);assert.equal(statSync(join(result,'bot.sqlite')).mode&0o777,0o600);
+  assert.deepEqual(readFileSync(join(result,'config.json')),readFileSync(f.file));
+  const receipt=JSON.parse(readFileSync(join(result,'verified.json'),'utf8'));assert.equal(receipt.database.fingerprint,before);
+  assert.equal(JSON.stringify(receipt).includes('private row'),false);
+});
+test('empty or corrupt SQLite never yields a verified backup',async t=>{
+  for(const content of ['', 'not a database']){const f=fixture(t);writeFileSync(f.database,content);
+    await assert.rejects(createUpgradeBackup(f.config,f.plist),/^Error: upgrade_backup_failed$/);assert.equal(readFileSync(f.database,'utf8'),content);}
+});
+test('symlinked backup destinations are rejected before any copy outside data directory',async t=>{
+  const f=fixture(t),external=join(f.root,'external');mkdirSync(external);symlinkSync(external,join(f.dataDir,'backups'));
+  await assert.rejects(createUpgradeBackup(f.config,f.plist),/upgrade_backup_failed/);
+});
+
+test('install and upgrade require opposite plist states', async t => {
+  const f = fixture(t);
+  await assert.rejects(createUpgradeBackup(f.config, f.plist, 'install'), /upgrade_backup_failed/);
+  rmSync(f.plist);
+  await assert.rejects(createUpgradeBackup(f.config, f.plist), /upgrade_backup_failed/);
+  const result = await createUpgradeBackup(f.config, f.plist, 'install');
+  const receipt = JSON.parse(readFileSync(join(result, 'verified.json'), 'utf8'));
+  assert.equal(receipt.operation, 'install');
+  assert.equal(receipt.database.present, false);
+  assert.deepEqual(receipt.files.map((file: { name: string }) => file.name), ['config.json']);
+});
+
+test('a failed or silently empty backup operation cannot produce a verified receipt',async t=>{
+ for(const mode of ['throw','empty','corrupt'])await t.test(mode,async inner=>{
+  const f=fixture(inner),db=new DatabaseSync(f.database);db.exec("CREATE TABLE keep(value TEXT); INSERT INTO keep VALUES('safe')");const before=databaseFingerprint(db);db.close();
+  const mock=inner.mock.method(sqlite,'backup',async(_db:DatabaseSync,target:string)=>{if(mode==='throw')throw new Error('private backend detail');writeFileSync(target,mode==='empty'?'':'corrupt');return 1;});syncBuiltinESMExports();
+  inner.after(()=>{mock.mock.restore();syncBuiltinESMExports();});
+  await assert.rejects(createUpgradeBackup(f.config,f.plist),/^Error: upgrade_backup_failed$/);
+  const current=new DatabaseSync(f.database,{readOnly:true});assert.equal(databaseFingerprint(current),before);current.close();
+ });
 });

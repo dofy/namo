@@ -1,3 +1,4 @@
+import { waitFor } from './helpers.js';
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
@@ -10,13 +11,7 @@ import { AUTO_MEMORY_JOB_PREFIX, type AutoMemoryInput } from '../src/auto-memory
 import type { Runtime } from '../src/runtime.js';
 import type { Config } from '../src/config.js';
 
-async function waitFor(condition: () => boolean) {
-  const deadline = Date.now() + 5000;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error('automatic_memory_engine_condition_timeout');
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-}
+
 function message(key: string, overrides: Partial<Incoming> = {}): Incoming {
   return { key, messageId: key, senderId: 'alice', chatKey: 'alice-dm', chatId: 'alice-dm', text: 'I prefer concise answers.',
     envelope: { version: 1, type: 'text', kind: 'instruction', chatType: 'p2p', scopeKey: 'alice-dm', materials: [], limitations: [] }, ...overrides };
