@@ -16,7 +16,7 @@ export interface Outbox {
   payload?: string | null;
   route?: string | null;
 }
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 export class Store {
   readonly db: DatabaseSync;
@@ -137,6 +137,9 @@ export class Store {
         CREATE TABLE IF NOT EXISTS run_activity (
           runId TEXT PRIMARY KEY REFERENCES task_runs(id), phase TEXT NOT NULL, updatedAt INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS run_progress (
+          runId TEXT PRIMARY KEY REFERENCES task_runs(id), report TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS message_feedback (
           inboxKey TEXT PRIMARY KEY REFERENCES inbox(key), state TEXT NOT NULL DEFAULT 'pending',
           reactionId TEXT, error TEXT, updatedAt INTEGER NOT NULL
@@ -166,11 +169,15 @@ export class Store {
         DROP TABLE task_waits;
         ALTER TABLE task_waits_scoped RENAME TO task_waits;`);
       }
-      this.db.exec(`CREATE TABLE IF NOT EXISTS execution_bindings (subjectId TEXT PRIMARY KEY, selection TEXT NOT NULL); PRAGMA user_version=9`);
+      this.db.exec(`CREATE TABLE IF NOT EXISTS execution_bindings (subjectId TEXT PRIMARY KEY, selection TEXT NOT NULL); PRAGMA user_version=10`);
       const outputColumns = new Set((this.db.prepare('PRAGMA table_info(outbox)').all() as { name: string }[]).map(x => x.name));
       if (!outputColumns.has('payload')) this.db.exec('ALTER TABLE outbox ADD COLUMN payload TEXT');
       if (!outputColumns.has('mutableProgress')) this.db.exec('ALTER TABLE outbox ADD COLUMN mutableProgress INTEGER NOT NULL DEFAULT 0');
       if (!outputColumns.has('route')) this.db.exec('ALTER TABLE outbox ADD COLUMN route TEXT');
+      if (!outputColumns.has('sendStartedAt')) this.db.exec('ALTER TABLE outbox ADD COLUMN sendStartedAt INTEGER');
+      if (!outputColumns.has('acceptedAt')) this.db.exec('ALTER TABLE outbox ADD COLUMN acceptedAt INTEGER');
+      const progressColumns = new Set(this.db.prepare('PRAGMA table_info(progress_updates)').all().map(row => row.name));
+      if (!progressColumns.has('revision')) this.db.exec('ALTER TABLE progress_updates ADD COLUMN revision TEXT');
     });
   }
   transaction<T>(fn: () => T): T {
@@ -248,10 +255,10 @@ export class Store {
       AND NOT EXISTS (SELECT 1 FROM outbox p WHERE p.inboxKey=o.inboxKey AND p.kind=o.kind AND p.id<o.id AND p.state NOT IN ('sent','confirmed','dismissed'))
       ORDER BY o.id LIMIT 1`).get() as unknown as Outbox | undefined;
   }
-  sending(id: number): boolean { return this.db.prepare("UPDATE outbox SET state='sending' WHERE id=? AND state='pending'").run(id).changes === 1; }
+  sending(id: number): boolean { return this.db.prepare("UPDATE outbox SET state='sending',sendStartedAt=? WHERE id=? AND state='pending'").run(Date.now(), id).changes === 1; }
   sent(id: number, platformId: string): void {
     this.transaction(() => {
-      this.db.prepare("UPDATE outbox SET state='sent',platformId=? WHERE id=? AND state='sending'").run(platformId, id);
+      this.db.prepare("UPDATE outbox SET state='sent',platformId=?,acceptedAt=? WHERE id=? AND state='sending'").run(platformId, Date.now(), id);
       const row = this.db.prepare('SELECT inboxKey FROM outbox WHERE id=?').get(id) as { inboxKey: string };
       this.completeDelivery(row.inboxKey);
     });

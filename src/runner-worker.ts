@@ -11,6 +11,7 @@ import { RuntimeError, type RunControls, type RunResult } from './runtime.js';
 import { EvidenceRecorder } from './evidence.js';
 import { runnerJob, runnerEvent } from './runner-store.js';
 import { recordActivity } from './feedback.js';
+import { recordProgress } from './public-progress.js';
 import { Waits } from './waits.js';
 import { requestWait } from './external-wait-bridge.js';
 import { loadRunImages } from './image-inputs.js';
@@ -95,6 +96,7 @@ async function main(): Promise<void> {
         }),
         onReady: next => { controls = next; steer(); },
         onActivity: phase => write(() => recordActivity(store, runId, phase)),
+        onProgress: event => write(() => recordProgress(store, runId, event, redact)),
         onEvidence: item => write(() => evidence!.observe(item)),
         onWait: request => store.transaction(() => {
           owned();

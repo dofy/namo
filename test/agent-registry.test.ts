@@ -6,7 +6,7 @@ import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseConfig } from '../src/config.js';
 import { getAgentRegistry, selectAgent, resolveAgent, agentCodexConfig, selectedPolicyHash, agentSessionKey } from '../src/agent-registry.js';
-import { Store, type Incoming } from '../src/store.js';
+import { Store, SCHEMA_VERSION, type Incoming } from '../src/store.js';
 import { Tasks, policyHash } from '../src/tasks.js';
 import { Engine } from '../src/engine.js';
 import type { RunRequest } from '../src/runtime.js';
@@ -73,7 +73,7 @@ test('schema 8 upgrade retains legacy sessions and task state without rewriting 
   assert.equal(JSON.stringify(upgraded.db.prepare('SELECT * FROM tasks').all()),before);
   assert.equal(new Tasks(upgraded).selection(task.id),undefined);
   assert.equal(new Tasks(upgraded).thread(task),'old-native');
-  assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version,9);upgraded.close();
+  assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version,SCHEMA_VERSION);upgraded.close();
 });
 test('queued task keeps selected executor when default changes; existing workstream keeps binding',async t=>{
   const {config,store,tasks}=fixture(t);const requests:RunRequest[]=[];
@@ -111,7 +111,7 @@ test('native wait IDs from independent profiles are scoped by durable run identi
   assert.equal(store.db.prepare('SELECT COUNT(*) n FROM task_waits').get()?.n,2);
 });
 
-test('schema 9 rebuild preserves every legacy wait field and foreign-key link',t=>{
+test('registry migration rebuild preserves every legacy wait field and foreign-key link',t=>{
   const {store,tasks,project}=fixture(t);store.enqueue(msg('legacy-wait'));
   const task=tasks.create(store.get('legacy-wait')!,{cwd:project,policyHash:'legacy'}),run=tasks.start(task);tasks.saveRun(run,'native','turn');
   new Waits(store).request(task.id,run,{threadId:'native',turnId:'turn',callId:'call',question:'Pick?',choices:['one','two']});

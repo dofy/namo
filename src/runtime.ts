@@ -7,6 +7,7 @@ import type { Config } from './config.js';
 import { codexEnvironment } from './safety.js';
 import { projectEvidenceItem } from './evidence.js';
 import type { ActivityPhase } from './feedback.js';
+import type { PublicProgressEvent } from './public-progress.js';
 import type { EvidenceItem } from './ui-contract.js';
 import type { ImageInput } from './image-inputs.js';
 import { EXTERNAL_WAIT_INSTRUCTIONS, EXTERNAL_WAIT_TOOL, parseExternalWaitToolArguments,
@@ -23,6 +24,7 @@ export interface RunRequest {
   onWait?: (request: WaitRequest) => string;
   onEvidence?: (item: EvidenceItem) => void;
   onActivity?: (phase: ActivityPhase) => void;
+  onProgress?: (event: PublicProgressEvent) => void;
   onProcess?: (pid: number) => void;
 }
 export interface RunControls { steer(text: string): Promise<'accepted' | 'not_active' | 'rejected'>; }
@@ -170,6 +172,7 @@ export const BOT_INSTRUCTIONS = `你通过飞书与用户交流，默认使用�
 最终答复由服务统一发送到当前会话；不要自行调用任何飞书发送通道。不要声称回复已发送。
 当前版本没有后台派工和定时功能，不要承诺在本轮结束后继续执行或稍后主动提醒。
 工具权限以系统沙箱为准。遇到权限拒绝说明受阻步骤，不绕过。不要输出凭据、思考过程、内部日志。
+较长任务在开始、发现关键事实和进入下一阶段时，用简短 commentary 告知可公开的执行进展；说明已做什么、下一步做什么，不输出内部思考或工具原文，不用无依据的百分比或成功结论。工具调用由服务摘要展示，无需逐次复述。
 当前目录是服务指定的项目。先检查现有代码和变更，保留用户工作；本地修改、运行命令、测试、构建和 Git 提交属于已授权的开发流程，可以直接完成，无需逐次确认；工具仍以实际权限为准。提交前检查状态、差异和暂存区，只提交本次任务相关的文件；不覆盖或混入用户原有改动，不提交凭据。不要改写已有提交历史或执行破坏性清理。切换项目用 /project，需要用户发送命令，不能自行修改 bot 配置扩大权限。
 推送和部署必须先给出具体目标（仓库、分支、提交或部署环境），在最终答复中请求确认并结束本轮，等待用户后续明确确认后才能执行。一般开发请求或“完成任务”不算推送和部署确认。若提交、测试等脚本或 Git hooks 包含推送或部署，也必须遵守同样的确认要求，不得通过脚本代为执行。确认仅对已说明的目标和内容有效，目标或内容变化需重新确认。
 只在用户明确要求时执行安装依赖、删除数据或发送外部消息。未明确授权的不可逆或外部操作先向用户说明并等待确认。
@@ -325,7 +328,7 @@ export class CodexRuntime implements Runtime {
       const messages = new Map<string, Obj>();
       const itemStates = new Map<string, Obj>();
       const itemCompletion = new Map<string, boolean>();
-      type Notice = { method: string; turnId: string; status?: string; done: boolean; raw: Obj[] };
+      type Notice = { method: string; turnId: string; status?: string; done: boolean; raw: Obj[]; plan?: unknown };
       type WaitCall = { id: string | number; params: Obj };
       type PendingEvent = { type: 'notice'; value: Notice } | { type: 'wait'; value: WaitCall };
       let expectedTurn: string | undefined;
@@ -345,9 +348,13 @@ export class CodexRuntime implements Runtime {
           if (requestId !== undefined) rpc.respondError(requestId, -32602, detail);
           fail('wait_protocol_error', detail);
         };
-        const observeItem = (item: Obj, method: string) => {
-          if (!item || typeof item !== 'object') return;
+        const observeItem = (item: Obj, method: string): boolean => {
+          if (!item || typeof item !== 'object') return false;
           const id = typeof item.id === 'string' ? item.id : undefined;
+          const settled = item.status === undefined ? method !== 'item/started' : itemSettled(item);
+          // A late start cannot reopen a settled operation, affect wait safety
+          // or move the public phase back to executing that operation.
+          if (id && itemCompletion.get(id) === true && !settled) return false;
           if (pendingWait) {
             if (isWaitToolItem(item)) {
               if (id && id !== pendingWait.callId) throw new RuntimeError('wait_protocol_error', 'wait_foreign_call');
@@ -357,20 +364,55 @@ export class CodexRuntime implements Runtime {
           }
           if (id) {
             itemStates.set(id, item);
-            const settled = item.status === undefined ? method !== 'item/started' : itemSettled(item);
             itemCompletion.set(id, settled);
           }
+          return true;
         };
         const consumeNotice = (notice: Notice) => {
           if (notice.turnId !== expectedTurn || completed) return;
           try {
+            if (notice.method === 'turn/plan/updated' && Array.isArray(notice.plan)) {
+              const plan = notice.plan.filter((step: unknown) => step && typeof step === 'object'
+                && ['pending', 'inProgress', 'completed'].includes((step as Obj).status));
+              if (plan.length && plan.length <= 100) {
+                const done = plan.filter(step => step.status === 'completed').length;
+                const active = plan.filter(step => step.status === 'inProgress').length;
+                r.onProgress?.({ id: 'plan', kind: 'plan', status: done === plan.length ? 'completed' : 'running',
+                  text: `计划：已完成 ${done}/${plan.length} 项${active ? `，正在处理 ${active} 项` : ''}`, threadId, turnId: notice.turnId });
+              }
+            }
             for (const item of notice.raw) {
-              observeItem(item, notice.method);
-              if (['agentMessage','commandExecution','fileChange','mcpToolCall','dynamicToolCall'].includes(item.type)) r.onActivity?.(item.type==='agentMessage'?'answering':notice.method==='item/started'?item.type==='commandExecution'?'command':item.type==='fileChange'?'file':'tool':'working');
+              if (!observeItem(item, notice.method)) continue;
+              const running = item.status === 'inProgress' || item.status === undefined && notice.method === 'item/started';
+              if (['agentMessage','commandExecution','fileChange','mcpToolCall','dynamicToolCall'].includes(item.type)) r.onActivity?.(item.type==='agentMessage'?(item.phase==='commentary'?'working':'answering'):running?item.type==='commandExecution'?'command':item.type==='fileChange'?'file':'tool':'working');
               // The durable wait ledger owns this control event. It is not a
               // command/file action and must not appear as unfinished execution.
               const evidence = isWaitToolItem(item) ? undefined : projectEvidenceItem(item);
               if (evidence) r.onEvidence?.(evidence);
+              if (r.onProgress && typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 256) {
+                // Only complete public commentary is eligible. Reasoning and
+                // deltas are deliberately absent from this notification path.
+                if (notice.method !== 'item/started' && item.type === 'agentMessage'
+                  && item.phase === 'commentary' && item.delivery !== 'async' && typeof item.text === 'string') {
+                  r.onProgress({ id: item.id, kind: 'commentary', status: 'completed', text: item.text.slice(0, 2000), threadId, turnId: notice.turnId });
+                } else if (!isWaitToolItem(item)) {
+                  const label = evidence?.kind === 'command' ? evidence.label
+                    : evidence?.kind === 'files' ? '修改文件'
+                    : item.type === 'webSearch' ? '搜索资料'
+                    : ['mcpToolCall', 'dynamicToolCall'].includes(item.type) ? '调用工具'
+                    : ['collabAgentToolCall', 'subAgentActivity'].includes(item.type) ? '协作任务' : undefined;
+                  if (label) {
+                    const failed = ['failed', 'declined', 'interrupted'].includes(item.status) || item.success === false
+                      || (evidence?.kind === 'command' && evidence.exitCode !== undefined && evidence.exitCode !== 0);
+                    const status = failed ? 'failed' : running ? 'running'
+                      : item.status === undefined || itemSettled(item) ? 'completed' : undefined;
+                    if (!status) continue;
+                    const suffix = evidence?.kind === 'command' && evidence.exitCode !== undefined ? `，退出码 ${evidence.exitCode}` : '';
+                    r.onProgress({ id: item.id, kind: 'tool', status,
+                      text: `${label}：${status === 'running' ? '执行中' : status === 'failed' ? '未成功结束' : '已结束'}${suffix}`, threadId, turnId: notice.turnId });
+                  }
+                }
+              }
               if (notice.method !== 'item/started' && item.type === 'agentMessage' && item.phase !== 'commentary' && item.delivery !== 'async') {
                 messages.set(item.id, { id: item.id, phase: item.phase, text: typeof item.text === 'string' ? item.text.slice(0, 60_001) : '' });
               }
@@ -451,12 +493,13 @@ export class CodexRuntime implements Runtime {
         };
         stopListening = rpc.listen((method, params) => {
           if (method === 'transport/closed') { if (!completed) fail('runtime_disconnected', undefined, false); return; }
-          if (params.threadId !== threadId || !['item/started', 'item/completed', 'turn/completed'].includes(method)) return;
+          if (params.threadId !== threadId || !['item/started', 'item/completed', 'turn/completed', 'turn/plan/updated'].includes(method)) return;
           const done = method === 'turn/completed', turnId = done ? params.turn?.id : params.turnId;
           if (typeof turnId !== 'string' || (expectedTurn && turnId !== expectedTurn)) return;
           const turnItems = params.turn?.items;
-          const raw: Obj[] = done ? (Array.isArray(turnItems) ? turnItems : []) : [params.item];
-          dispatch({ type: 'notice', value: { method, turnId, done, status: done ? params.turn?.status : undefined, raw: raw.filter(Boolean) } });
+          const raw: Obj[] = done ? (Array.isArray(turnItems) ? turnItems : []) : method === 'turn/plan/updated' ? [] : [params.item];
+          dispatch({ type: 'notice', value: { method, turnId, done, status: done ? params.turn?.status : undefined, raw: raw.filter(Boolean),
+            ...(method === 'turn/plan/updated' ? { plan: params.plan } : {}) } });
         });
         stopRequestListening = rpc.listenRequests((method, params, id) => {
           if (method !== 'item/tool/call') return false;

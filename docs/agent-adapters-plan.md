@@ -1,6 +1,6 @@
 # 多执行器接入、切换与任务路由计划
 
-调研日期：2026-10-27。范围为 Codex、Claude 与 Cursor 的本地执行接入。本文维护分期方案。R7.1 注册表已实现于隔离功能分支，Claude/Cursor 运行适配器仍待 R7.2/R7.3；R7.0 实测及缺口见[兼容性基线](agent-compatibility.md)，配置契约见[执行器注册表](agent-registry.md)。本轮用户已授权专用登录、少量隔离验证及 Claude-only Kaon 兼容性试验；这不授权服务切换、推送或发布。
+调研日期：2026-10-27。范围为 Codex、Claude 与 Cursor 的本地执行接入。本文维护分期方案。R7.1 注册表已实现，Claude/Cursor 运行适配器仍待 R7.2/R7.3；R7.0 实测及缺口见[兼容性基线](agent-compatibility.md)，配置契约见[执行器注册表](agent-registry.md)。用户已授权 R7.1 合并、推送和现有本机服务升级；Claude/Cursor 执行保持关闭，npm 发布仍需另行确认。此前授权的 Claude-only Kaon 兼容性试验不改变 Codex 官方认证路径。
 
 ## 结论与选型
 
@@ -25,6 +25,12 @@
 - [配置加载](https://code.claude.com/docs/en/agent-sdk/claude-code-features)：显式限制 `settingSources`，但空列表不代表完全不读宿主配置；托管策略、部分全局配置和记忆另有加载规则。需验证专用配置目录、环境白名单、原生自动记忆和项目 hooks / MCP 的边界，不复制个人认证文件，不尝试绕过组织策略。
 - 认证需区分个人本机使用和公开产品分发。[官方帮助中心](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)在 2026-10-07 更新中说明订阅登录的 SDK / `claude -p` 仍消耗订阅额度，关联 Console 的 API key 使用另一条额度路径；SDK 概览仍提示第三方产品提供 claude.ai 登录 / 额度需要批准。两页的适用范围不能擅自合并为通用授权。公开版先支持用户自带官方 API key；本机已有官方登录作为待核实选项，发布前复核集成方式与届时条款，不承诺所有订阅或部署方式都可用。
 
+### Claude 认证模式（R7.2 待实现）
+
+Kaon 是 Claude 执行器的一种显式路由配置，不是另一种 Agent，也不替代官方登录。设计保留三条独立路径：官方账号登录、官方 API key、用户明确配置的第三方 router。每个 profile 独立状态目录和认证来源；环境白名单按模式构建，官方登录模式不能继承 router 地址或 API key，router 模式不能回落到个人订阅。密钥仅本机保存引用，UI 展示模式与认证状态，不展示密钥。
+
+R7.1 尚未提供 Claude 登录和执行；本次 Kaon 测试不能证明官方账号路径、权限或取消已通过。R7.2 分别验收官方与 router 认证、优先级、会话续接、工具授权、取消及配置撤销。个人本机已有官方登录与公开产品提供登录入口分开评估：依照上面的官方帮助和 SDK 条款，公开版默认采用自带官方 API key，订阅登录入口须先核实适用条件 / 获得所需批准；不能用技术可行代替产品分发许可。
+
 ### Cursor
 
 - [ACP 官方文档](https://cursor.com/docs/cli/acp)：提供本地 stdio 双向协议，可新建 / 加载 session、提交任务、接收更新、响应工具权限请求并取消；另有提问和计划确认扩展。因此比单向解析终端文字更适合 Namo 的飞书交互。首版只对实际握手和验证过的能力开放；运行中 steer、进程丢失后的待答调用恢复不能由“支持 ACP”推导出来。
@@ -32,7 +38,7 @@
 - [TypeScript SDK](https://cursor.com/docs/sdk/typescript)：已有真正的 local 模式，支持本地会话存储和事件流，不能误认为 Cursor 只提供云端 API；但本地执行仍使用 Cursor 在线推理。当前文档说明 local 默认不限制工具执行，`autoReview` 为分类器审查而非 Namo 的确切操作授权；hooks 也有独立配置加载机制。故先选择权限交互明确的 ACP，SDK 另做受控环境试验，不同时维护两套正式 Cursor 适配器。
 - [登录](https://cursor.com/docs/cli/reference/authentication)支持官方浏览器流程或 API key；[配置](https://cursor.com/docs/cli/reference/configuration)提供 `CURSOR_CONFIG_DIR`。该变量是否覆盖认证、会话、hooks、MCP 等全部状态仍需按实际版本验收。安装了 Cursor 编辑器不等于 CLI / ACP 已可用，也不代表 Namo 可以接管编辑器中的当前对话。
 
-本轮本机仅做可执行文件发现和 `claude --version`：PATH 中发现 Claude Code 2.1.311 与 Codex，未发现 `agent` / `cursor-agent`；没有据此判断 Cursor 编辑器是否安装，没有读取登录凭据、测试认证或调用模型。以上网页能力均仍需固定 CLI / SDK 版本做协议和真实任务验收。
+初次调研时仅做可执行文件发现和 `claude --version`：PATH 中发现 Claude Code 2.1.311 与 Codex，未发现 `agent` / `cursor-agent`；没有据此判断 Cursor 编辑器是否安装，没有读取登录凭据、测试认证或调用模型。后续已完成的隔离验证和仍未通过项目以[兼容性基线](agent-compatibility.md)为准。
 
 ## 互相兼容到哪一层
 
@@ -52,7 +58,7 @@
 
 ## 对 Namo 当前架构的具体调整
 
-当前源码已提供 `Runtime`，但实现仍与 Codex 耦合：`src/config.ts` 仅允许 codex；`src/agents.ts` 的发现与工厂只有 Codex 可执行；`src/runner-worker.ts` 直接创建 `CodexRuntime`；`src/runner.ts` 使用 Codex 环境及记忆提取路径；`src/tasks.ts` 的权限指纹固定 agent 为 codex，工作线 session 键未包含执行器；`src/waits.ts` 绑定 thread / turn / call。不能只添加下拉选项就称多 Agent 已接入。
+R7 开始前源码已提供 `Runtime`，但实现仍与 Codex 耦合：`src/config.ts` 仅允许 codex；`src/agents.ts` 的发现与工厂只有 Codex 可执行；`src/runner-worker.ts` 直接创建 `CodexRuntime`；`src/runner.ts` 使用 Codex 环境及记忆提取路径；`src/tasks.ts` 的权限指纹固定 agent 为 codex，工作线 session 键未包含执行器；`src/waits.ts` 绑定 thread / turn / call。这些注册表、工厂和选择快照的解耦已在 R7.1 落地；Claude/Cursor 执行桥接仍待 R7.2/R7.3，不能只添加下拉选项就称多 Agent 已接入。
 
 ### 1. 注册表、配置与探针
 
@@ -93,7 +99,7 @@
 
 ## R7 分阶段交付与验收
 
-R7 为新增后续交付，不替换 R0–R6 的现有验收缺口，也不视为本轮实施授权。
+R7 为新增交付，不替换 R0–R6 的现有验收缺口。本轮只交付 R7.1，R7.0 缺口和 R7.2 之后仍保留计划。
 
 | 子项 | 待实现范围 | 退出条件 |
 | --- | --- | --- |

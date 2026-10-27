@@ -41,7 +41,7 @@ namo agent use --profile review
 
 ## 持久化与恢复边界
 
-schema 9 新增 `execution_bindings`，按 task/workstream ID 保存 `{profileId, adapter, revision}`。其中 revision 覆盖命令、模型、状态目录、超时和启用状态；任务原有 `policyHash` 继续记录权限摘要。快照不保存 token 或认证文件。
+schema 10 新增 `execution_bindings`，按 task/workstream ID 保存 `{profileId, adapter, revision}`。其中 revision 覆盖命令、模型、状态目录、超时和启用状态；任务原有 `policyHash` 继续记录权限摘要。快照不保存 token 或认证文件。
 
 - 受理任务时，在同一 SQLite 事务中写入任务和选择快照，再确认飞书受理。修改默认值不会改派排队、运行、等待任务。
 - worker 按任务快照解析运行工厂，重新校验配置版本、选定 profile、项目路径和权限。选定 profile 被删除、禁用或修改时失败并显示原因；没有自动 fallback 或重放。需要采用新设置时明确新建工作线。
@@ -51,7 +51,7 @@ schema 9 新增 `execution_bindings`，按 task/workstream ID 保存 `{profileId
 - 旧材料仍保持原项目和权限绑定；新增非默认 profile 材料同时绑定执行器选择，不能随默认修改迁移。
 - 同聊天串行、同目录及父子目录互斥、全局并发上限、证据与 Git 审批、投递规则保持不变。权限检查继续失败关闭。
 
-schema 升级只由新接收服务在受控升级时执行。管理界面只读旧库，不静默迁移；旧版 schema 8 程序不能直接打开 schema 9 数据。回退不能覆盖升级后产生的新数据。本轮开发与测试均在隔离 worktree/临时库，不对现有服务或在线数据库进行切换。
+schema 升级只由新接收服务在受控升级时执行。管理界面只读旧库，不静默迁移；旧版 schema 8 / 9 程序不能直接打开 schema 10 数据。回退不能覆盖升级后产生的新数据。开发与兼容性测试在隔离 worktree/临时库进行；用户授权的本机升级须先演练迁移、备份并核对历史数据，实际交付见归档记录。
 
 ## 验证范围
 

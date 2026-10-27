@@ -2,7 +2,7 @@
 
 Namo 是本地 Agent 任务网关。飞书 / Lark 提供对话入口，本地工作台提供管理，CLI 提供安装维护。官方 Codex app-server 管理推理、原生上下文和工具执行；Namo 管理身份、消息、任务、权限、调度、证据与交付。其他执行器目前可以预登记并探测，运行适配器尚未接入。
 
-技术栈为 TypeScript、Node.js 24.15+、node:sqlite、飞书官方 SDK、React、Radix Themes 和 Vite。源码数据库版本见 `src/store.ts` 的 `SCHEMA_VERSION`（当前为 9）；该值不代表实际在线实例版本。
+技术栈为 TypeScript、Node.js 24.15+、node:sqlite、飞书官方 SDK、React、Radix Themes 和 Vite。源码数据库版本见 `src/store.ts` 的 `SCHEMA_VERSION`（当前为 10）；该值不代表实际在线实例版本。
 
 ## 对象与主链路
 
@@ -48,7 +48,7 @@ Namo 是本地 Agent 任务网关。飞书 / Lark 提供对话入口，本地工
 
 异常核对记录操作者、快照、依据与动作，幂等提交。人工确认收到不伪造平台回执，重发只处理保存的指定结果，执行核对不改写原结论或自动重跑。见[运维](operations.md#人工核对与受控处理)。
 
-## 多执行器扩展边界（计划，未实现）
+## 多执行器注册表与后续扩展
 
 R7.1 已提供多 profile 注册表、任务选择快照和兼容旧 Codex 的 session 映射，见[执行器注册表](agent-registry.md)。后续通过适配器接入 Claude Agent SDK 与 Cursor ACP，保留 Codex app-server。任务固定执行器 profile、模型、策略及上下文快照；原生 session 按后端和工作线隔离，跨 Agent 通过范围内的交接包连接，不共享原生 session 文件。进度、证据、提问、权限与终态统一为 Namo 事件；不具备的修订或持久等待能力明确降级，不自动换后端重放未知执行。同目录互斥、单一飞书接收端、审批和投递规则继续有效。前台任务与后台记忆提取器分别配置和披露。详细能力差异、迁移点及验收见 [多执行器计划](agent-adapters-plan.md)。
 
