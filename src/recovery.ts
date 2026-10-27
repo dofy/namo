@@ -2,7 +2,7 @@ import { t as tr } from './locale.js';
 import { randomUUID } from 'node:crypto';
 import { digest } from './paths.js';
 import { Store } from './store.js';
-import { processState, runnerEvent } from './runner-store.js';
+import { processState, processGroupState, runnerEvent } from './runner-store.js';
 
 export class RecoveryError extends Error {}
 export interface Actor { id: string; chatKey?: string; }
@@ -57,8 +57,10 @@ export class Recovery {
       if (r.action==='retry' && x.state==='unknown' && !r.acknowledgeDuplicate) throw new RecoveryError(tr("发送结果不明；重发可能产生重复消息，需明确确认"));
       if (x.snapshot.lostRunners?.length) {
         if (!local) throw new RecoveryError(tr("独立进程失联必须通过本机核对入口处理，确认进程及子进程均已停止后再解除占位"));
-        if (x.snapshot.lostRunners.some((job: { pid: number | null; runtimePid: number | null }) => [job.pid,job.runtimePid].some(pid => pid && processState(pid) !== 'dead')))
-          throw new RecoveryError(tr("原运行或执行器 PID 仍存在或状态不明，不能解除占位；没有向该 PID 发送信号"));
+        if (x.snapshot.lostRunners.some((job: { pid: number | null; runtimePid: number | null }) =>
+          [job.pid,job.runtimePid].some(pid => pid && processState(pid) !== 'dead')
+          || (process.platform !== 'win32' && job.runtimePid && processGroupState(job.runtimePid) !== 'dead')))
+          throw new RecoveryError(tr("原运行 PID 或执行器进程组仍存在或状态不明，不能解除占位；未终止任何进程"));
         for (const job of x.snapshot.lostRunners) {
           this.store.db.prepare("UPDATE runner_jobs SET state='reviewed',updatedAt=? WHERE runId=? AND state='lost'").run(Date.now(), job.runId);
           runnerEvent(this.store, job.runId, 'locally_reviewed');

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 import { loadConfig } from '../src/config.js';
 import { Engine } from '../src/engine.js';
 import { processState } from '../src/runner-store.js';
@@ -12,6 +13,7 @@ import { Store, type Incoming } from '../src/store.js';
 import { Tasks } from '../src/tasks.js';
 import { Waits, linkedExternalWait } from '../src/waits.js';
 import { ExternalWaits } from '../src/external-waits.js';
+import { Recovery } from '../src/recovery.js';
 
 const until = async (predicate: () => boolean, timeout = 8000) => {
   const end = Date.now() + timeout;
@@ -23,7 +25,7 @@ const until = async (predicate: () => boolean, timeout = 8000) => {
 
 const FAKE_CODEX = `#!/usr/bin/env node
 import { createInterface } from 'node:readline';
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
@@ -79,6 +81,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     return;
   }
   if (m.method === 'turn/interrupt') {
+    if (existsSync(join(cwd, 'hold-interrupt'))) { setInterval(() => {}, 1000); return; }
     send({ id: m.id, result: {} });
     const item = { ...waitItem, status: 'completed', success: true,
       contentItems: [{ type: 'inputText', text: 'durably stored' }] };
@@ -206,4 +209,94 @@ test('detached worker stores both external and task wait ledgers before ACK, the
   engine.accept(incoming('cancel-external', `/cancel ${task.id}`));
   await until(() => tasks.get(task.id)?.state === 'cancelled');
   assert.equal(new ExternalWaits(store).get(externalId)?.state, 'cancelled');
+});
+
+function recoveryFixture(t: { after(fn: () => Promise<void>): void }) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'namo-wait-recovery-')));
+  const data = join(root, 'data'), project = join(root, 'project'); mkdirSync(data); mkdirSync(project);
+  const bin = join(root, 'fake-codex.mjs'); writeFileSync(bin, FAKE_CODEX, { mode: 0o700 });
+  const file = join(root, 'config.json');
+  writeFileSync(file, JSON.stringify({ dataDir: data, concurrency: 1,
+    feishu: { appId: 'app', appSecret: 'TEST_ONLY_SECRET', allowedUserIds: ['alice'] },
+    codex: { bin, home: join(data, 'home'), timeoutMs: 12000, sandbox: 'workspace-write', projects: { one: project }, defaultProject: 'one' } }));
+  const config = loadConfig(file), store = new Store(join(data, 'bot.sqlite')), tasks = new Tasks(store);
+  const engines: Engine[] = [], deliveries: string[] = [];
+  const receiver = () => {
+    const engine = new Engine(store, new RunnerRuntime(store, config),
+      { async send(_chat, text, uuid) { deliveries.push(text); return uuid; } }, config);
+    engines.push(engine); return engine;
+  };
+  t.after(async () => {
+    for (const engine of engines) await engine.stop();
+    for (const row of store.db.prepare('SELECT pid,runtimePid FROM runner_jobs').all()) {
+      if (row.runtimePid) { try { process.kill(-Number(row.runtimePid), 'SIGKILL'); } catch {} }
+      if (row.pid) { try { process.kill(Number(row.pid), 'SIGKILL'); } catch {} }
+    }
+    store.close(); rmSync(root, { recursive: true, force: true });
+  });
+  const calls = () => existsSync(join(project, 'calls')) ? readFileSync(join(project, 'calls'), 'utf8').trim().split('\n').length : 0;
+  return { root, data, project, file, config, store, tasks, receiver, calls, deliveries };
+}
+
+test('SIGKILL while a wait is open preserves its question and original thread without a new turn until answered', async t => {
+  const f = recoveryFixture(t);
+  const moduleUrl = (name: string) => new URL(`../src/${name}.js`, import.meta.url).href;
+  const script = `import {loadConfig} from ${JSON.stringify(moduleUrl('config'))};
+import {Store} from ${JSON.stringify(moduleUrl('store'))};
+import {Engine} from ${JSON.stringify(moduleUrl('engine'))};
+import {RunnerRuntime} from ${JSON.stringify(moduleUrl('runner'))};
+const c=loadConfig(process.argv[1]),s=new Store(c.dataDir+'/bot.sqlite');
+const e=new Engine(s,new RunnerRuntime(s,c),{async send(c,t,id){return id;}},c);
+e.start();e.accept(${JSON.stringify(incoming('first'))});`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script, f.file], { stdio: 'ignore' });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  await until(() => f.tasks.get(f.store.get('first')?.taskId ?? '')?.state === 'waiting');
+  const taskId = f.store.get('first')!.taskId!, wait = new Waits(f.store).current(taskId)!;
+  await until(() => f.store.db.prepare('SELECT state FROM outbox WHERE kind=?').get(`wait:${wait.id}`)?.state === 'sent');
+  const exited = new Promise<void>(resolve => child.once('exit', () => resolve())); child.kill('SIGKILL'); await exited;
+  const second = f.receiver(); second.start(); await second.pump();
+  assert.equal(f.calls(), 1); assert.equal(f.tasks.get(taskId)?.state, 'waiting');
+  assert.equal(new Waits(f.store).current(taskId)?.id, wait.id);
+  assert.deepEqual(new RunnerRuntime(f.store, f.config).reservations(), []);
+  const reply = incoming('answer', `/resume ${wait.id} take blue`);
+  second.accept(reply); assert.equal(second.accept(reply), false);
+  await until(() => f.store.get('first')?.state === 'replied');
+  assert.equal(f.calls(), 2);
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM task_runs WHERE taskId=?').get(taskId)?.n, 2);
+  assert.equal(f.deliveries.filter(text => text.includes('resumed once')).length, 1);
+  assert.equal(new Waits(f.store).get(wait.id)?.state, 'answered');
+});
+
+test('worker loss after wait persistence cannot open or resume it; quarantine survives receiver restart and cancel', async t => {
+  const f = recoveryFixture(t); writeFileSync(join(f.project, 'hold-interrupt'), 'fixture');
+  const first = f.receiver(); first.start(); first.accept(incoming('first'));
+  await until(() => existsSync(join(f.project, 'ack-after-durable')));
+  const taskId = f.store.get('first')!.taskId!, wait = new Waits(f.store).current(taskId)!;
+  const job = f.store.db.prepare('SELECT runId,pid,runtimePid FROM runner_jobs WHERE runId=?').get(wait.runId)!;
+  assert.equal(wait.state, 'requested');
+  await first.stop();
+  process.kill(Number(job.pid), 'SIGKILL'); await until(() => processState(Number(job.pid)) === 'dead');
+  const second = f.receiver(); second.start();
+  await until(() => f.tasks.get(taskId)?.state === 'interrupted');
+  assert.equal(new Waits(f.store).get(wait.id)?.state, 'uncertain');
+  assert.equal(f.store.db.prepare("SELECT COUNT(*) n FROM outbox WHERE kind=?").get(`wait:${wait.id}`)?.n, 0);
+  second.accept(incoming('cancel', `/cancel ${taskId}`));
+  second.accept(incoming('resume', `/resume ${wait.id} take blue`));
+  await until(() => f.store.get('resume')?.state === 'replied');
+  assert.equal(f.calls(), 1);
+  assert.equal(new RunnerRuntime(f.store, f.config).reservations().length, 1);
+  await second.stop(); const third = f.receiver(); third.start();
+  assert.equal(new RunnerRuntime(f.store, f.config).reservations().length, 1);
+  const recovery = new Recovery(f.store), issue = recovery.inspect(taskId);
+  const request = { subject: taskId, stamp: issue.stamp, action: 'reviewed', note: 'fixture process and effects checked', requestId: 'lost-wait-review' };
+  assert.throws(() => recovery.resolve(request, { id: 'alice', chatKey: 'chat' }), /本机/);
+  if (processState(Number(job.runtimePid)) !== 'dead') {
+    assert.throws(() => recovery.resolve(request, { id: 'local-owner' }, true), /PID/);
+    process.kill(-Number(job.runtimePid), 'SIGKILL'); await until(() => processState(Number(job.runtimePid)) === 'dead');
+  }
+  recovery.resolve(request, { id: 'local-owner' }, true);
+  assert.deepEqual(new RunnerRuntime(f.store, f.config).reservations(), []);
+  assert.equal(f.calls(), 1);
+  assert.equal(f.tasks.get(taskId)?.state, 'interrupted');
+  assert.equal(new Waits(f.store).get(wait.id)?.state, 'uncertain');
 });

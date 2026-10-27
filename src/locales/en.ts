@@ -718,7 +718,7 @@ export const english: Record<string, string> = {
   "记录已变化或操作不可用，请刷新后重新核对": "Record changed or action unavailable. Refresh and review again.",
   "发送结果不明；重发可能产生重复消息，需明确确认": "Delivery is unknown; resending may create duplicate messages and requires explicit confirmation",
   "独立进程失联必须通过本机核对入口处理，确认进程及子进程均已停止后再解除占位": "Lost runners must be reviewed locally. Confirm the process and all its children have stopped before releasing the slot.",
-  "原运行或执行器 PID 仍存在或状态不明，不能解除占位；没有向该 PID 发送信号": "The original process or runner PID still exists, or its state is unknown. The slot cannot be released; no signal was sent to that PID.",
+  "原运行 PID 或执行器进程组仍存在或状态不明，不能解除占位；未终止任何进程": "The original PID or runtime process group still exists, or its state is unknown. The slot cannot be released; no processes were terminated.",
   "档案内容无效": "Invalid profile content",
   "只能修改称呼、语言和时区": "Only name, language and time zone can be edited",
   "档案字段必须是单行文字，不能包含控制字符": "Profile fields must be single-line text without control characters",

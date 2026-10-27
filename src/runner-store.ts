@@ -10,6 +10,13 @@ export function processState(pid: number): 'alive' | 'dead' | 'unknown' {
   try { process.kill(pid, 0); return 'alive'; }
   catch (e) { return (e as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'unknown'; }
 }
+/** Codex is detached on POSIX, so its PID is also its process-group ID.
+ * The group may survive its leader; signal 0 observes without terminating it. */
+export function processGroupState(pgid: number): 'alive' | 'dead' | 'unknown' {
+  if (process.platform === 'win32' || !Number.isSafeInteger(pgid) || pgid < 1) return 'unknown';
+  try { process.kill(-pgid, 0); return 'alive'; }
+  catch (e) { return (e as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'unknown'; }
+}
 export function runnerEvent(store: Store, runId: string, kind: string): void {
   store.db.prepare('INSERT INTO runner_events(runId,kind,createdAt) VALUES(?,?,?)').run(runId, kind, Date.now());
 }
