@@ -2,6 +2,8 @@ import { memoryJobs } from './business-storage.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Inbox, Store } from './store.js';
 import { Memories, MemoryError, type MemoryKind } from './memory.js';
+import { RuntimeError } from './runtime-contract.js';
+import type { MemoryExtractionError } from './ui-contract.js';
 
 export interface AutoMemoryCandidate {
   key: string;
@@ -35,10 +37,11 @@ export interface Job {
   chatType: 'p2p' | 'group'; project: string | null; sourceKey: string;
   state: 'pending' | 'running' | 'completed' | 'failed'; attempts: number;
   createdAt: number; dueAt: number; leaseUntil: number; lease: string | null;
-  accepted?: number; rejected?: number; error?: 'extraction_failed';
+  accepted?: number; rejected?: number; error?: MemoryExtractionError;
 }
 
-const LEASE_MS = 120_000, TIMEOUT_MS = 60_000, MAX_ATTEMPTS = 3;
+export const MEMORY_EXTRACTION_MAX_ATTEMPTS = 3;
+const LEASE_MS = 120_000, TIMEOUT_MS = 60_000, MAX_ATTEMPTS = MEMORY_EXTRACTION_MAX_ATTEMPTS;
 const MAX_MESSAGES = 24, MAX_INPUT_CHARS = 16_000, MAX_CANDIDATES = 8, MAX_OUTPUT_CHARS = 12_000;
 const DEBOUNCE_MS = 1500, MERGE_WINDOW_MS = 15_000;
 const sensitive = /薪资|工资|收入|奖金|健康|疾病|诊断|病史|身份证|身份号|护照|住址|家庭地址|人事|私人|私密|银行|salary|compensation|medical|diagnos|health|passport|home address|personnel|private|confidential/iu;
@@ -50,6 +53,16 @@ const forget = /忘记|忘掉|不要.{0,5}记|别.{0,5}记|删除.{0,8}记忆|\b
 const forbidden = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u202a-\u202e\u2066-\u2069]/u;
 const bounded = (value: unknown, max: number): value is string => typeof value === 'string'
   && value.trim().length > 0 && [...value].length <= max && !forbidden.test(value);
+
+/** Persist only known categories, never SDK messages or credential-bearing details. */
+function extractionError(error: unknown): MemoryExtractionError {
+  const code = error instanceof RuntimeError ? error.code : error instanceof Error ? error.message : '';
+  if (['memory_extraction_timeout', 'rpc_timeout'].includes(code)) return 'timeout';
+  if (['memory_extraction_disconnected', 'transport_closed'].includes(code)) return 'connection_failed';
+  if (code === 'memory_extraction_tool_rejected') return 'tool_rejected';
+  if (error instanceof SyntaxError || ['memory_output_invalid', 'memory_output_limit', 'memory_extraction_invalid'].includes(code)) return 'invalid_output';
+  return 'extraction_failed';
+}
 
 /** Persist only source references. Original messages remain in the inbox ledger. */
 export class AutoMemories {
@@ -106,6 +119,7 @@ export class AutoMemories {
           next.state = 'failed'; next.lease = null; next.leaseUntil = 0; next.error = 'extraction_failed'; this.write(next); return;
         }
         next.state = 'running'; next.attempts++; next.lease = randomUUID(); next.leaseUntil = now + LEASE_MS;
+        delete next.error;
         this.write(next); return next;
       });
       if (!job) return;
@@ -135,14 +149,17 @@ export class AutoMemories {
         }
         this.complete(job!, accepted, candidates.rejected + candidates.accepted.length - accepted);
       });
-    } catch {
+    } catch (error) {
       if (job) this.store.transaction(() => {
         if (!this.owns(job!)) return;
         const aborted = signal?.aborted;
         job!.state = aborted || job!.attempts < MAX_ATTEMPTS ? 'pending' : 'failed';
         if (aborted) job!.attempts--;
         job!.dueAt = Date.now() + (aborted ? 0 : Math.min(300_000, 5000 * 2 ** (job!.attempts - 1)));
-        job!.lease = null; job!.leaseUntil = 0; job!.error = 'extraction_failed'; this.write(job!);
+        job!.lease = null; job!.leaseUntil = 0;
+        if (aborted) delete job!.error;
+        else job!.error = extractionError(error);
+        this.write(job!);
       });
     } finally { this.busy = false; }
   }
@@ -225,7 +242,7 @@ export class AutoMemories {
     const controller = new AbortController();
     let rejectAbort: (reason: Error) => void = () => {};
     const aborted = new Promise<never>((_, reject) => { rejectAbort = reject; });
-    const abort = () => { controller.abort(); rejectAbort(new Error('memory_extraction_aborted')); };
+    const abort = () => { controller.abort(); rejectAbort(new Error(signal?.aborted ? 'memory_extraction_aborted' : 'memory_extraction_timeout')); };
     signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(abort, TIMEOUT_MS);
     const work = Promise.resolve().then(() => this.options.extract(input, controller.signal));

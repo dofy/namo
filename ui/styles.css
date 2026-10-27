@@ -121,6 +121,11 @@ summary { cursor: pointer; font-size: 13px; color: #47657c; }
 .profile-history { border-top: 1px solid #dce3e9; margin-top: 28px; padding-top: 18px; }
 .profile-history .audit { margin-top: 12px; }
 .profiles-page .audit { overflow-wrap: anywhere; }
+.memory-extraction { margin-top: 24px; padding: 16px; border: 1px solid var(--gray-6); border-radius: 8px; }
+.memory-extraction > p { margin: 0 0 8px; }
+.memory-extraction-job { padding-top: 12px; overflow-wrap: anywhere; }
+.memory-extraction-job p { margin: 4px 0 0; }
+.memory-extraction details { margin-top: 12px; }
 .loading { display: flex; gap: 10px; align-items: center; margin: 24px 0; }
 .startup-error { margin: 0 auto; max-width: 800px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

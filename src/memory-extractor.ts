@@ -15,7 +15,7 @@ export async function extractConversationMemory(config: Config['codex'], input: 
   const aborted=new Promise<never>((_,reject)=>{rejectAbort=reject;});
   void aborted.catch(()=>{});
   const wait=<T>(work:Promise<T>)=>Promise.race([work,aborted]);
-  const abort=()=>{rpc.stop();rejectAbort(new RuntimeError('memory_extraction_cancelled'));force??=setTimeout(()=>rpc.stop(true),250);};
+  const abort=()=>{rpc.stop();rejectAbort(new RuntimeError(signal.aborted?'memory_extraction_cancelled':'memory_extraction_timeout'));force??=setTimeout(()=>rpc.stop(true),250);};
   signal.addEventListener('abort',abort,{once:true});
   const timer=setTimeout(abort,55_000);
   try {

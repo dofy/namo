@@ -4,6 +4,7 @@ import type { MemoryViewItem as MemoryPageItem, MemoryViewKind as MemoryPageKind
 import { t as tr, getLocale } from '../i18n';
 import { Choice, ConfirmButton, Field, Notice } from '../components';
 import { api } from '../api';
+import { MemoryExtractionStatus } from '../MemoryExtractionStatus';
 
 const labels = () => ({
   intro: tr("memory.intro"),
@@ -135,6 +136,7 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
       <Button variant="soft" color="gray" disabled={busy || !state} onClick={() => void act(() => api.memories(state!.ownerId), false)}>{c.refresh}</Button>
       {state&&<Text as="p" size="1" color="gray">{c.capacity}: {state.items.filter(item=>item.status!=='deleted').length} / {state.limits.ownerEntries} {c.entries} · {state.items.reduce((sum,item)=>sum+item.contentChars,0)} / {state.limits.ownerChars} {c.chars}</Text>}
     </Flex>
+    {state?.extraction&&<MemoryExtractionStatus value={state.extraction}/>}
 
     <Separator my="5" size="4" />
     {!filtered.length && <Text size="2" color="gray">{c.empty}</Text>}

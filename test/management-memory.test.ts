@@ -7,6 +7,9 @@ import { Management, ManagementError } from '../src/management.js';
 import { Store } from '../src/store.js';
 import { Tasks } from '../src/tasks.js';
 import { startUi } from '../src/ui.js';
+import { memoryJobs } from '../src/business-storage.js';
+import type { Job } from '../src/auto-memory.js';
+import type { MemoryViewState } from '../src/ui-contract.js';
 
 function fixture(t: any) {
   const root=mkdtempSync(join(tmpdir(),'namo-management-memory-')),data=join(root,'data'),one=join(root,'one'),two=join(root,'two'),file=join(root,'config.json');
@@ -32,6 +35,35 @@ test('management exposes only paired owners and known project/chat scopes',t=>{
     {kind:'project',ownerId:'alice',project:'unknown',chatKey:null},
     {kind:'chat',ownerId:'alice',project:'one',chatKey:'unknown-chat'},
   ])assert.throws(()=>f.manager.memory('save','alice',{kind:'preference',scope,text:'no'}),(error:unknown)=>error instanceof ManagementError&&error.status===403);
+});
+
+test('memory extraction status is bounded, owner scoped and excludes source data and raw errors', t => {
+  const f=fixture(t),store=new Store(join(f.data,'bot.sqlite'));
+  const save=(id:string,patch:Partial<Job>={})=>memoryJobs(store.db).save({
+    version:1,id,sourceKey:'PRIVATE_SOURCE',ownerId:'alice',chatKey:'PRIVATE_CHAT',chatType:'p2p',project:'one',
+    inboxKeys:[],state:'completed',attempts:1,createdAt:Number(id)||1000,dueAt:0,leaseUntil:0,lease:null,accepted:0,rejected:0,...patch,
+  });
+  for(let i=1;i<=25;i++)save(String(i));
+  save('pending',{state:'pending',attempts:0,accepted:undefined,rejected:undefined});
+  save('retry',{state:'pending',attempts:1,error:'timeout',dueAt:Date.now()+5000});
+  save('running',{state:'running',attempts:1,lease:'PRIVATE_LEASE',leaseUntil:Date.now()+120000});
+  save('failed',{state:'failed',attempts:3,error:'extraction_failed'});
+  store.db.prepare("UPDATE memory_jobs SET error=? WHERE id='failed'").run(f.raw.feishu.appSecret+' PRIVATE_SDK_ERROR');
+  save('bob',{ownerId:'bob',state:'failed',attempts:3});
+  const before=JSON.stringify(store.db.prepare('SELECT * FROM memory_jobs ORDER BY id').all());
+  const state=f.manager.memories('alice') as MemoryViewState;
+  assert.deepEqual([state.extraction.pending,state.extraction.running,state.extraction.failed],[2,1,1]);
+  assert.equal(state.extraction.recent.length,20);assert.equal(state.extraction.hasMore,true);assert.equal(state.extraction.maxAttempts,3);
+  assert.equal(state.extraction.recent.find(job=>job.id==='failed')?.error,'extraction_failed');
+  assert.equal(state.extraction.recent.find(job=>job.id==='retry')?.error,'timeout');
+  assert.ok(!state.extraction.recent.some(job=>job.id==='bob'));
+  assert.doesNotMatch(JSON.stringify(state.extraction),/PRIVATE_|sourceKey|chatKey|inboxKeys|"lease"/);
+  assert.equal(JSON.stringify(store.db.prepare('SELECT * FROM memory_jobs ORDER BY id').all()),before,'reading status never retries or modifies jobs');
+  const bob=(f.manager.memories('bob') as MemoryViewState).extraction;
+  assert.equal(bob.recent.length,1);assert.equal(bob.failed,1);assert.equal(bob.pending,0);
+  const changed=f.manager.memory('save','alice',{kind:'preference',scope:{kind:'owner',ownerId:'alice',project:null,chatKey:null},text:'Concise answers'}) as MemoryViewState;
+  assert.deepEqual(changed.extraction,state.extraction,'mutation responses preserve extraction status');
+  store.close();
 });
 
 test('management memory save, correct, disable, delete and version conflicts are owner scoped',t=>{

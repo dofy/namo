@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { Store, type Incoming } from '../src/store.js';
 import { Memories } from '../src/memory.js';
 import { AutoMemories, type AutoMemoryCandidate, type AutoMemoryInput, type AutoMemoryOptions } from '../src/auto-memory.js';
+import { RuntimeError } from '../src/runtime-contract.js';
 
 function fixture(t: any, extract: AutoMemoryOptions['extract'], redact = (text: string) => text) {
   const root = mkdtempSync(join(tmpdir(), 'namo-auto-memory-')), file = join(root, 'db.sqlite'), store = new Store(file);
@@ -141,11 +142,33 @@ test('receiver cancellation releases extraction for retry and last-attempt expir
   due(f.store); const controller = new AbortController(), running = f.queue.tick(controller.signal);
   await ready; controller.abort(); await running;
   assert.equal(jobs(f.store)[0]!.state, 'pending'); assert.equal(jobs(f.store)[0]!.attempts, 0);
+  assert.equal(jobs(f.store)[0]!.error, undefined, 'foreground preemption is not an extraction failure');
   const stuck = jobs(f.store)[0]!;
   stuck.state = 'running'; stuck.attempts = 3; stuck.leaseUntil = 1; stuck.lease = 'dead-worker';
   memoryJobs(f.store.db).save(stuck as any);
   assert.equal(f.queue.pending(), true); due(f.store); await f.queue.tick();
   assert.equal(jobs(f.store)[0]!.state, 'failed'); assert.equal(f.queue.pending(), false);
+});
+
+test('extraction failures retain only safe categories and a successful retry clears the failure', async t => {
+  for(const [error,expected] of [
+    [new RuntimeError('memory_extraction_timeout'),'timeout'],
+    [new RuntimeError('memory_extraction_disconnected'),'connection_failed'],
+    [new RuntimeError('memory_extraction_tool_rejected'),'tool_rejected'],
+    [new SyntaxError('PRIVATE_OUTPUT'),'invalid_output'],
+    [new Error('PRIVATE_SDK_TOKEN'),'extraction_failed'],
+  ] as const) {
+    let fails=true;
+    const f=fixture(t,async()=>{if(fails)throw error;return {memories:[]};});
+    const source=message('status','A normal conversation.');f.store.enqueue(source);f.queue.enqueue([source.key],null,'status');
+    due(f.store);await f.queue.tick();
+    const retry=jobs(f.store)[0]!;
+    assert.equal(retry.state,'pending');assert.equal(retry.attempts,1);assert.equal(retry.error,expected);assert.ok(retry.dueAt>Date.now());
+    assert.doesNotMatch(JSON.stringify(retry),/PRIVATE_/);
+    fails=false;due(f.store);await f.queue.tick();
+    const done=jobs(f.store)[0]!;
+    assert.equal(done.state,'completed');assert.equal(done.attempts,2);assert.equal(done.accepted,0);assert.equal(done.rejected,0);assert.equal(done.error,undefined);
+  }
 });
 
 test('model-supplied ownership and missing source evidence cannot authorize a memory write', async t => {

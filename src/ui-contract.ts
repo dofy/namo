@@ -90,6 +90,17 @@ export interface MemoryViewState {
   available:boolean; reason?:string; ownerId:string; owners:{id:string;label:string}[];
   projects:string[]; chats:{chatKey:string;project:string|null}[]; items:MemoryViewItem[];imports:MemoryImportCandidate[];
   limits:{entryChars:number;ownerEntries:number;ownerChars:number;scopeEntries:number;scopeChars:number};
+  extraction: MemoryExtractionView;
+}
+export type MemoryExtractionError = 'extraction_failed' | 'timeout' | 'connection_failed' | 'invalid_output' | 'tool_rejected';
+export interface MemoryExtractionJob {
+  id:string; project:string|null; state:'pending'|'running'|'completed'|'failed'; createdAt:number;
+  attempts:number; dueAt:number; leaseUntil:number; accepted:number|null; rejected:number|null;
+  error:MemoryExtractionError|null;
+}
+export interface MemoryExtractionView {
+  pending:number; running:number; failed:number; maxAttempts:number;
+  recent:MemoryExtractionJob[]; hasMore:boolean;
 }
 export type MemoryMutation =
   | {action:'save';ownerId:string;input:{kind:Exclude<MemoryViewKind,'handoff'>;scope:MemoryViewScope;text:string}}

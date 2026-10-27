@@ -61,6 +61,8 @@ flowchart LR
 
 **记忆。** 默认在前台任务空闲时，从直接用户消息提取有证据的长期事实；独立临时 Codex 轮次关闭项目工具、hooks、插件及沙箱网络。`global / local` 知识层级与 `shared / private / chat` 披露范围、来源项目授权分别检查；全局存储不代表公开。临时要求不写长期记忆，迁移候选须人工启用。既有 session 与历史副本不会随删除自动清除。
 
+工作台按用户展示提取队列概况与最近 20 条记录，区分无可保存内容、候选未采用和执行失败。最多尝试三次，前台任务抢占不计失败；仅保存和展示已知错误类别，不暴露原始消息或 SDK 错误。
+
 **后台工作。** [background-work](../src/background-work.ts) 直接查询业务队列索引，不再用触发器维护重复的调度表。审批执行中断、文件发送结果不明仍进入 `unknown`，不自动重试。
 
 **反馈。** 默认首卡合并窗口 200 ms、进展更新间隔 5 s、状态确认间隔 30 s；这是调度配置，不是客户端时延承诺。慢表情和卡片更新不挡最终结果；只汇总真实公开事件，不展示原始思维链或编造完成比例。图片预览与流式卡片尚未实现。
@@ -95,5 +97,7 @@ pnpm run smoke:codex
 测试按功能归档在 `test/`，公共等待与夹具放在 `test/helpers.ts`；新增边界用例优先补进已有套件，不按开发批次另起文件。
 
 `pnpm pack` 生成本地验收包，不发布 npm；检查包中只有运行资源和文档，没有配置、数据、日志或认证。构建不切换已运行服务。文档修改检查本地链接及进度事实，不新增镜像实现的测试。
+
+[CI](../.github/workflows/ci.yml) 在 main 推送与 PR 上运行 Node.js 24 的 Linux / macOS 构建和现有测试，再用 `node scripts/check-package.mjs` 核对包的运行文件、UI 资源及排除项；同一命令可本地复验。真实 Codex / 飞书验收保留在本机，不放入 CI。
 
 图标统一来自 Lucide；字体现有许可证见 [assets/fonts](../assets/fonts/README.md)，Logo 使用 [namo-logo.png](../assets/namo-logo.png)。UI 文案使用稳定英文 message ID，两套语言占位符保持一致。

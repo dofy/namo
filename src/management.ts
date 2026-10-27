@@ -1,7 +1,7 @@
 import { serviceLogs, listApprovals, changeApproval } from './management-operations.js';
 import { ApprovalError } from './approvals.js';
 import { inspectOpenClawSource, MigrationError } from './migration.js';
-import type { ApprovalAction, ApprovalList } from './ui-contract.js';
+import type { ApprovalAction, ApprovalList, MemoryExtractionError, MemoryExtractionJob, MemoryExtractionView } from './ui-contract.js';
 import { t as tr } from './locale.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -17,6 +17,7 @@ import { doctor } from './doctor.js';
 import { acquireLock, makeRedactor } from './safety.js';
 import { AssistantSettings, AssistantSettingsError } from './assistant.js';
 import { Memories, MemoryError, MEMORY_LIMITS, type MemoryAuthority, type MemoryScope } from './memory.js';
+import { MEMORY_EXTRACTION_MAX_ATTEMPTS } from './auto-memory.js';
 import { MigrationMemory, MigrationMemoryError, migrationMemoryStatus } from './migration-memory.js';
 import { Profiles, ProfileError } from './profiles.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
@@ -138,11 +139,7 @@ export class Management {
     try{
       const identity=this.memoryIdentity(ownerId),result=this.read(s=>{
         if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)throw new ManagementError(tr("management.databaseSchemaUnsupported"),409);
-        const redact=this.redactor(),memory=new Memories(s,redact),chats=this.memoryChats(s,identity.ownerId,identity.projects);
-        return {available:true,ownerId:identity.ownerId,owners:identity.owners,projects:identity.projects,chats,
-          imports:new MigrationMemory(s,{dataDir:this.dataDir,configFile:this.file,appId:identity.appId},redact).list(),
-          items:memory.manage({kind:'local-owner',authenticated:true,ownerId:identity.ownerId}),limits:{entryChars:MEMORY_LIMITS.entryChars,
-            ownerEntries:MEMORY_LIMITS.ownerEntries,ownerChars:MEMORY_LIMITS.ownerChars,scopeEntries:MEMORY_LIMITS.scopeEntries,scopeChars:MEMORY_LIMITS.scopeChars}};
+        return this.memoryState(s,identity);
       });
       if(!result)throw new ManagementError(tr("management.noServiceDatabaseCompleteSetupFirst"),409);
       return result;
@@ -183,9 +180,27 @@ export class Management {
     const memory=new Memories(s,this.redactor());
     const redact=this.redactor();
     return {available:true,ownerId:identity.ownerId,owners:identity.owners,projects:identity.projects,chats:this.memoryChats(s,identity.ownerId,identity.projects),
+      extraction:this.memoryExtraction(s,identity.ownerId),
       imports:new MigrationMemory(s,{dataDir:this.dataDir,configFile:this.file,appId:identity.appId},redact).list(),
       items:memory.manage({kind:'local-owner',authenticated:true,ownerId:identity.ownerId}),limits:{entryChars:MEMORY_LIMITS.entryChars,
         ownerEntries:MEMORY_LIMITS.ownerEntries,ownerChars:MEMORY_LIMITS.ownerChars,scopeEntries:MEMORY_LIMITS.scopeEntries,scopeChars:MEMORY_LIMITS.scopeChars}};
+  }
+  private memoryExtraction(s:Store,ownerId:string):MemoryExtractionView {
+    const counts={pending:0,running:0,failed:0};
+    for(const row of s.db.prepare("SELECT state,COUNT(*) AS n FROM memory_jobs WHERE ownerId=? AND state IN ('pending','running','failed') GROUP BY state").all(ownerId)) {
+      counts[row.state as keyof typeof counts]=Number(row.n);
+    }
+    const errors=new Set<MemoryExtractionError>(['extraction_failed','timeout','connection_failed','invalid_output','tool_rejected']);
+    const rows=s.db.prepare(`SELECT id,project,state,createdAt,attempts,dueAt,leaseUntil,accepted,rejected,error
+      FROM memory_jobs WHERE ownerId=? ORDER BY createdAt DESC,id DESC LIMIT 21`).all(ownerId);
+    const redact=this.redactor();
+    const recent=rows.slice(0,20).map(row=>({
+      id:String(row.id),project:row.project===null?null:redact(String(row.project)),state:row.state as MemoryExtractionJob['state'],
+      createdAt:Number(row.createdAt),attempts:Number(row.attempts),dueAt:Number(row.dueAt),leaseUntil:Number(row.leaseUntil),
+      accepted:row.accepted===null?null:Number(row.accepted),rejected:row.rejected===null?null:Number(row.rejected),
+      error:row.error===null?null:errors.has(row.error as MemoryExtractionError)?row.error as MemoryExtractionError:'extraction_failed' as const,
+    }));
+    return {...counts,maxAttempts:MEMORY_EXTRACTION_MAX_ATTEMPTS,recent,hasMore:rows.length>20};
   }
   private validMemoryScope(raw:unknown,ownerId:string,projects:string[],chats:{chatKey:string;project:string|null}[]):MemoryScope {
     if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new ManagementError(tr("management.invalidMemoryScope"),400);
