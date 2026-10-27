@@ -25,6 +25,8 @@ const requestExternalWait = () => requestWait({ tool: 'wait_for_external' }, {
 createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line);
   if (m.method === 'initialize') return write({ id: m.id, result: {} });
+  if (m.method === 'plugin/list') return write({ id: m.id, result: { marketplaces: [] } });
+  if (m.method === 'skills/list') return write({ id: m.id, result: { data: [{ cwd: m.params.cwds[0], skills: [], errors: [] }] } });
   if (m.method === 'thread/start' || m.method === 'thread/resume') {
     threadParams = m.params; cwd = m.params.cwd;
     const id = m.params.threadId === 'mismatch-request' ? 'silent-fork' : m.params.threadId || 'thread-one';

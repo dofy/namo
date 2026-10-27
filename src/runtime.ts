@@ -15,6 +15,7 @@ import { EXTERNAL_WAIT_INSTRUCTIONS, EXTERNAL_WAIT_TOOL, parseExternalWaitToolAr
 import type { AutoMemoryInput } from './auto-memory.js';
 
 import { PR_REVIEW_TOOL, PR_REVIEW_INSTRUCTIONS } from './github-review.js';
+import { readSkillSettings, skillReadDirectories, skillSettingsOverride, SkillAccessError, type SkillAccess, type SkillCatalog } from './skill-access.js';
 
 type Obj = Record<string, any>;
 export interface RunRequest {
@@ -56,7 +57,7 @@ class Rpc {
   private listeners = new Set<(method: string, params: Obj) => void>();
   private requestListeners = new Set<(method: string, params: Obj, id: string | number) => boolean>();
   private closed = false;
-  constructor(bin: string, home: string, sandbox: Config['codex']['sandbox'] = 'read-only', policy?: Config['codex'], extraction = false) {
+  constructor(bin: string, home: string, sandbox: Config['codex']['sandbox'] = 'read-only', policy?: Config['codex'], extraction = false, skills?: SkillAccess) {
     const access = sandbox === 'workspace-write' ? 'write' : 'read';
     const executable = bin.includes('/') ? resolve(bin)
       : (process.env.PATH ?? '').split(delimiter).map(dir => join(dir, bin)).find(existsSync);
@@ -73,6 +74,7 @@ class Rpc {
       files[dirname(realpathSync(executable))] = 'read';
     }
     for (const path of policy?.denyPaths ?? []) files[path] = 'deny';
+    for (const path of skills?.directories ?? []) files[path] = 'read';
     const filesystem = `{${Object.entries(files).map(([key, value]) => `${JSON.stringify(key)}=${typeof value === 'string' ? JSON.stringify(value)
       : `{${Object.entries(value).map(([k, v]) => `${JSON.stringify(k)}=${JSON.stringify(v)}`).join(',')}}`}`).join(',')}}`;
     this.process = spawn(executable ? realpathSync(executable) : bin, ['app-server', '--listen', 'stdio://', '-c', 'model_provider="openai"',
@@ -84,6 +86,7 @@ class Rpc {
       ...(sandbox === 'workspace-write' ? ['-c', 'permissions.feishu-bot.extends=":workspace"'] : []),
       '-c', `permissions.feishu-bot.filesystem=${filesystem}`,
       '-c', `permissions.feishu-bot.network.enabled=${policy?.networkAccess === true}`,
+      ...skillSettingsOverride(skills?.settings ?? []),
       ...(extraction ? ['-c','features.shell_tool=false','-c','features.plugins=false','-c','features.apps=false','-c','features.hooks=false',
         '-c','mcp_servers={}','-c','web_search="disabled"'] : [])], {
       env: { ...codexEnvironment(home), npm_config_script_shell: '/bin/sh',
@@ -138,11 +141,11 @@ class Rpc {
   notify(method: string): void { this.write({ method, params: {} }); }
   respond(id: string | number, result: Obj): void { this.write({ id, result }); }
   respondError(id: string | number, code: number, message: string): void { this.write({ id, error: { code, message } }); }
-  request(method: string, params: Obj): Promise<Obj> {
+  request(method: string, params: Obj, timeoutMs = 30_000): Promise<Obj> {
     if (this.closed) return Promise.reject(new RuntimeError('runtime_disconnected'));
     const id = ++this.id;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new RuntimeError('rpc_timeout')); }, 30_000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new RuntimeError('rpc_timeout')); }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.write({ id, method, params });
     });
@@ -223,12 +226,46 @@ function waitQuestion(value: unknown): Pick<WaitRequest, 'question' | 'choices'>
   return { question: args.question, ...(args.choices ? { choices: args.choices } : {}) };
 }
 
-export async function probeRuntime(config: Config['codex']): Promise<{ initialized: true; authenticated: boolean; permissions: true }> {
-  mkdirSync(config.home, { recursive: true, mode: 0o700 });
-  const rpc = new Rpc(config.bin, config.home, config.sandbox, config);
+async function initializedRpc(config: Config['codex'], skills: SkillAccess): Promise<Rpc> {
+  const rpc = new Rpc(config.bin, config.home, config.sandbox, config, false, skills);
   try {
     await rpc.request('initialize', { clientInfo: { name: 'namo', version: '0.1.0' }, capabilities: { experimentalApi: true } });
     rpc.notify('initialized');
+    return rpc;
+  } catch (error) { await rpc.close(); throw error; }
+}
+
+/** Discover without inference, then pin only enabled skill directories for this runtime. */
+export async function connectCodex(config: Config['codex'], cwd: string): Promise<Rpc> {
+  mkdirSync(config.home, { recursive: true, mode: 0o700 });
+  let rpc: Rpc | undefined;
+  try {
+    const settings = readSkillSettings(config.home);
+    rpc = await initializedRpc(config, { settings, directories: [] });
+    // Remote plugin skills are materialized from the installed catalog on demand.
+    // Listing it does not install plugins or import personal MCP configuration.
+    try { await rpc.request('plugin/list', { cwds: [cwd], forceRefetch: false }, 5000); }
+    catch (error) {
+      // A remote catalog outage must not prevent local skills or ordinary tasks.
+      // No cached directory is granted unless skills/list actually reports it.
+      if (!(error instanceof RuntimeError) || !['rpc_timeout', 'rpc_-32603', 'rpc_-32601'].includes(error.code)) throw error;
+    }
+    const catalog = await rpc.request('skills/list', { cwds: [cwd], forceReload: true }) as SkillCatalog;
+    const directories = skillReadDirectories(catalog, settings, config);
+    if (!directories.length) return rpc;
+    await rpc.close(); rpc = undefined;
+    return await initializedRpc(config, { settings, directories });
+  } catch (error) {
+    await rpc?.close();
+    if (error instanceof SkillAccessError) throw new RuntimeError(error.code);
+    throw error;
+  }
+}
+
+export async function probeRuntime(config: Config['codex']): Promise<{ initialized: true; authenticated: boolean; permissions: true }> {
+  const cwd = config.projects?.[config.defaultProject ?? ''] ?? config.home;
+  const rpc = await connectCodex(config, cwd);
+  try {
     const result = await rpc.request('account/read', { refreshToken: false });
     const profiles = await rpc.request('permissionProfile/list', {});
     if (!profiles.data?.some((p: Obj) => p.id === 'feishu-bot' && p.allowed)) throw new RuntimeError('permission_profile_unavailable');
@@ -297,7 +334,7 @@ export class CodexRuntime implements Runtime {
     if (r.signal.aborted) throw new RuntimeError('cancelled');
     mkdirSync(this.config.home, { recursive: true, mode: 0o700 });
     mkdirSync(r.cwd, { recursive: true, mode: 0o700 });
-    const rpc = new Rpc(this.config.bin, this.config.home, this.config.sandbox, this.config);
+    const rpc = await connectCodex(this.config, r.cwd);
     let timer: NodeJS.Timeout | undefined;
     let stopListening = () => {};
     let stopRequestListening = () => {};
@@ -305,8 +342,6 @@ export class CodexRuntime implements Runtime {
     let completed = false;
     try {
       if (rpc.process.pid) r.onProcess?.(rpc.process.pid);
-      await rpc.request('initialize', { clientInfo: { name: 'feishu_codex_bot', title: 'Feishu Codex Bot', version: '0.1.0' }, capabilities: { experimentalApi: true } });
-      rpc.notify('initialized');
       const agents = join(r.cwd, 'AGENTS.md');
       if (existsSync(agents)) {
         if (lstatSync(agents).isSymbolicLink()) throw new RuntimeError('project_instructions_symlink');

@@ -100,6 +100,7 @@ See the [command reference (Chinese)](docs/getting-started.md#聊天命令) and 
 
 - The template defaults to read-only access. Use setup or the workbench to grant access to specific project directories, network commands and local Git commits.
 - Configuration, runtime data and isolated Codex login files remain excluded from agent access. Do not grant access to your entire home directory to fix a toolchain issue.
+- Skills receive read-only access to individual enabled skill directories and canonical symlink targets. Personal Codex skill opt-outs remain disabled in Namo. Run `pnpm run smoke:skills` to check the actual sandbox boundaries; see [skill access](docs/skills.md).
 - Write permission also permits file deletion. Cancellation, timeout or context reset does not undo completed actions.
 - Git push approvals bind an exact task, owner/chat, project, configured remote, branch, HEAD SHA, configuration revision and expiry, then allow a single execution attempt. This is **limited protection**, not complete enforcement: a generally networked agent or another credential path could bypass the approval entrypoint. Deployment is not implemented as a generic target.
 - OpenClaw import requires an explicitly selected source file, supported version and application. It never imports provider authentication, gateways, plugins or tasks, and it cannot automatically take over a receiver; cutover and rollback remain an explicit, verified manual gate.
