@@ -26,6 +26,7 @@ import { TaskImages, type ImageInput } from './image-inputs.js';
 import type { MaterialReadAdapter } from './materials.js';
 import { richPost, openFence, hasMarkdown } from './richtext.js';
 import { Feedback, recordActivity } from './feedback.js';
+import { recordProgress } from './public-progress.js';
 
 export interface DeliveryRoute { messageId: string; thread: boolean; }
 export interface Sender {
@@ -306,6 +307,7 @@ export class Engine {
         threadId: this.tasks.thread(task), cwd, signal,
         prompt, images,
         onActivity: phase => recordActivity(this.store, run, phase),
+        onProgress: event => recordProgress(this.store, run, event, this.redact),
         onThread: threadId => { this.store.saveThread(sessionKey(task.workstreamId), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
         onTurn: turnId => { const threadId = this.store.thread(sessionKey(task.workstreamId)); if (threadId) { this.store.saveRun(m.key, threadId, turnId); this.tasks.saveRun(run, threadId, turnId); } },
         onReady: controls => { const slot = this.active.get(m.chatKey); if (slot?.task.id === task.id) { slot.controls = controls; void this.steer(slot).catch(() => this.fatal('revision_storage_error')); } },
@@ -412,7 +414,7 @@ export class Engine {
         return next && this.store.sending(next.id) ? next : undefined;
       });
       if (!output) return;
-      if(output.kind==='result'&&this.config.feishu?.progressUpdates!==false){const task=this.store.get(output.inboxKey)?.taskId;if(task)await this.feedback.finalize(task);}
+      if(output.kind==='result'&&this.config.feishu?.progressUpdates!==false){const task=this.store.get(output.inboxKey)?.taskId;if(task)void this.feedback.finalize(task).catch(()=>this.fatal('feedback_storage_error'));}
       this.nextSendAt = Date.now() + 300;
       let platformId: string;
       let card: object|undefined;

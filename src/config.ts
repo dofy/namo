@@ -59,7 +59,7 @@ export function parseConfig(d: any, absolute: string): Config {
   if (f.requireMention !== undefined && typeof f.requireMention !== 'boolean') throw new Error(tr("feishu.requireMention 必须是布尔值"));
   if (f.cards !== undefined && typeof f.cards !== 'boolean') throw new Error(tr("feishu.cards 必须是布尔值"));
   for (const key of ['reactions','progressUpdates']) if (f[key] !== undefined && typeof f[key] !== 'boolean') throw new Error(`feishu.${key} must be boolean`);
-  for (const [key,min,max] of [['progressDelayMs',1000,120000],['progressIntervalMs',5000,60000],['progressHeartbeatMs',30000,300000]] as const) if (f[key] !== undefined && (!Number.isSafeInteger(f[key]) || f[key]<min || f[key]>max)) throw new Error(`feishu.${key} must be between ${min} and ${max}`);
+  for (const [key,min,max] of [['progressDelayMs',0,120000],['progressIntervalMs',5000,60000],['progressHeartbeatMs',30000,300000]] as const) if (f[key] !== undefined && (!Number.isSafeInteger(f[key]) || f[key]<min || f[key]>max)) throw new Error(`feishu.${key} must be between ${min} and ${max}`);
   if (d.dataDir === '' || c.home === '' || c.bin === '') throw new Error(tr("dataDir、codex.home、codex.bin 不能是空字符串"));
   const concurrency = d.concurrency ?? 2;
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error(tr("concurrency 必须在 1–8 之间"));
@@ -101,7 +101,7 @@ export function parseConfig(d: any, absolute: string): Config {
       allowedChatIds: list(f.allowedChatIds ?? [], 'feishu.allowedChatIds'),
       requireMention: f.requireMention !== false,
       cards: f.cards === true, reactions:f.reactions!==false, progressUpdates:f.progressUpdates!==false,
-      progressDelayMs:f.progressDelayMs??12000, progressIntervalMs:f.progressIntervalMs??5000, progressHeartbeatMs:f.progressHeartbeatMs??30000,
+      progressDelayMs:f.progressDelayMs??200, progressIntervalMs:f.progressIntervalMs??5000, progressHeartbeatMs:f.progressHeartbeatMs??30000,
       domain: f.domain === 'lark' ? 'lark' : 'feishu',
     },
     codex: {

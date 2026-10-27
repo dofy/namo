@@ -57,13 +57,13 @@ test('management rejects credentials and assistant errors retain HTTP-relevant s
 
 test('message feedback and progress settings default safely and save under feishu',t=>{
   const f=fixture(t),before=f.manager.config();
-  assert.equal(before.values.reactions,true);assert.equal(before.values.progressUpdates,true);assert.equal(before.values.progressDelayMs,12000);
+  assert.equal(before.values.reactions,true);assert.equal(before.values.progressUpdates,true);assert.equal(before.values.progressDelayMs,200);
   assert.equal(before.values.progressIntervalMs,5000);assert.equal(before.values.progressHeartbeatMs,30000);
   const saved=f.manager.save(before.revision,{reactions:false,progressUpdates:false,progressDelayMs:1000,progressIntervalMs:60000,progressHeartbeatMs:300000});
   assert.equal(saved.values.reactions,false);assert.equal(saved.values.progressUpdates,false);
   const raw=JSON.parse(readFileSync(f.file,'utf8'));assert.equal(raw.feishu.reactions,false);assert.equal(raw.feishu.progressDelayMs,1000);
   assert.equal(raw.codex.reactions,undefined);assert.equal(raw.codex.progressHeartbeatMs,undefined);
-  assert.throws(()=>f.manager.save(saved.revision,{progressDelayMs:999}),/校验/);
+  assert.throws(()=>f.manager.save(saved.revision,{progressDelayMs:-1}),/校验/);
 });
 
 test('memory HTTP API keeps loopback auth, origin, owner and version guards',async t=>{

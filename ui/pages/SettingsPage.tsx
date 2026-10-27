@@ -16,7 +16,7 @@ function fromConfig(config: ConfigView): Draft {
   return { ...v, projects: Object.entries(v.projects).map(([name, path]) => ({ id: crypto.randomUUID(), name, path })),
     reactions:v.reactions!==false,progressUpdates:v.progressUpdates!==false,
     readPaths: v.readPaths.join('\n'), denyPaths: v.denyPaths.join('\n'), timeoutSeconds: String(v.timeoutMs / 1000), concurrency: String(v.concurrency), newSecret: '',
-    progressDelayMs:String(v.progressDelayMs??12000),progressIntervalMs:String(v.progressIntervalMs??5000),progressHeartbeatMs:String(v.progressHeartbeatMs??30000) };
+    progressDelayMs:String(v.progressDelayMs??200),progressIntervalMs:String(v.progressIntervalMs??5000),progressHeartbeatMs:String(v.progressHeartbeatMs??30000) };
 }
 function toPatch(draft: Draft): ConfigValues & { newSecret: string } {
   const projects: Record<string, string> = {};
@@ -95,7 +95,7 @@ export function SettingsPage({ config, recoveryAvailable, refresh, notify }: {
       <section className="form-section"><Heading as="h2" size="4">{tr("飞书消息")}</Heading>
         {booleanFields([['requireMention', tr("群聊中仅响应 @")], ['cards', tr("使用任务卡片与操作按钮")],['reactions',tr("接收后添加表情回应")],['progressUpdates',tr("发送处理进度更新")]])}
         <div className="form-grid">
-          <Field label={tr("首次进度提示延迟（毫秒）")} htmlFor="progress-delay"><TextField.Root id="progress-delay" type="number" min="1000" max="120000" required value={draft.progressDelayMs} onChange={e=>edit('progressDelayMs',e.target.value)} /></Field>
+          <Field label={tr("首次进度提示延迟（毫秒）")} htmlFor="progress-delay"><TextField.Root id="progress-delay" type="number" min="0" max="120000" required value={draft.progressDelayMs} onChange={e=>edit('progressDelayMs',e.target.value)} /></Field>
           <Field label={tr("进度更新最短间隔（毫秒）")} htmlFor="progress-interval"><TextField.Root id="progress-interval" type="number" min="5000" max="60000" required value={draft.progressIntervalMs} onChange={e=>edit('progressIntervalMs',e.target.value)} /></Field>
           <Field label={tr("进度心跳间隔（毫秒）")} htmlFor="progress-heartbeat"><TextField.Root id="progress-heartbeat" type="number" min="30000" max="300000" required value={draft.progressHeartbeatMs} onChange={e=>edit('progressHeartbeatMs',e.target.value)} /></Field>
         </div>
