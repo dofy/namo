@@ -285,3 +285,4 @@ summary { cursor: pointer; font-size: 13px; color: #47657c; }
 .operation-log { margin-top: 22px; }
 .approval-record { padding-top: 20px; border-top: 1px solid #dce3e9; }
 @media (max-width: 700px) { .operations-info { grid-template-columns: 1fr; } }
+.reply-test-details { margin-top: 16px; overflow-wrap: anywhere; }

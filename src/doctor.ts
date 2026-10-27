@@ -30,7 +30,10 @@ export async function doctor(file: string, live = false): Promise<Check[]> {
   if (live) {
     if (checks.some(c => c.id.startsWith('agent.') && c.status === 'fail')) checks.push({ id: 'agent.inference', status: 'fail', message: tr("doctor.agentPrerequisitesFailedModelWasNotCalled") });
     else {
-      try { checks.push({ id: 'agent.inference', status: await liveAgentTest(c) ? 'ok' : 'fail', message: tr("doctor.realAgentResponseMarkerTest") }); }
+      try {
+        const matched = await liveAgentTest(c);
+        checks.push({ id: 'agent.inference', status: matched ? 'ok' : 'fail', message: tr(matched ? 'doctor.replyVerified' : 'doctor.replyMismatch') });
+      }
       catch { checks.push({ id: 'agent.inference', status: 'fail', message: tr("doctor.realAgentCallFailedCheckAccountQuota") }); }
     }
   } else checks.push({ id: 'agent.inference', status: 'warn', message: tr("doctor.modelNotCalledNoInferenceQuotaUsed"), next: tr("doctor.runNamoDoctorLiveExplicitlyTestInference") });

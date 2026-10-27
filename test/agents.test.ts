@@ -16,6 +16,26 @@ import { Engine } from '../src/engine.js';
 import { type RunRequest } from '../src/runtime.js';
 import { spawnSync } from 'node:child_process';
 import { Management, ManagementError } from '../src/management.js';
+import { doctor } from '../src/doctor.js';
+import { FeishuSetupConnection } from '../src/feishu-setup.js';
+import { CodexRuntime } from '../src/runtime.js';
+
+test('live diagnostics distinguish verified reply, mismatch and failed calls without leaking raw output', async t => {
+ const dir=mkdtempSync(join(tmpdir(),'namo-live-diagnostic-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const file=join(dir,'config.json'),raw=initialConfig(file),bin=join(dir,'probe.mjs');
+ raw.codex.bin=bin;raw.feishu.appId='fixture-diagnostic';raw.feishu.appSecret='FAKE_DIAGNOSTIC_SECRET';mkdirSync(raw.codex.home,{recursive:true});atomicJson(file,raw);
+ writeFileSync(bin,`#!/usr/bin/env node
+import{createInterface}from'node:readline';createInterface({input:process.stdin}).on('line',l=>{const m=JSON.parse(l);if(m.id)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='skills/list'?{data:[{cwd:m.params.cwds[0],skills:[],errors:[]}]}:m.method==='permissionProfile/list'?{data:[{id:'feishu-bot',allowed:true}]}:m.method==='account/read'?{account:{type:'chatgpt'}}:{}})+'\\n')});`,{mode:0o700});
+ t.mock.method(FeishuSetupConnection.prototype,'credentials',async()=>false);
+ let calls=0,output='NAMO_AGENT_OK';
+ t.mock.method(CodexRuntime.prototype,'run',async()=>{calls++;if(output==='throw')throw Error('PRIVATE_SDK_ERROR');return {text:output,threadId:'fixture',turnId:'fixture'};});
+ const inference=async()=> (await doctor(file,true)).find(check=>check.id==='agent.inference')!;
+ const success=await inference();assert.equal(success.status,'ok');assert.match(success.message,/NAMO_AGENT_OK/);
+ output='PRIVATE_UNEXPECTED_REPLY';const mismatch=await inference();assert.equal(mismatch.status,'fail');assert.doesNotMatch(mismatch.message,/PRIVATE_/);assert.notEqual(mismatch.message,success.message);
+ output='throw';const failed=await inference();assert.equal(failed.status,'fail');assert.doesNotMatch(failed.message,/PRIVATE_/);
+ await doctor(file);assert.equal(calls,3,'ordinary diagnostics never call the model');
+ raw.codex.bin=join(dir,'missing');atomicJson(file,raw);assert.equal((await inference()).status,'fail');assert.equal(calls,3,'prerequisite failure never calls the model');
+});
 
 test('probe distinguishes missing binary, login and protocol permission compatibility without inference',async t=>{
  const dir=mkdtempSync(join(tmpdir(),'namo-agent-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));

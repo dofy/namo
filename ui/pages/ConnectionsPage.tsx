@@ -5,7 +5,8 @@ import { useState } from 'react';
 import { Button, Code, Flex, Heading, Link, Text } from '@radix-ui/themes';
 import type { ManagementState, Diagnostic } from '../../src/ui-contract';
 import { api, message } from '../api';
-import { ConfirmButton, Notice } from '../components';
+import { Notice } from '../components';
+import { CodexReplyTest } from '../CodexReplyTest';
 import { ServiceAccessSettings } from '../ServiceAccessSettings';
 import { GitHubSettings } from '../GitHubSettings';
 
@@ -15,13 +16,14 @@ export function ConnectionsPage({ state, refresh, expired }: {
 }) {
   const { config, profiles } = state;
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [checks, setChecks] = useState<Diagnostic[]>([]);
+  const [testing, setTesting] = useState(false);
   return <>
     <div className="connection"><div><Heading as="h2" size="5">Codex</Heading><Text as="p" size="2" color="gray">{tr("connections.officialAppServerIsolatedLogin")}</Text></div>
-      <Flex gap="2" wrap="wrap"><Button variant="soft" disabled={expired} loading={busy} onClick={async () => {
+      <Flex gap="2" wrap="wrap"><Button variant="soft" disabled={expired || testing} loading={busy} onClick={async () => {
         setBusy(true); setError('');
         try { setChecks(await api.diagnose()); } catch (e) { setError(message(e)); } finally { setBusy(false); }
       }}><Icon name="activity" />{tr("connections.runDiagnostics")}</Button>
-    <ConfirmButton disabled={busy||expired} title={tr('operations.liveTest')} description={tr('operations.liveTestHelp')} action={tr('operations.liveTest')} onConfirm={async()=>{setBusy(true);setError('');try{setChecks(await api.diagnose(true));}catch(error){setError(message(error));}finally{setBusy(false);}}}>{tr('operations.liveTest')}</ConfirmButton></Flex>
+    <CodexReplyTest disabled={busy || expired} onBusyChange={setTesting} onResult={next => { setError(''); setChecks(next); }}/></Flex>
     </div>
     {error && <Notice error>{error}</Notice>}
     <div className="diagnostics" aria-live="polite">{checks.map(check => <div key={check.id}>
