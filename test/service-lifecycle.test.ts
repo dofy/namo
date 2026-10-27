@@ -34,14 +34,15 @@ async function fixture(t: TestContext) {
   writeFileSync(fake, `#!${process.execPath}
 import {createInterface} from 'node:readline';
 import {appendFileSync} from 'node:fs';
-const allowed = new Set(['initialize', 'initialized', 'account/read', 'permissionProfile/list']);
+const allowed = new Set(['initialize', 'initialized', 'account/read', 'permissionProfile/list', 'plugin/list', 'skills/list']);
 createInterface({input:process.stdin}).on('line', line => {
   const message = JSON.parse(line);
   if (!allowed.has(message.method)) process.exit(98);
   appendFileSync(${JSON.stringify(calls)}, message.method + '\\n');
   if (message.id === undefined) return;
   const result = message.method === 'account/read' ? {account:{type:'chatgpt'}}
-    : message.method === 'permissionProfile/list' ? {data:[{id:'feishu-bot',allowed:true}]} : {};
+    : message.method === 'permissionProfile/list' ? {data:[{id:'feishu-bot',allowed:true}]}
+    : message.method === 'skills/list' ? {data:[{cwd:message.params.cwds[0],skills:[],errors:[]}]} : {};
   process.stdout.write(JSON.stringify({id:message.id,result})+'\\n');
 });
 `, { mode: 0o700 });
@@ -86,7 +87,10 @@ createInterface({input:process.stdin}).on('line', line => {
     put(join(root, 'dist/scripts/launchd.js'), 'export {};');
     put(join(root, 'bin/namo.js'), 'export {};');
     put(join(root, 'assets/logo.png'), 'fixture');
-    put(join(root, 'package.json'), JSON.stringify({ name: 'namo-service-fixture', version: '0.1.0', type: 'module', dependencies: {} }));
+    const toml = realpathSync(fileURLToPath(new URL('../../node_modules/smol-toml/', import.meta.url)));
+    cpSync(toml, join(root, 'node_modules/smol-toml'), { recursive: true });
+    const tomlVersion = JSON.parse(readFileSync(join(toml, 'package.json'), 'utf8')).version;
+    put(join(root, 'package.json'), JSON.stringify({ name: 'namo-service-fixture', version: '0.1.0', type: 'module', dependencies: { 'smol-toml': tomlVersion } }));
     return import(pathToFileURL(join(root, 'dist/src/service.js')).href) as Promise<typeof Service>;
   };
   const service = await source('before');
@@ -161,7 +165,7 @@ test('isolated install, stopped upgrade and same-schema rollback preserve newer 
   assert.deepEqual(readFileSync(f.file), originalConfig);
   assert.equal(readJson(join(f.config.dataDir, 'service.json')).release.id, before.id);
   assert.equal(f.bootstrapCount, 2, 'upgrade and rollback never bootstrap or replay work');
-  assert.deepEqual(readFileSync(f.calls, 'utf8').trim().split('\n'), ['initialize', 'initialized', 'account/read', 'permissionProfile/list']);
+  assert.deepEqual(readFileSync(f.calls, 'utf8').trim().split('\n'), ['initialize', 'initialized', 'plugin/list', 'skills/list', 'account/read', 'permissionProfile/list']);
 });
 
 

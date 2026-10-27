@@ -31,6 +31,8 @@ const done=text=>{clearInterval(timer);send({method:'item/completed',params:{thr
 createInterface({input:process.stdin}).on('line',line=>{
  const m=JSON.parse(line);if(m.id===undefined)return;
  if(m.method==='initialize')return send({id:m.id,result:{}});
+ if(m.method==='plugin/list')return send({id:m.id,result:{marketplaces:[]}});
+ if(m.method==='skills/list')return send({id:m.id,result:{data:[{cwd:m.params.cwds[0],skills:[],errors:[]}]}});
  if(m.method==='thread/start'||m.method==='thread/resume'){cwd=m.params.cwd;return send({id:m.id,result:{thread:{id:thread}}});}
  if(m.method==='turn/start'){
   appendFileSync(join(cwd,'calls'),'turn\\n');send({id:m.id,result:{turn:{id:turn}}});
