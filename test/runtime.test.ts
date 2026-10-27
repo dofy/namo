@@ -19,6 +19,8 @@ createInterface({input:process.stdin}).on('line', line=>{
  }
  if(!m.method || m.id===undefined)return;
  if(m.method==='initialize')return write({id:m.id,result:{}});
+ if(m.method==='plugin/list')return write({id:m.id,result:{marketplaces:[]}});
+ if(m.method==='skills/list')return write({id:m.id,result:{data:[{cwd:m.params.cwds[0],skills:[],errors:[]}]}});
  if(m.method==='thread/start' && new Set((m.params.dynamicTools??[]).map(t=>Object.hasOwn(t,'type')?'canonical':'legacy')).size>1)return write({id:m.id,error:{code:-32600,message:'mixed dynamic tool formats'}});
  if(m.method==='thread/start'||m.method==='thread/resume')return write({id:m.id,result:{thread:{id:m.params.threadId||'thread-one'}}});
  if(m.method==='turn/interrupt'&&waitAfterLate){

@@ -36,6 +36,8 @@ const finish = text => {
 createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line);
   if (m.method === 'initialize') return send({ id: m.id, result: {} });
+  if (m.method === 'plugin/list') return send({ id: m.id, result: { marketplaces: [] } });
+  if (m.method === 'skills/list') return send({ id: m.id, result: { data: [{ cwd: m.params.cwds[0], skills: [], errors: [] }] } });
   if (m.method === 'thread/start' || m.method === 'thread/resume') {
     cwd = m.params.cwd; thread = m.params.threadId || 'thread-durable';
     if (m.method === 'thread/resume' && ('dynamicTools' in m.params || thread !== 'thread-durable')) process.exit(31);

@@ -12,6 +12,7 @@
     "check": "node dist/src/cli.js check",
     "test": "pnpm run build && node --test dist/test/*.test.js",
     "smoke:codex": "pnpm run build && node dist/scripts/smoke-codex.js",
+    "smoke:skills": "pnpm run build:server && node dist/scripts/smoke-skills.js",
     "login": "node dist/src/cli.js login",
     "status": "node dist/src/cli.js status",
     "service:install": "node dist/scripts/launchd.js install",
@@ -27,7 +28,8 @@
     "ui:watch": "vite build --watch"
   },
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "1.76.0"
+    "@larksuiteoapi/node-sdk": "1.76.0",
+    "smol-toml": "1.9.1"
   },
   "devDependencies": {
     "@radix-ui/themes": "3.3.0",
