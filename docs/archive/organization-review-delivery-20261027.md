@@ -43,3 +43,13 @@ The next real group request correctly started in an isolated workspace, but the 
 Source `1f6bb09b8cff13a0407aa67478256ea6b23c5372` aligns all three declarations. The regression now rejects mixed formats and exercises PR review together with both wait tools. All 453 tests pass. An official Codex session-start probe and a separate authenticated model turn both passed: exactly one read-only PR tool call, 14 files returned, correct HEAD reported and no command/file actions observed. The snapshot reports incomplete patches, which remain a required review limitation. This isolated model test does not stand in for a delivered group review.
 
 Deployed release `81a799fc00b1a6aa5fe779d7807f839cdb60948434524bb9abbc7a76434f885c` is ready and connected with a verified matching manifest. Schema remains 10; all 949 existing rows across 23 tables, configuration, credentials and registered Node were preserved. SQLite integrity and foreign-key checks passed. The failed task was not silently replayed; the user has been asked to resend the same review request, without another `/new`. Live group review and recipient confirmation remain pending.
+
+## Live group execution and platform readback
+
+The resent request completed successfully in one run using an isolated workspace and the verified organization identity. The model made two bounded, authorized reads of the same PR at the same HEAD. Its final reply identified the commit, explicitly reported no confirmed findings in the reviewed scope, and disclosed truncated coverage and unexecuted validation. A successful model review is not proof that the PR is defect-free.
+
+No command or file-change actions were observed. The evidence projection finished without truncating its event list; tool payloads remain deliberately omitted, so generic tool evidence is still marked limited. The existing failed attempt remains in history and was not silently replayed.
+
+The final result was accepted by Feishu and read back through the bot API with matching message ID, target group and reviewed HEAD. This proves platform storage in the selected group, not a human read receipt. User confirmation of the displayed result is still pending. Private task/message IDs and result contents remain in the ignored local acceptance record.
+
+Real multi-member/unpaired-member, external-tenant, revocation, restart and changing-HEAD scenarios remain separate live follow-ups; their automated coverage does not substitute for those checks.
