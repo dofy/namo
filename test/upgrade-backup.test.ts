@@ -32,6 +32,18 @@ test('symlinked backup destinations are rejected before any copy outside data di
   await assert.rejects(createUpgradeBackup(f.config,f.plist),/upgrade_backup_failed/);
 });
 
+test('install and upgrade require opposite plist states', async t => {
+  const f = fixture(t);
+  await assert.rejects(createUpgradeBackup(f.config, f.plist, 'install'), /upgrade_backup_failed/);
+  rmSync(f.plist);
+  await assert.rejects(createUpgradeBackup(f.config, f.plist), /upgrade_backup_failed/);
+  const result = await createUpgradeBackup(f.config, f.plist, 'install');
+  const receipt = JSON.parse(readFileSync(join(result, 'verified.json'), 'utf8'));
+  assert.equal(receipt.operation, 'install');
+  assert.equal(receipt.database.present, false);
+  assert.deepEqual(receipt.files.map((file: { name: string }) => file.name), ['config.json']);
+});
+
 
 test('a failed or silently empty backup operation cannot produce a verified receipt',async t=>{
  for(const mode of ['throw','empty','corrupt'])await t.test(mode,async inner=>{

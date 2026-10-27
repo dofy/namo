@@ -23,19 +23,22 @@ function healthy(db: DatabaseSync): void {
   const integrity = db.prepare('PRAGMA integrity_check').all();
   if (integrity.length !== 1 || integrity[0]?.integrity_check !== 'ok' || db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('backup_database_invalid');
 }
-/** Must run while the upgrade owns the config and receiver locks, before any release mutation. */
-export async function createUpgradeBackup(c: Config, plist: string): Promise<string> {
+/** Must own the config and receiver locks before any release mutation.
+ * Install requires an absent plist; upgrade requires an existing one. */
+export async function createUpgradeBackup(c: Config, plist: string, operation: 'upgrade' | 'install' = 'upgrade'): Promise<string> {
   let directory: string | undefined;
   try {
+    if (operation === 'install' && existsSync(plist)) throw new Error('backup_source_changed');
     const root = join(c.dataDir, 'backups');
     if (existsSync(root) && (lstatSync(root).isSymbolicLink() || !statSync(root).isDirectory())) throw new Error('backup_directory_invalid');
     mkdirSync(root, { recursive: true, mode: 0o700 }); chmodSync(root, 0o700);
-    const id = `upgrade-${Date.now()}-${randomUUID()}`;
+    const id = `${operation}-${Date.now()}-${randomUUID()}`;
     directory = join(root, '.' + id + '.pending'); mkdirSync(directory, { mode: 0o700 });
     const sources = [ [c.file, 'config.json'], [plist, 'launch-agent.plist'],
       [join(c.dataDir, 'service.json'), 'service.json'], [join(c.dataDir, 'service-bootstrap.mjs'), 'service-bootstrap.mjs'] ];
     const files: { source: string; name: string; sha256: string }[] = [];
     for (const [source, name] of sources) {
+      if (operation === 'install' && name === 'launch-agent.plist') continue;
       if (!existsSync(source) && name !== 'config.json' && name !== 'launch-agent.plist') continue;
       regular(source); const bytes = readFileSync(source), target = join(directory, name);
       writeFileSync(target, bytes, { mode: 0o600, flag: 'wx' }); syncFile(target);
@@ -61,8 +64,9 @@ export async function createUpgradeBackup(c: Config, plist: string): Promise<str
     }
     for (const file of files) { regular(file.source); if (hash(readFileSync(file.source)) !== file.sha256) throw new Error('backup_source_changed'); }
     if (existsSync(database) !== present) throw new Error('backup_source_changed');
+    if (operation === 'install' && existsSync(plist)) throw new Error('backup_source_changed');
     const manifest = join(directory, 'verified.json');
-    writeFileSync(manifest, JSON.stringify({ format: 1, verifiedAt: Date.now(), database: { present, fingerprint }, files }) + '\n', { mode: 0o600, flag: 'wx' });
+    writeFileSync(manifest, JSON.stringify({ format: 1, operation, verifiedAt: Date.now(), database: { present, fingerprint }, files }) + '\n', { mode: 0o600, flag: 'wx' });
     syncFile(manifest); syncFile(directory);
     const complete = join(root, id); renameSync(directory, complete); syncFile(root);
     return complete;

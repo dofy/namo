@@ -181,19 +181,28 @@ export async function serviceAction(action: string, c: Config): Promise<Record<s
     if (existsSync(plist)) throw new Error(tr("服务已安装；使用 namo service restart，或先 uninstall 后重新安装"));
     if (activeData(c.dataDir)) throw new Error(tr("当前配置已有前台或后台实例，请先停止它"));
     mkdirSync(c.dataDir, { recursive: true, mode: 0o700 }); mkdirSync(dirname(plist), { recursive: true });
-    const finishInstall = acquireLock(c.dataDir);
+    const finishConfig = acquireLock(join(c.dataDir, 'config-edit.lock'));
     try {
-      if (existsSync(plist) || serviceStatus(c, false).registered) throw new Error(tr("服务安装状态已变化，未创建第二个接收端"));
-      const blockers = releaseUpgradeBlockers(join(c.dataDir, 'bot.sqlite'));
-      if (blockers.length) throw new Error(tr("现有数据仍有未收敛状态，未安装服务：{0}", blockers.join(', ')));
-      if ((await probeAgent(c)).some(x => x.status === 'fail')) throw new Error(tr("Agent 尚未就绪，请先运行 namo doctor 和 namo login"));
-      const release = createRuntimeRelease(sourcePackageRoot(import.meta.url), join(c.dataDir, 'releases'));
-      const record = registration(c, label, release);
-      replacePlist(join(c.dataDir, 'service-bootstrap.mjs'), readFileSync(join(release.root, 'dist/src/service-bootstrap.js'), 'utf8'), 0o400);
-      writeFileSync(plist, renderLaunchAgent(c, label, release.entry, record.node, record.path, release), { mode: 0o600, flag: 'wx' });
-      try { atomicJson(join(c.dataDir, 'service.json'), record); }
-      catch (error) { unlinkSync(plist); throw error; }
-    } finally { finishInstall(); }
+      const finishInstall = acquireLock(c.dataDir);
+      try {
+        if (existsSync(plist) || serviceStatus(c, false).registered) throw new Error(tr("服务安装状态已变化，未创建第二个接收端"));
+        const blockers = releaseUpgradeBlockers(join(c.dataDir, 'bot.sqlite'));
+        if (blockers.length) throw new Error(tr("现有数据仍有未收敛状态，未安装服务：{0}", blockers.join(', ')));
+        if ((await probeAgent(c)).some(x => x.status === 'fail')) throw new Error(tr("Agent 尚未就绪，请先运行 namo doctor 和 namo login"));
+        // Uninstall removes only the plist. Reinstalling or adopting foreground
+        // data must not bypass the verified backup required by upgrade.
+        if (['bot.sqlite', 'service.json', 'service-bootstrap.mjs'].some(name => existsSync(join(c.dataDir, name)))) {
+          upgradeBackup = await createUpgradeBackup(c, plist, 'install');
+        }
+        if (existsSync(plist) || serviceStatus(c, false).registered || releaseUpgradeBlockers(join(c.dataDir, 'bot.sqlite')).length) throw new Error('install_state_changed');
+        const release = createRuntimeRelease(sourcePackageRoot(import.meta.url), join(c.dataDir, 'releases'));
+        const record = registration(c, label, release);
+        replacePlist(join(c.dataDir, 'service-bootstrap.mjs'), readFileSync(join(release.root, 'dist/src/service-bootstrap.js'), 'utf8'), 0o400);
+        writeFileSync(plist, renderLaunchAgent(c, label, release.entry, record.node, record.path, release), { mode: 0o600, flag: 'wx' });
+        try { atomicJson(join(c.dataDir, 'service.json'), record); }
+        catch (error) { unlinkSync(plist); throw error; }
+      } finally { finishInstall(); }
+    } finally { finishConfig(); }
     const r = spawnSync('launchctl', ['bootstrap', domain(), plist], { stdio: 'pipe', timeout: 10000 });
     // A timeout or failed command receipt does not prove launchd rejected the
     // registration. Keep both files so status/stop/start can reconcile it without

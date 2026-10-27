@@ -58,7 +58,7 @@ namo service start
 
 任一条件不满足都会保持原 plist 和服务停止状态。尤其是等待用户补充的任务也属于未收敛状态；不能为了升级直接忽略它。先完成、取消或按异常恢复流程核对，再重新运行升级。
 
-如果先卸载服务再对已有 `bot.sqlite` 执行 `service install`，同一组空闲门禁仍然生效；卸载不会成为绕过独立 runner、wait 或 outbox 核对的捷径。检查与发布登记期间会持有 receiver 数据锁，支持的服务操作也会串行化，避免另一个前台或后台启动夹在检查和 plist 切换之间。
+如果先卸载服务再对已有 `bot.sqlite` 执行 `service install`，同一组空闲门禁及可验证备份仍然生效；卸载不会成为绕过独立 runner、wait 或 outbox 核对的捷径。检查与发布登记期间会持有 config-edit 配置锁及 receiver 数据锁，支持的服务操作也会串行化，避免另一个前台或后台启动夹在检查和 plist 切换之间。
 
 `upgrade` 通过检查后创建或复用新快照，更新服务登记与 plist，但仍保持停止。随后由操作者明确运行 `start`。配置文件、Codex 隔离认证目录和数据库路径都沿用原值；升级不会启动第二个飞书接收端，也不会迁移或删除这些数据。
 
@@ -79,3 +79,9 @@ namo service start
 `service upgrade` 在服务停止、配置及接收端锁持有期间，先使用 Node SQLite backup 创建一致性副本，再检查非空、完整性、外键、schema 与所有表记录的逻辑指纹，并备份原配置、plist、服务登记和 bootstrap。源文件或数据库在复制期间改变也会中止。全部检查通过才写入 `verified.json`，随后才允许创建发布并修改登记。
 
 任何备份错误返回 `upgrade_backup_failed`，不替换发布、登记或 bootstrap，不自动启动服务；外部 shell 即使继续调用 `service start`，仍使用原登记。部分备份保留为 `.pending`，不能作为成功备份。回执只含摘要与本机路径，不输出配置、凭据或数据库正文；不备份个人认证、不自动恢复旧数据库，也不代表支持跨 schema 降级。
+
+## 已有数据的安装保护
+
+`service install` 在发现已有 `bot.sqlite`、`service.json` 或 `service-bootstrap.mjs` 时，先用同一备份校验逻辑保存配置、数据库及尚存服务文件。适用于卸载后重装，也适用于将前台实例数据接入后台服务。卸载已经移除的 plist 不要求存在，备份清单标识 `operation: install`，不会伪造旧 plist。升级路径仍要求原 plist 存在。
+
+安装备份在 `dataDir/backups/install-…/` 完成并写入 `verified.json` 后，才创建发布快照、替换登记和调用 launchd；失败返回 `upgrade_backup_failed`，保留原文件且不启动接收端。首次没有数据或历史登记的安装无需备份。成功结果的 `backup.path` / `backup.verified` 与升级一致。这些检查只证明安装前的数据副本，不代表新版本启动、数据库迁移或真实飞书收件已验收。

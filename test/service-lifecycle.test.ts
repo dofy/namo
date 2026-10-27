@@ -11,6 +11,9 @@ import { loadConfig } from '../src/config.js';
 import { atomicJson, readJson } from '../src/paths.js';
 import { Store } from '../src/store.js';
 import type * as Service from '../src/service.js';
+import { databaseFingerprint } from '../src/upgrade-backup.js';
+import { DatabaseSync } from 'node:sqlite';
+import { acquireLock } from '../src/safety.js';
 
 function writable(path: string): void {
   const stat = lstatSync(path);
@@ -175,4 +178,58 @@ test('backup failure aborts upgrade before changing release, bootstrap or regist
   assert.equal(f.service.serviceStatus(f.config).registered,false);assert.equal(f.bootstrapCount,1);
   await f.service.serviceAction('start',f.config);
   assert.equal(f.service.verifyServiceRegistration(f.config,f.plist).release.id,release);
+});
+
+test('reinstall requires a verified backup before replacing registration or starting', { skip: process.platform !== 'darwin' }, async t => {
+  const f = await fixture(t);
+  const installed = await f.service.serviceAction('install', f.config);
+  assert.equal(installed.backup, undefined, 'first installation has no existing data to migrate');
+  await f.service.serviceAction('uninstall', f.config);
+  const database = join(f.config.dataDir, 'bot.sqlite');
+  const db = new Store(database);
+  db.enqueue({ key: 'unknown', messageId: 'message', chatKey: 'chat', chatId: 'chat', senderId: 'owner', text: 'retained' });
+  db.addOutput('unknown', 'result', 'do not resend');
+  db.db.prepare("UPDATE inbox SET state='delivery_unknown'").run();
+  db.db.prepare("UPDATE outbox SET state='unknown'").run();
+  const fingerprint = databaseFingerprint(db.db); db.close();
+  const paths = [f.file, join(f.config.dataDir, 'service.json'), join(f.config.dataDir, 'service-bootstrap.mjs')];
+  const before = paths.map(path => readFileSync(path));
+  const releases = readdirSync(join(f.config.dataDir, 'releases'));
+  const newer = await f.source('reinstalled');
+  const backupRoot = join(f.config.dataDir, 'backups');
+  writeFileSync(backupRoot, 'blocked');
+  await assert.rejects(newer.serviceAction('install', f.config), /upgrade_backup_failed/);
+  paths.forEach((path, i) => assert.deepEqual(readFileSync(path), before[i]));
+  assert.equal(existsSync(f.plist), false);
+  assert.deepEqual(readdirSync(join(f.config.dataDir, 'releases')), releases);
+  assert.equal(f.bootstrapCount, 1, 'failure must not start a new receiver');
+  acquireLock(join(f.config.dataDir, 'config-edit.lock'))();
+  rmSync(backupRoot);
+  const result = await newer.serviceAction('install', f.config);
+  const backup = result.backup as { path: string; verified: boolean };
+  assert.equal(backup.verified, true);
+  assert.equal(readJson(join(backup.path, 'verified.json')).operation, 'install');
+  assert.equal(existsSync(join(backup.path, 'launch-agent.plist')), false, 'uninstall already removed the plist');
+  for (const [index, name] of ['config.json', 'service.json', 'service-bootstrap.mjs'].entries()) {
+    assert.deepEqual(readFileSync(join(backup.path, name)), before[index]);
+  }
+  for (const path of [database, join(backup.path, 'bot.sqlite')]) {
+    const copy = new DatabaseSync(path, { readOnly: true });
+    try { assert.equal(databaseFingerprint(copy), fingerprint); } finally { copy.close(); }
+  }
+  assert.equal(f.bootstrapCount, 2);
+  assert.notEqual(newer.verifyServiceRegistration(f.config, f.plist).release.id, JSON.parse(before[1]!.toString()).release.id);
+});
+
+test('installing over foreground data backs up the database without prior service files', { skip: process.platform !== 'darwin' }, async t => {
+  const f = await fixture(t);
+  const db = new Store(join(f.config.dataDir, 'bot.sqlite'));
+  const fingerprint = databaseFingerprint(db.db); db.close();
+  const result = await f.service.serviceAction('install', f.config);
+  const backup = result.backup as { path: string; verified: boolean };
+  assert.equal(backup.verified, true);
+  assert.deepEqual(readJson(join(backup.path, 'verified.json')).files.map((file: { name: string }) => file.name), ['config.json']);
+  const copy = new DatabaseSync(join(backup.path, 'bot.sqlite'), { readOnly: true });
+  try { assert.equal(databaseFingerprint(copy), fingerprint); } finally { copy.close(); }
+  assert.equal(f.bootstrapCount, 1);
 });
