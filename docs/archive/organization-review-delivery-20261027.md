@@ -26,6 +26,12 @@ The authorized local deployment enables one verified organization and one select
 
 ## Live acceptance
 
-Pending: the user has been asked to mention Namo in the selected group with the authorized private PR. Verify durable group receipt, official Codex `read_pull_request`, final reply in the same group and user confirmation. Automated two-user isolation is covered; real multi-member/external-tenant and live revocation scenarios remain separate follow-ups.
+First real group request was durably received with the correct tenant. It was refused before any review because the old conversation was still bound to a host project that is no longer granted to that group. The user has been asked to send `/new` and repeat the request; repository permissions were not broadened. Verify durable group receipt, official Codex `read_pull_request`, final reply in the same group and user confirmation. Automated two-user isolation is covered; real multi-member/external-tenant and live revocation scenarios remain separate follow-ups.
 
 OpenClaw switch, actual Git push feature acceptance, npm publication and Claude/Cursor execution remain outside this release.
+
+## Existing-session guidance correction
+
+The refusal now explicitly directs the user to `/new`, rather than an empty project selector. A regression verifies that the denied request opens no task, a new session uses an isolated directory/native context, and the old history remains intact. All 33 organization/task checks passed.
+
+Source `c8f20097214abbf54e9bbf051283d72d7b72a9b4` was deployed as `b762715d2e069f49310d618e4d0bdc72f904e221b5b49516beb3741027093ab0`. The existing receiver was replaced while idle, schema stayed at 10, all 920 rows across 23 tables were retained, integrity/foreign-key checks passed, and configuration/credentials/registered Node were unchanged. The new service is ready and connected. Real PR review and group-result confirmation remain pending.
