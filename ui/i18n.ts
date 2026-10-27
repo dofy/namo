@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react';
-import { parseLocale, systemLocale, translate, type LanguagePreference, type Locale } from '../src/i18n';
+import { parseLocale, systemLocale, translate, type LanguagePreference, type Locale, type MessageKey } from '../src/i18n';
+
+export type { MessageKey } from '../src/i18n';
 
 const preference = 'namo_ui_language';
 function readPreference(): LanguagePreference {
@@ -23,7 +25,7 @@ export function setLocale(next: LanguagePreference) {
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 export const useLocale = () => useSyncExternalStore(subscribe, getLocale, () => 'en' as Locale);
 export const useLanguagePreference = () => useSyncExternalStore(subscribe, () => selected, () => 'system' as LanguagePreference);
-export const t = (key: string, ...values: unknown[]): string => translate(locale, key, ...values);
+export const t = (key: MessageKey, ...values: unknown[]): string => translate(locale, key, ...values);
 document.documentElement.lang = locale;
 window.addEventListener('languagechange', () => {
   if (selected !== 'system') return;

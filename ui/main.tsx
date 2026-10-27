@@ -22,7 +22,7 @@ import { Notice } from './components';
 class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
-  render() { return this.state.failed ? <main className="startup-error"><Notice error>{tr("页面无法显示。请刷新；若仍失败，请关闭此工作台并重新运行 namo ui。")}</Notice></main> : this.props.children; }
+  render() { return this.state.failed ? <main className="startup-error"><Notice error>{tr("app.pageCouldNotLoadRefreshCloseWorkbench")}</Notice></main> : this.props.children; }
 }
 // Exchange the single-use bootstrap before React mounts, including StrictMode's
 // extra development effect cycle. Never persist the token or put it in logs.

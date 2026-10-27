@@ -1,4 +1,7 @@
-import { english } from './locales/en.js';
+import { english, type MessageKey } from './locales/en.js';
+import { chinese } from './locales/zh-CN.js';
+
+export type { MessageKey } from './locales/en.js';
 
 export type Locale = 'en' | 'zh-CN';
 export type LanguagePreference = Locale | 'system';
@@ -19,7 +22,8 @@ export function systemLocale(languages: readonly (string | undefined)[]): Locale
 }
 
 /** Translate application messages only. User input and execution output are never passed here. */
-export function translate(locale: Locale, key: string, ...values: unknown[]): string {
-  const template = locale === 'en' && Object.hasOwn(english, key) ? english[key] : key;
+export function translate(locale: Locale, key: MessageKey, ...values: unknown[]): string {
+  const messages = locale === 'zh-CN' ? chinese : english;
+  const template = Object.hasOwn(messages, key) ? messages[key] : key;
   return template.replace(/\{(\d+)\}/g, (match, index: string) => Number(index) < values.length ? String(values[Number(index)]) : match);
 }

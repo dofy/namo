@@ -35,9 +35,9 @@ export function acquireLock(dataDir: string): () => void {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     let pid: number;
     try { pid = Number(readFileSync(join(dir, 'pid'), 'utf8')); }
-    catch { throw new Error(tr("锁文件未完成写入；请确认旧服务已停止后手动清理 data/service.lock")); }
-    if (!Number.isSafeInteger(pid) || pid < 1) throw new Error(tr("服务锁损坏，拒绝启动"));
-    try { process.kill(pid, 0); throw new Error(tr("同一个 dataDir 已有服务运行")); }
+    catch { throw new Error(tr("safety.lockFileIncompleteConfirmOldServiceStopped")); }
+    if (!Number.isSafeInteger(pid) || pid < 1) throw new Error(tr("safety.invalidServiceLockRefusingStart"));
+    try { process.kill(pid, 0); throw new Error(tr("safety.serviceAlreadyRunningDatadir")); }
     catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e;
     }

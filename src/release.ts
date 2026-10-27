@@ -57,7 +57,7 @@ function copyPackage(source: string, target: string, stack = new Set<string>()):
     peerDependencies?: Record<string, string>; peerDependenciesMeta?: Record<string, { optional?: boolean }>;
   };
   const key = realpathSync(source);
-  if (stack.has(key)) throw new Error(tr("发布依赖形成循环：{0}", pkg.name ?? basename(source)));
+  if (stack.has(key)) throw new Error(tr("release.circularReleaseDependency", pkg.name ?? basename(source)));
   stack.add(key);
   copyTree(source, target);
   const required = Object.keys(pkg.dependencies ?? {}).sort();
@@ -67,7 +67,7 @@ function copyPackage(source: string, target: string, stack = new Set<string>()):
     const found = dependencySource(source, name);
     if (!found) {
       if ((optional.includes(name) && !required.includes(name)) || pkg.peerDependenciesMeta?.[name]?.optional) continue;
-      throw new Error(tr("发布依赖不完整：{0}", name));
+      throw new Error(tr("release.missingReleaseDependency", name));
     }
     if (stack.has(realpathSync(found))) continue;
     copyPackage(found, join(target, 'node_modules', ...packageParts(name)), new Set(stack));
@@ -81,10 +81,10 @@ function filesUnder(root: string, current = root): ManifestFile[] {
     const rel = portable(relative(root, path));
     if (rel === RELEASE_MANIFEST) continue;
     const info = lstatSync(path);
-    if (info.isSymbolicLink()) throw new Error(tr("发布快照不能包含符号链接：{0}", rel));
+    if (info.isSymbolicLink()) throw new Error(tr("release.releaseSnapshotsCannotContainSymlinks", rel));
     if (info.isDirectory()) result.push(...filesUnder(root, path));
     else if (info.isFile()) result.push({ path: rel, bytes: info.size, mode: info.mode & 0o777, sha256: hash(readFileSync(path)) });
-    else throw new Error(tr("发布快照包含不支持的文件类型：{0}", rel));
+    else throw new Error(tr("release.unsupportedFileTypeReleaseSnapshot", rel));
   }
   return result;
 }
@@ -124,16 +124,16 @@ export function verifyRuntimeRelease(root: string, expectedId?: string): Release
   if (manifest.format !== 1 || !/^[a-f0-9]{64}$/.test(manifest.id)
     || manifest.entry !== RELEASE_ENTRY || manifest.worker !== RELEASE_WORKER
     || !Array.isArray(manifest.files) || !Array.isArray(manifest.runtimeDependencies)) {
-    throw new Error(tr("发布快照清单无效"));
+    throw new Error(tr("release.invalidReleaseManifest"));
   }
   const { id, ...body } = manifest;
   if (manifestIdentity(body) !== id || (expectedId !== undefined && expectedId !== id) || basename(resolved) !== id) {
-    throw new Error(tr("发布快照身份不匹配"));
+    throw new Error(tr("release.releaseSnapshotIdentityMismatch"));
   }
   const actual = filesUnder(resolved);
-  if (JSON.stringify(actual) !== JSON.stringify(manifest.files)) throw new Error(tr("发布快照已损坏或被修改"));
+  if (JSON.stringify(actual) !== JSON.stringify(manifest.files)) throw new Error(tr("release.releaseSnapshotCorruptedModified"));
   for (const required of [manifest.entry, manifest.worker, 'dist/src/service-bootstrap.js', 'package.json']) {
-    if (!manifest.files.some(file => file.path === required)) throw new Error(tr("发布快照缺少运行文件：{0}", required));
+    if (!manifest.files.some(file => file.path === required)) throw new Error(tr("release.runtimeFileMissingReleaseSnapshot", required));
   }
   return manifest;
 }
@@ -149,13 +149,13 @@ export function createRuntimeRelease(sourceRoot: string, releasesRoot: string): 
   try {
     for (const required of ['dist/src', 'dist/scripts', 'dist/ui', 'bin', 'assets', 'package.json']) {
       const source = join(sourceRoot, required);
-      if (!existsSync(source)) throw new Error(tr("当前 Namo 构建不完整：缺少 {0}", required));
+      if (!existsSync(source)) throw new Error(tr("release.incompleteNamoBuildMissing", required));
       copyTree(source, join(staging, required));
     }
     const dependencies = Object.keys(pkg.dependencies ?? {}).sort();
     for (const name of dependencies) {
       const source = dependencySource(sourceRoot, name);
-      if (!source) throw new Error(tr("当前 Namo 运行依赖不完整：{0}", name));
+      if (!source) throw new Error(tr("release.namoRuntimeDependencyMissing", name));
       copyPackage(source, join(staging, 'node_modules', ...packageParts(name)));
     }
     makeReadOnly(staging);

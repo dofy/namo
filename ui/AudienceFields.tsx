@@ -12,11 +12,11 @@ export function IdentityInput({id,value,onChange,disabled}:{id:string;value:stri
 }
 export function AudienceFields({value,onChange,id}:{value:Audience;onChange:(v:Audience)=>void;id:string}) {
   return <>
-    <Text as="label" size="2"><Flex gap="2" align="center"><Checkbox checked={value.organization} onCheckedChange={v=>onChange({...value,organization:v===true})}/>{tr('整个组织（包括群聊）')}</Flex></Text>
+    <Text as="label" size="2"><Flex gap="2" align="center"><Checkbox checked={value.organization} onCheckedChange={v=>onChange({...value,organization:v===true})}/>{tr("audience.entireOrganizationIncludingGroups")}</Flex></Text>
     <div className="form-grid">
-      <Field label={tr('指定成员私聊（open_id）')} htmlFor={`${id}-users`}><IdentityInput id={`${id}-users`} disabled={value.organization} value={value.userIds} onChange={ids=>onChange({...value,userIds:ids})}/></Field>
-      <Field label={tr('指定群（chat_id）')} htmlFor={`${id}-chats`}><IdentityInput id={`${id}-chats`} disabled={value.organization} value={value.chatIds} onChange={ids=>onChange({...value,chatIds:ids})}/></Field>
+      <Field label={tr("audience.selectedMembersDirectMessagesOpenId")} htmlFor={`${id}-users`}><IdentityInput id={`${id}-users`} disabled={value.organization} value={value.userIds} onChange={ids=>onChange({...value,userIds:ids})}/></Field>
+      <Field label={tr("audience.selectedGroupsChatId")} htmlFor={`${id}-chats`}><IdentityInput id={`${id}-chats`} disabled={value.organization} value={value.chatIds} onChange={ids=>onChange({...value,chatIds:ids})}/></Field>
     </div>
-    <Text as="p" size="1" color="gray">{tr('群授权允许向该群展示资源内容。未选择组织且名单为空时，不开放访问。')}</Text>
+    <Text as="p" size="1" color="gray">{tr("audience.groupGrantAllowsResourceContentSharedGroup")}</Text>
   </>;
 }

@@ -31,33 +31,33 @@ export function runtimeFor(config: Config, profile?: string | AgentSelection): R
 export async function probeAgent(source: Config, profileId?: string): Promise<Check[]> {
   let c: Config;
   try { c = {...source, codex: agentCodexConfig(source, selectAgent(source, profileId))}; }
-  catch { return [{id:'agent.profile',status:'fail',message:tr('所选执行器未实现、已禁用或不存在；没有自动切换后端')}]; }
+  catch { return [{id:'agent.profile',status:'fail',message:tr("agents.selectedExecutorUnavailableDisabledMissingNoFallback")}]; }
   const checks: Check[] = [];
   const path = findExecutable(c.codex.bin);
-  if (!path) return [{ id: 'agent.binary', status: 'fail', message: tr("未找到 Codex 可执行文件"), next: tr("安装官方 Codex，或通过 namo init 指定完整路径：https://learn.chatgpt.com/docs/cli") }];
+  if (!path) return [{ id: 'agent.binary', status: 'fail', message: tr("agents.codexExecutableNotFound"), next: tr("agents.installOfficialCodexSetItsFullPath") }];
   checks.push({ id: 'agent.binary', status: 'ok', message: `Codex：${realpathSync(path)}` });
-  if (!existsSync(c.codex.home)) return [...checks, { id: 'agent.auth', status: 'fail', message: tr("Namo 专用 Codex 环境尚未创建或登录"), next: tr("运行 namo login；不会复制个人 Codex 凭据") }];
+  if (!existsSync(c.codex.home)) return [...checks, { id: 'agent.auth', status: 'fail', message: tr("agents.namosIsolatedCodexEnvironmentNotCreatedSigned"), next: tr("agents.runNamoLoginPersonalCodexCredentialsNot") }];
   try {
     const p = await probeRuntime(c.codex);
-    checks.push({ id: 'agent.protocol', status: 'ok', message: tr("app-server 初始化、账号与指定权限配置均可用") });
-    checks.push({ id: 'agent.auth', status: p.authenticated ? 'ok' : 'fail', message: p.authenticated ? tr("Namo 专用 Codex 账号已登录") : tr("Namo 专用 Codex 账号未登录"), next: p.authenticated ? undefined : tr("运行 namo login") });
+    checks.push({ id: 'agent.protocol', status: 'ok', message: tr("agents.appServerInitializationAccountRequestedPermissionSettings") });
+    checks.push({ id: 'agent.auth', status: p.authenticated ? 'ok' : 'fail', message: p.authenticated ? tr("agents.codexSignedIn") : tr("agents.codexNotSignedIn"), next: p.authenticated ? undefined : tr("agents.runNamoLogin") });
   } catch (e) {
-    checks.push({ id: 'agent.protocol', status: 'fail', message: tr("app-server 探测失败（{0}）", e instanceof RuntimeError ? e.code : 'probe_failed'), next: tr("运行 codex --version 并检查安装；当前协议基线为 0.154.0，不会自动放宽权限或切换模型入口") });
+    checks.push({ id: 'agent.protocol', status: 'fail', message: tr("agents.appServerProbeFailed", e instanceof RuntimeError ? e.code : 'probe_failed'), next: tr("agents.runCodexVersionCheckInstallationProtocolBaseline") });
   }
   if (c.codex.defaultProject) {
     const cwd = c.codex.projects?.[c.codex.defaultProject];
-    checks.push({ id: 'agent.project', status: cwd && existsSync(cwd) ? 'ok' : 'fail', message: cwd ? tr("工作目录：{0}", cwd) : tr("默认项目不存在") });
-  } else checks.push({ id: 'agent.project', status: 'warn', message: tr("未配置项目，将使用隔离会话目录"), next: tr("运行 namo init 选择项目") });
+    checks.push({ id: 'agent.project', status: cwd && existsSync(cwd) ? 'ok' : 'fail', message: cwd ? tr("cli.workingDirectory", cwd) : tr("agents.defaultProjectNotFound") });
+  } else checks.push({ id: 'agent.project', status: 'warn', message: tr("agents.noProjectConfiguredUsingIsolatedSessionDirectory"), next: tr("agents.runNamoInitSelectProject") });
   return checks;
 }
 export async function loginAgent(source: Config, profileId?: string): Promise<void> {
   const c = {...source, codex:agentCodexConfig(source, selectAgent(source, profileId))};
-  const path = findExecutable(c.codex.bin); if (!path) throw new Error(tr("未找到 Codex，请先安装官方 Codex CLI"));
+  const path = findExecutable(c.codex.bin); if (!path) throw new Error(tr("agents.codexNotFoundInstallOfficialCodexCli"));
   mkdirSync(c.codex.home, { recursive: true, mode: 0o700 });
   await new Promise<void>((resolve, reject) => {
     const p = spawn(path, ['login'], { env: codexEnvironment(c.codex.home), stdio: 'inherit' });
-    p.once('error', () => reject(new Error(tr("Codex 登录进程无法启动"))));
-    p.once('exit', code => code === 0 ? resolve() : reject(new Error(tr("Codex 登录未完成，可重新运行 namo login"))));
+    p.once('error', () => reject(new Error(tr("agents.codexLoginProcessCouldNotStart"))));
+    p.once('exit', code => code === 0 ? resolve() : reject(new Error(tr("agents.codexLoginIncompleteRunNamoLoginAgain"))));
   });
 }
 export async function liveAgentTest(c: Config, profileId?: string): Promise<boolean> {

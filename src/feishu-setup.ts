@@ -64,10 +64,10 @@ export class FeishuSetupConnection implements SetupConnection {
   async identity(): Promise<{ id: string; name: string }> {
     let r: any;
     try { r = await this.client.request({ method: 'GET', url: '/open-apis/bot/v3/info' }); }
-    catch { throw new Error(tr("无法读取机器人身份，请检查机器人能力、应用发布状态和网络")); }
+    catch { throw new Error(tr("feishuSetup.couldNotReadBotIdentityCheckBot")); }
     const bot = r.bot ?? r.data?.bot;
-    if (r.code !== 0 || !bot?.open_id) throw new Error(tr("未取得机器人身份，请在飞书后台启用机器人能力并发布应用"));
-    return { id: bot.open_id, name: String(bot.app_name ?? bot.bot_name ?? tr("机器人")) };
+    if (r.code !== 0 || !bot?.open_id) throw new Error(tr("feishuSetup.noBotIdentityReturnedEnableBotCapabilities"));
+    return { id: bot.open_id, name: String(bot.app_name ?? bot.bot_name ?? tr("feishuSetup.bot")) };
   }
   async connect(accept: (event: FeishuEvent) => void): Promise<void> {
     const silent = () => {};
@@ -84,7 +84,7 @@ export class FeishuSetupConnection implements SetupConnection {
       if (state === 'failed') break;
       await new Promise(r => setTimeout(r, 100));
     }
-    this.close(); throw new Error(tr("飞书长连接未就绪；检查网络、应用凭据和订阅方式，修正后重新运行 namo init"));
+    this.close(); throw new Error(tr("feishuSetup.feishuConnectionNotReadyCheckNetworkApp"));
   }
   async send(chatId: string, text: string, uuid: string = randomUUID()): Promise<string> {
     let r: any;

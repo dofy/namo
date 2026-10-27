@@ -13,34 +13,34 @@ interface Query {
 const taskStates = ['queued', 'running', 'waiting', 'succeeded', 'failed', 'cancelled', 'interrupted', 'needs_attention', 'problem'];
 function dateBoundary(value: string, end = false): number | undefined {
   if (!value) return;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new BrowseError(tr("日期格式无效"));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new BrowseError(tr("browse.invalidDateFormat"));
   const [y, m, d] = value.split('-').map(Number), date = new Date(y, m - 1, d);
-  if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) throw new BrowseError(tr("日期不存在"));
+  if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) throw new BrowseError(tr("browse.dateNotExist"));
   if (end) date.setDate(date.getDate() + 1);
   return date.getTime();
 }
 function parse(params: URLSearchParams, kind: Kind): Query {
   const value = (key: string, max = 256) => {
     const v = params.get(key)?.trim() ?? '';
-    if (v.length > max || params.getAll(key).length > 1) throw new BrowseError(tr("筛选条件过长或重复"));
+    if (v.length > max || params.getAll(key).length > 1) throw new BrowseError(tr("browse.filterTooLongDuplicated"));
     return v;
   };
   const integer = (key: string, fallback: number, max: number) => {
     const raw = value(key); if (!raw) return fallback;
-    if (!/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > max) throw new BrowseError(tr("分页参数无效"));
+    if (!/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > max) throw new BrowseError(tr("browse.invalidPaginationParameters"));
     return Number(raw);
   };
   const state = value('state'), sort = value('sort') || 'newest', project = value('project'), workstream = value('workstream');
-  if (state && !(kind === 'tasks' ? taskStates : ['running', 'waiting', 'queued', 'idle', 'current']).includes(state)) throw new BrowseError(tr("状态筛选无效"));
-  if (!['newest', 'oldest'].includes(sort)) throw new BrowseError(tr("排序方式无效"));
-  if (project && project !== 'isolated' && !project.startsWith('named:')) throw new BrowseError(tr("项目筛选无效"));
-  if (workstream && !/^W-[A-F0-9]{12}$/.test(workstream)) throw new BrowseError(tr("会话编号无效"));
+  if (state && !(kind === 'tasks' ? taskStates : ['running', 'waiting', 'queued', 'idle', 'current']).includes(state)) throw new BrowseError(tr("browse.invalidStatusFilter"));
+  if (!['newest', 'oldest'].includes(sort)) throw new BrowseError(tr("browse.invalidSortOrder"));
+  if (project && project !== 'isolated' && !project.startsWith('named:')) throw new BrowseError(tr("browse.invalidProjectFilter"));
+  if (workstream && !/^W-[A-F0-9]{12}$/.test(workstream)) throw new BrowseError(tr("browse.invalidSessionId"));
   const dateField = value('dateField') || 'created';
-  if (!(kind === 'tasks' ? ['created', 'started', 'finished'] : ['created']).includes(dateField)) throw new BrowseError(tr("日期类型无效"));
+  if (!(kind === 'tasks' ? ['created', 'started', 'finished'] : ['created']).includes(dateField)) throw new BrowseError(tr("browse.invalidDateType"));
   const from = dateBoundary(value('from')), to = dateBoundary(value('to'), true);
-  if (from !== undefined && to !== undefined && from >= to) throw new BrowseError(tr("结束日期不能早于开始日期"));
+  if (from !== undefined && to !== undefined && from >= to) throw new BrowseError(tr("browse.endDateMustNotPrecedeStartDate"));
   const pageSize = integer('pageSize', 25, 100);
-  if (![25, 50, 100].includes(pageSize)) throw new BrowseError(tr("每页可显示 25、50 或 100 条"));
+  if (![25, 50, 100].includes(pageSize)) throw new BrowseError(tr("browse.pageSizeMust"));
   return { q: value('q', 200), owner: value('owner'), project, state, workstream, from, to,
     sort: sort as Query['sort'], dateField: dateField as Query['dateField'], page: integer('page', 1, 1_000_000), pageSize };
 }
@@ -79,13 +79,13 @@ export class Browse {
   }
   private task(row: Record<string, any>): TaskListItem {
     const { text, ...rest } = row;
-    return { ...rest, title: this.title(text, tr("无文字任务")), ownerName: this.names.get(row.ownerId) ?? '',
+    return { ...rest, title: this.title(text, tr("browse.taskWithoutText")), ownerName: this.names.get(row.ownerId) ?? '',
       error: row.error ? this.redact(row.error) : null } as TaskListItem;
   }
   private session(row: Record<string, any>): SessionSummary {
     const { text, latestText, firstSeq: _first, latestSeq: _last, ...rest } = row;
-    return { ...rest, current: !!row.current, title: this.title(text, tr("尚无任务的会话")),
-      latestTitle: this.title(latestText, tr("尚无任务")), ownerName: this.names.get(row.ownerId) ?? '' } as SessionSummary;
+    return { ...rest, current: !!row.current, title: this.title(text, tr("browse.sessionWithoutTasks")),
+      latestTitle: this.title(latestText, tr("browse.noTasksYet")), ownerName: this.names.get(row.ownerId) ?? '' } as SessionSummary;
   }
   private where(q: Query, kind: Kind): { sql: string; values: SQLInputValue[] } {
     const alias = kind === 'tasks' ? 't' : 's', clauses: string[] = [], values: SQLInputValue[] = [];

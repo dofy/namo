@@ -2,7 +2,7 @@ import { t as tr, currentLocale } from './locale.js';
 import { Writable } from 'node:stream';
 import { createInterface } from 'node:readline/promises';
 
-export class Cancelled extends Error { constructor() { super(tr("初始化已取消；已保存的步骤可通过 namo init 继续")); } }
+export class Cancelled extends Error { constructor() { super(tr("prompts.setupCancelledRunNamoInitResumeSaved")); } }
 export interface Prompter {
   signal?: AbortSignal;
   text(label: string, initial?: string, secret?: boolean): Promise<string>;
@@ -22,7 +22,7 @@ export class TerminalPrompter implements Prompter {
     const separator = currentLocale() === 'en' ? ': ' : '：';
     if (secret) {
       // Readline still handles editing; its echo goes to a muted stream.
-      process.stdout.write(`${label}${initial ? tr("（回车保留已有值）") : ''}${separator}`);
+      process.stdout.write(`${label}${initial ? tr("prompts.pressEnterKeepExistingValue") : ''}${separator}`);
       this.muted = true;
     }
     try {
@@ -37,7 +37,7 @@ export class TerminalPrompter implements Prompter {
       if (!v) return initial;
       if (['y', 'yes', '是'].includes(v)) return true;
       if (['n', 'no', '否'].includes(v)) return false;
-      this.info(tr("请输入 y 或 n。"));
+      this.info(tr("prompts.enterYN"));
     }
   }
   close(): void { this.rl.close(); }

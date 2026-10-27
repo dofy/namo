@@ -34,7 +34,7 @@ function registeredService(c: Config): RegisteredService {
     || value.config !== c.file || typeof value.node !== 'string' || typeof value.path !== 'string'
     || !value.release || typeof value.release.id !== 'string' || typeof value.release.root !== 'string'
     || typeof value.release.entry !== 'string' || typeof value.release.worker !== 'string' || typeof value.release.manifest !== 'string') {
-    throw new Error(tr("服务尚未固定到可验证发布；请先停止服务并运行 namo service upgrade"));
+    throw new Error(tr("service.serviceNotPinnedVerifiableReleaseStopRun"));
   }
   return value as RegisteredService;
 }
@@ -53,7 +53,7 @@ export function verifyServiceRegistration(c: Config, plist: string): RegisteredS
     const installed = readFileSync(plist, 'utf8');
     if (installed !== renderLaunchAgent(c, record.label, record.release.entry, record.node, record.path, record.release)) throw new Error('plist');
     return record;
-  } catch { throw new Error(tr("后台服务登记或发布快照无效；保持停止并重新运行 namo service upgrade")); }
+  } catch { throw new Error(tr("service.invalidServiceRegistrationReleaseSnapshotKeepStopped")); }
 }
 function normalizedPath(): string {
   return [...new Set((process.env.PATH ?? '').split(':').filter(Boolean).map(p => { try { return realpathSync(p); } catch { return p; } }))].join(':');
@@ -62,7 +62,7 @@ function registration(c: Config, label: string, release: RuntimeRelease): Regist
   return { format: 2, label, config: c.file, node: realpathSync(process.execPath), path: normalizedPath(), release };
 }
 function replacePlist(file: string, content: string, mode = 0o600): void {
-  if (existsSync(file) && lstatSync(file).isSymbolicLink()) throw new Error(tr("拒绝覆盖符号链接服务文件"));
+  if (existsSync(file) && lstatSync(file).isSymbolicLink()) throw new Error(tr("service.refusingOverwriteSymlinkServiceFile"));
   const temp = `${file}.${process.pid}.tmp`;
   try {
     writeFileSync(temp, content, { mode, flag: 'wx' });
@@ -84,14 +84,14 @@ export function assertNoLegacyReceiver(appId: string): void {
   const p = spawnSync('/usr/libexec/PlistBuddy', ['-c', 'Print :ProgramArguments:4', plistFile(legacyLabel)], { encoding: 'utf8', timeout: 3000 });
   let same = false;
   try { same = readJson(p.stdout.trim()).feishu?.appId === appId; } catch { /* Unknown registrations are not altered. */ }
-  if (same) throw new Error(tr("同一飞书应用已有旧 Namo 接收端运行。请先停止它；初始化没有启动第二个连接或修改旧服务"));
+  if (same) throw new Error(tr("service.olderNamoReceiverRunningFeishuAppStop"));
 }
 export function serviceLabel(c: Config): string {
   const saved = join(c.dataDir, 'service.json');
   if (existsSync(saved)) {
     const s = readJson(saved);
     if (/^(local\.feishu-codex-bot|io\.namo\.[a-f0-9]{12})$/.test(s.label)) return s.label;
-    throw new Error(tr("服务元数据无效，请检查 data/service.json"));
+    throw new Error(tr("service.invalidServiceMetadataCheckDataServiceJson"));
   }
   if (process.platform === 'darwin' && existsSync(plistFile(legacyLabel))) {
     // Read only the registered config path, never the environment or secrets.
@@ -171,24 +171,24 @@ export function serviceStatus(c: Config, verifyRelease = false): Record<string, 
 }
 export async function serviceAction(action: string, c: Config): Promise<Record<string, unknown>> {
   if (action === 'status') return serviceStatus(c, true);
-  if (process.platform !== 'darwin') throw new Error(tr("首版后台服务管理仅支持 macOS；此平台请使用 namo start 前台运行或自行配置系统服务"));
+  if (process.platform !== 'darwin') throw new Error(tr("service.backgroundServiceManagementCurrentlySupportsMacosUse"));
   const label = serviceLabel(c), plist = plistFile(label), target = `${domain()}/${label}`;
   let upgradeBackup: string | undefined;
   const finishAction = acquireLock(join(c.dataDir, 'service-action.lock'));
   try {
   if (action === 'install') {
     validateFeishu(c);
-    if (existsSync(plist)) throw new Error(tr("服务已安装；使用 namo service restart，或先 uninstall 后重新安装"));
-    if (activeData(c.dataDir)) throw new Error(tr("当前配置已有前台或后台实例，请先停止它"));
+    if (existsSync(plist)) throw new Error(tr("service.serviceAlreadyInstalledUseNamoServiceRestart"));
+    if (activeData(c.dataDir)) throw new Error(tr("service.foregroundBackgroundInstanceAlreadyUsingConfigurationStop"));
     mkdirSync(c.dataDir, { recursive: true, mode: 0o700 }); mkdirSync(dirname(plist), { recursive: true });
     const finishConfig = acquireLock(join(c.dataDir, 'config-edit.lock'));
     try {
       const finishInstall = acquireLock(c.dataDir);
       try {
-        if (existsSync(plist) || serviceStatus(c, false).registered) throw new Error(tr("服务安装状态已变化，未创建第二个接收端"));
+        if (existsSync(plist) || serviceStatus(c, false).registered) throw new Error(tr("service.serviceInstallationStateChangedNoSecondReceiver"));
         const blockers = releaseUpgradeBlockers(join(c.dataDir, 'bot.sqlite'));
-        if (blockers.length) throw new Error(tr("现有数据仍有未收敛状态，未安装服务：{0}", blockers.join(', ')));
-        if ((await probeAgent(c)).some(x => x.status === 'fail')) throw new Error(tr("Agent 尚未就绪，请先运行 namo doctor 和 namo login"));
+        if (blockers.length) throw new Error(tr("service.unsettledDataStateServiceNotInstalled", blockers.join(', ')));
+        if ((await probeAgent(c)).some(x => x.status === 'fail')) throw new Error(tr("service.agentNotReadyRunNamoDoctorNamo"));
         // Uninstall removes only the plist. Reinstalling or adopting foreground
         // data must not bypass the verified backup required by upgrade.
         if (['bot.sqlite', 'service.json', 'service-bootstrap.mjs'].some(name => existsSync(join(c.dataDir, name)))) {
@@ -207,22 +207,22 @@ export async function serviceAction(action: string, c: Config): Promise<Record<s
     // A timeout or failed command receipt does not prove launchd rejected the
     // registration. Keep both files so status/stop/start can reconcile it without
     // guessing or launching a second receiver.
-    if (r.status !== 0) throw new Error(tr("launchd 启动结果未确认，服务登记已保留。请先运行 namo service status 核对；确认未运行后可用 namo service start 重试"));
+    if (r.status !== 0) throw new Error(tr("service.launchdStartOutcomeUnconfirmedServiceRegistrationWas"));
   } else if (action === 'upgrade') {
-    if (!existsSync(plist)) throw new Error(tr("服务未安装，请先运行 namo service install"));
+    if (!existsSync(plist)) throw new Error(tr("service.installFirst"));
     const finishUpgrade = acquireLock(join(c.dataDir, 'config-edit.lock'));
     try {
       const state = serviceStatus(c, false);
-      if (state.registered || activeData(c.dataDir)) throw new Error(tr("安全升级要求服务已停止；请先运行 namo service stop，确认独立任务完成后再升级"));
+      if (state.registered || activeData(c.dataDir)) throw new Error(tr("service.safeUpgradeRequiresStoppedServiceRunNamo"));
       const finishReceiver = acquireLock(c.dataDir);
       try {
-        if (serviceStatus(c, false).registered) throw new Error(tr("服务停止状态已变化，未切换发布"));
+        if (serviceStatus(c, false).registered) throw new Error(tr("service.serviceStopStateChangedReleaseNotSwitched"));
         const blockers = releaseUpgradeBlockers(join(c.dataDir, 'bot.sqlite'));
-        if (blockers.length) throw new Error(tr("仍有未收敛状态，未切换发布：{0}", blockers.join(', ')));
+        if (blockers.length) throw new Error(tr("service.unsettledStateReleaseNotSwitched", blockers.join(', ')));
         upgradeBackup = await createUpgradeBackup(c, plist);
         if (serviceStatus(c, false).registered || releaseUpgradeBlockers(join(c.dataDir, 'bot.sqlite')).length) throw new Error('upgrade_state_changed');
         const release = createRuntimeRelease(sourcePackageRoot(import.meta.url), join(c.dataDir, 'releases'));
-        if (serviceStatus(c, false).registered) throw new Error(tr("服务停止状态已变化，未切换发布"));
+        if (serviceStatus(c, false).registered) throw new Error(tr("service.serviceStopStateChangedReleaseNotSwitched"));
         const record = registration(c, label, release);
         replacePlist(join(c.dataDir, 'service-bootstrap.mjs'), readFileSync(join(release.root, 'dist/src/service-bootstrap.js'), 'utf8'), 0o400);
         atomicJson(join(c.dataDir, 'service.json'), record);
@@ -230,26 +230,26 @@ export async function serviceAction(action: string, c: Config): Promise<Record<s
       } finally { finishReceiver(); }
     } finally { finishUpgrade(); }
   } else if (['stop', 'uninstall', 'restart', 'start'].includes(action)) {
-    if (!existsSync(plist)) throw new Error(tr("服务未安装，请运行 namo service install"));
+    if (!existsSync(plist)) throw new Error(tr("service.notInstalled"));
     if (action === 'start' || action === 'restart') verifyServiceRegistration(c, plist);
     if (action !== 'start') {
       const state = serviceStatus(c, false);
       if (state.registered) {
         const r = spawnSync('launchctl', ['bootout', target], { stdio: 'pipe', timeout: 10000 });
-        if (r.status !== 0) throw new Error(tr("服务停止失败，未修改安装文件"));
+        if (r.status !== 0) throw new Error(tr("service.serviceStopFailedInstallationFilesWereNot"));
         const end = Date.now() + 30_000;
         while ((serviceStatus(c, false).registered || activeData(c.dataDir)) && Date.now() < end) await new Promise(r => setTimeout(r, 200));
-        if (serviceStatus(c, false).registered || activeData(c.dataDir)) throw new Error(tr("服务仍在停止中，稍后运行 namo service status；没有强制终止或删除数据"));
+        if (serviceStatus(c, false).registered || activeData(c.dataDir)) throw new Error(tr("service.serviceStillStoppingRunNamoServiceStatus"));
       }
     }
     if (action === 'uninstall') unlinkSync(plist);
     if (action === 'start' || action === 'restart') {
-      if (serviceStatus(c, false).registered) throw new Error(tr("服务已启动"));
-      if (activeData(c.dataDir)) throw new Error(tr("当前配置仍有前台实例或正在停止的实例，请先等待它退出"));
+      if (serviceStatus(c, false).registered) throw new Error(tr("service.serviceAlreadyStarted"));
+      if (activeData(c.dataDir)) throw new Error(tr("service.foregroundStoppingInstanceStillUsesConfigurationWait"));
       const r = spawnSync('launchctl', ['bootstrap', domain(), plist], { stdio: 'pipe', timeout: 10000 });
-      if (r.status !== 0) throw new Error(tr("服务启动失败，请运行 namo doctor 检查配置"));
+      if (r.status !== 0) throw new Error(tr("service.serviceStartFailedRunNamoDoctorCheck"));
     }
-  } else throw new Error(tr("服务命令：install / status / start / stop / restart / upgrade / uninstall"));
+  } else throw new Error(tr("service.serviceCommandsInstallStatusStartStopRestart"));
   return { ...serviceStatus(c, true), ...(upgradeBackup ? { backup: { path: upgradeBackup, verified: true } } : {}) };
   } finally { finishAction(); }
 }

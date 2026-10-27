@@ -1,44 +1,81 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Flex, Separator, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { MemoryViewItem as MemoryPageItem, MemoryViewKind as MemoryPageKind, MemoryViewScope as MemoryPageScope, MemoryViewState } from '../../src/ui-contract';
-import { getLocale } from '../i18n';
+import { t as tr, getLocale } from '../i18n';
 import { Choice, ConfirmButton, Field, Notice } from '../components';
 import { api } from '../api';
 
-const labels = {
-  zh: {
-    intro: 'Namo 默认从对话中提取和更新有价值的长期记忆，无需逐条确认。在这里查看、纠正或删除。', owner: '用户', search: '搜索记忆',
-    add: '手动新增记忆（可选）', manualIntro: '通常无需手动保存。只有希望补充尚未在对话中提到的内容时，才需要填写。', kind: '类型', scope: '可见范围', project: '项目', chat: '聊天标识', text: '正文', save: '明确保存',
-    preference: '长期偏好', user_fact: '用户资料', project_knowledge: '项目知识', task_summary: '任务摘要', history_quote: '历史原话', handoff: '交接',
-    globalScope: '全局记忆', localScope: '项目细节', shared: '可跨会话使用', private: '本人私有', chatPrivate: '限来源聊天', automatic: '自动提取', refresh: '刷新记忆', ownerScope: '本人私聊（原范围）', projectScope: '本人 + 项目私聊', chatScope: '指定聊天', active: '已启用', pending_review: '待审阅', disabled: '已停用', deleted: '已删除', capacity: '容量', entries: '条', chars: '字',
-    usable: '可用于新运行', unusable: '不会用于新运行', expires: '到期', never: '不过期', source: '来源', details: '来源与版本', version: '版本', empty: '没有符合条件的记忆。',
-    correct: '纠正正文', correctAction: '保存纠正', disable: '停用', disableTitle: '停用这条记忆？', disableDescription: '后续任务不再使用这条记忆，正文仍保留。已有会话可能还保留相关内容。',
-    remove: '删除', deleteTitle: '删除这条记忆？', deleteDescription: '删除后无法恢复，后续任务不再使用。历史消息、备份和已有会话中的内容会保留。',
-    activate: '审阅并启用', cancel: '取消', conflict: '保存失败。若版本已变化，请保留草稿、刷新并核对后重试。', saved: '变更已保存；只影响后续检索和新运行。',
-    migration: '迁移待审阅材料', migrationIntro: '这些材料来自属于当前配置的本机迁移记录。需要导入时，在“手动新增记忆”中选择可见范围；导入后仍须明确审阅启用。',
-    importAction: '导入为待审阅', imported: '已绑定', notEligible: '仅展示，不能导入为记忆', bytes: '字节', fingerprint: '指纹', noImports: '没有属于当前配置的迁移审阅材料。',
-    privacy: '全局人物与项目知识可按话题跨会话使用；项目细节用于对应项目。私有内容和来源聊天限定的内容仍按场合筛选，临时要求留在当前会话。',
-  },
-  en: {
-    intro: 'Namo automatically extracts and updates useful long-term memories from conversations, without confirming every item. Review, correct, or delete them here.', owner: 'User', search: 'Search memories',
-    add: 'Add a memory manually (optional)', manualIntro: 'You normally do not need to save memories manually. Use this to add information that has not appeared in a conversation.', kind: 'Type', scope: 'Visibility', project: 'Project', chat: 'Chat key', text: 'Content', save: 'Save explicitly',
-    preference: 'Preference', user_fact: 'User fact', project_knowledge: 'Project knowledge', task_summary: 'Task summary', history_quote: 'History quote', handoff: 'Handoff',
-    globalScope: 'Global memory', localScope: 'Project details', shared: 'Available across conversations', private: 'Owner private', chatPrivate: 'Source chat only', automatic: 'Automatically extracted', refresh: 'Refresh memories', ownerScope: 'Owner direct messages (legacy)', projectScope: 'Owner + project direct messages', chatScope: 'Exact chat', active: 'Active', pending_review: 'Pending review', disabled: 'Disabled', deleted: 'Deleted', capacity: 'Capacity', entries: 'items', chars: 'characters',
-    usable: 'Available to new runs', unusable: 'Not used by new runs', expires: 'Expires', never: 'Never', source: 'Source', details: 'Source and version', version: 'Version', empty: 'No matching memories.',
-    correct: 'Correct content', correctAction: 'Save correction', disable: 'Disable', disableTitle: 'Disable this memory?', disableDescription: 'Future tasks stop using this memory. Its content is kept, and existing conversations may still contain it.',
-    remove: 'Delete', deleteTitle: 'Delete this memory?', deleteDescription: 'Deletion cannot be undone. Future tasks stop using this memory; messages, backups, and existing conversations are kept.',
-    activate: 'Review and activate', cancel: 'Cancel', conflict: 'Save failed. If the version changed, keep the draft, refresh, and review before retrying.', saved: 'Change saved. It affects later searches and new runs only.',
-    migration: 'Migration review material', migrationIntro: 'These local artifacts belong to the current configuration. Choose visibility under the optional manual form before importing. Imported material still requires explicit review and activation.',
-    importAction: 'Import as pending review', imported: 'Already bound', notEligible: 'Shown for review only; cannot become memory', bytes: 'bytes', fingerprint: 'Fingerprint', noImports: 'No migration review material belongs to this configuration.',
-    privacy: 'Global people and project knowledge can be used across conversations when relevant; project details stay with their project. Private and chat-restricted content is filtered for the audience. Temporary requests stay in the current session.',
-  },
-} as const;
+const labels = () => ({
+  intro: tr("memory.intro"),
+  owner: tr("memory.owner"),
+  search: tr("memory.search"),
+  add: tr("memory.add"),
+  manualIntro: tr("memory.manualIntro"),
+  kind: tr("memory.kind"),
+  scope: tr("memory.scope"),
+  project: tr("memory.project"),
+  chat: tr("memory.chat"),
+  text: tr("memory.text"),
+  save: tr("memory.save"),
+  preference: tr("memory.preference"),
+  user_fact: tr("memory.userFact"),
+  project_knowledge: tr("memory.projectKnowledge"),
+  task_summary: tr("memory.taskSummary"),
+  history_quote: tr("memory.historyQuote"),
+  handoff: tr("memory.handoff"),
+  globalScope: tr("memory.globalScope"),
+  localScope: tr("memory.localScope"),
+  shared: tr("memory.shared"),
+  private: tr("memory.private"),
+  chatPrivate: tr("memory.chatPrivate"),
+  automatic: tr("memory.automatic"),
+  refresh: tr("memory.refresh"),
+  ownerScope: tr("memory.ownerScope"),
+  projectScope: tr("memory.projectScope"),
+  chatScope: tr("memory.chatScope"),
+  active: tr("memory.active"),
+  pending_review: tr("memory.pendingReview"),
+  disabled: tr("memory.disabled"),
+  deleted: tr("memory.deleted"),
+  capacity: tr("memory.capacity"),
+  entries: tr("memory.entries"),
+  chars: tr("memory.chars"),
+  usable: tr("memory.usable"),
+  unusable: tr("memory.unusable"),
+  expires: tr("memory.expires"),
+  never: tr("memory.never"),
+  source: tr("memory.source"),
+  details: tr("memory.details"),
+  version: tr("memory.version"),
+  empty: tr("memory.empty"),
+  correct: tr("memory.correct"),
+  correctAction: tr("memory.correctAction"),
+  disable: tr("memory.disable"),
+  disableTitle: tr("memory.disableTitle"),
+  disableDescription: tr("memory.disableDescription"),
+  remove: tr("memory.remove"),
+  deleteTitle: tr("memory.deleteTitle"),
+  deleteDescription: tr("memory.deleteDescription"),
+  activate: tr("memory.activate"),
+  cancel: tr("memory.cancel"),
+  conflict: tr("memory.conflict"),
+  saved: tr("memory.saved"),
+  migration: tr("memory.migration"),
+  migrationIntro: tr("memory.migrationIntro"),
+  importAction: tr("memory.importAction"),
+  imported: tr("memory.imported"),
+  notEligible: tr("memory.notEligible"),
+  bytes: tr("memory.bytes"),
+  fingerprint: tr("memory.fingerprint"),
+  noImports: tr("memory.noImports"),
+  privacy: tr("memory.privacy"),
+});
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 const statusColor = (status: MemoryPageItem['status']) => status === 'active' ? 'green' : status === 'pending_review' ? 'orange' : 'gray';
 
-export function MemoryPage({ editable, unavailableReason }: { editable: boolean; unavailableReason?: string }) {
-  const c = getLocale() === 'zh-CN' ? labels.zh : labels.en;
+export function MemoryPage({ active, editable, unavailableReason }: { active: boolean; editable: boolean; unavailableReason?: string }) {
+  const c = labels();
   const [state, setState] = useState<MemoryViewState>();
   const [query, setQuery] = useState(''), [kind, setKind] = useState<Exclude<MemoryPageKind, 'handoff'>>('preference');
   const [scopeKind, setScopeKind] = useState<MemoryPageScope['kind']>('owner'), [project, setProject] = useState(''), [chatKey, setChatKey] = useState('');
@@ -52,7 +89,7 @@ export function MemoryPage({ editable, unavailableReason }: { editable: boolean;
   }, []);
   const ownerId=state?.ownerId;
   useEffect(() => {
-    if(!ownerId||busy||editing||draft||!editable)return;
+    if(!active||!ownerId||busy||editing||draft||!editable)return;
     const controller=new AbortController();let timer:ReturnType<typeof setTimeout>;
     const tick=async()=>{
       try {const next=await api.memories(ownerId,controller.signal);if(!controller.signal.aborted)setState(next);}
@@ -61,7 +98,7 @@ export function MemoryPage({ editable, unavailableReason }: { editable: boolean;
     };
     timer=setTimeout(tick,5000);
     return()=>{clearTimeout(timer);controller.abort();};
-  },[ownerId,busy,editing,draft,editable]);
+  },[active,ownerId,busy,editing,draft,editable]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     const items=state?.items??[];

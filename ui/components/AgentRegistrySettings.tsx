@@ -49,14 +49,14 @@ export function AgentRegistrySettings({config,refresh,expired}:{
     const profiles:Record<string,AgentProfileSpecView>={};
     for(const row of draft.profiles){
       const id=row.id.trim();
-      if(!/^[a-z][a-z0-9_-]{0,47}$/.test(id)||['codex','constructor','prototype','__proto__'].includes(id))throw Error(tr('配置编号必须以小写字母开头，只能包含小写字母、数字、下划线或连字符，且不能使用 codex。'));
-      if(Object.hasOwn(profiles,id))throw Error(tr('配置编号不能重复。'));
+      if(!/^[a-z][a-z0-9_-]{0,47}$/.test(id)||['codex','constructor','prototype','__proto__'].includes(id))throw Error(tr("agentProfiles.profileIdsMustStartLowercaseLetterContain"));
+      if(Object.hasOwn(profiles,id))throw Error(tr("agentProfiles.profileIdsMustUnique"));
       const bin=row.bin?.trim(),model=row.model?.trim();
       profiles[id]={adapter:row.adapter,enabled:row.enabled!==false,...(bin?{bin}:{}),...(model?{model}:{}),...(row.timeoutMs!==undefined?{timeoutMs:row.timeoutMs}:{})};
     }
     if(draft.defaultProfile!=='codex'){
       const selected=profiles[draft.defaultProfile];
-      if(!selected||selected.enabled===false||selected.adapter!=='codex')throw Error(tr('默认配置只能选择已启用、当前可运行的 Codex 配置。'));
+      if(!selected||selected.enabled===false||selected.adapter!=='codex')throw Error(tr("agentProfiles.chooseEnabledCodexProfileAvailableRuntimeAdapter"));
     }
     return {agents:{defaultProfile:draft.defaultProfile,memoryProfile:'codex',profiles}};
   }
@@ -66,72 +66,72 @@ export function AgentRegistrySettings({config,refresh,expired}:{
     setBusy(true);setError('');setNotice('');
     try{
       const saved=await saveAgents(revision,value);load(saved);
-      setNotice(tr('Agent 配置已保存，但没有自动重启接收服务。重启后，新默认配置只用于新工作流；既有工作流及其排队或等待任务继续使用已绑定版本。'));
+      setNotice(tr("agentProfiles.agentProfilesWereSavedButReceiverWas"));
       try{await refresh();}catch(failure){if(failure instanceof ApiError&&failure.status===401)await handleFailure(failure);}
     }catch(failure){await handleFailure(failure);}finally{setBusy(false);}
   }
 
   return <section className="form-section profiles-page" aria-labelledby="agent-registry-title">
     <Flex align="center" justify="between" gap="3" wrap="wrap">
-      <Heading as="h2" size="5" id="agent-registry-title">{tr('Agent 配置')}</Heading>
+      <Heading as="h2" size="5" id="agent-registry-title">{tr("agentProfiles.agentProfiles")}</Heading>
       <Badge color="orange">R7.1 · Codex</Badge>
     </Flex>
-    <Text as="p" size="2" color="gray">{tr('“已安装”只表示找到命令；协议兼容和账号登录仍需分别诊断。Claude Code 与 Cursor 支持预登记和只读探针，尚不能执行任务、登录或设为默认。')}</Text>
-    <Text as="p" size="1" color="gray">{tr('记忆处理固定使用内置 codex。自定义配置共用项目与权限策略，登录目录由 Namo 隔离管理，不能在此修改。')}</Text>
-    {conflict&&<Notice>{tr('Agent 配置已被修改，当前草稿已保留。请核对后重新载入已保存配置。')}</Notice>}
-    {locked&&<Notice error>{tr('本机授权已过期，请重新打开工作台后再修改 Agent 配置。')}</Notice>}
-    {error&&<Notice error>{tr(error)}</Notice>}{notice&&<Notice>{notice}</Notice>}
+    <Text as="p" size="2" color="gray">{tr("agentProfiles.installedMeansCommandWasFoundProtocolCompatibility")}</Text>
+    <Text as="p" size="1" color="gray">{tr("agentProfiles.memoryProcessingAlwaysUsesBuiltCodexProfile")}</Text>
+    {conflict&&<Notice>{tr("agentProfiles.agentProfilesChangedElsewhereDraftPreservedReview")}</Notice>}
+    {locked&&<Notice error>{tr("agentProfiles.localAuthorizationExpiredReopenWorkbenchEditingAgent")}</Notice>}
+    {error&&<Notice error>{error}</Notice>}{notice&&<Notice>{notice}</Notice>}
 
     <div className="audit">
       {config.agents.profiles.map(profile=><div key={profile.id}>
         <Flex align="center" gap="2" wrap="wrap"><Text weight="medium" size="2">{profile.id}</Text><Badge>{profile.adapter}</Badge>
-          <Badge color={!profile.enabled?'gray':profile.available?'green':'orange'}>{!profile.enabled?tr('已停用'):profile.available?tr('运行适配器已接入，登录状态另行诊断'):tr('等待后续版本')}</Badge>
-          {profile.id===config.agents.defaultProfile&&<Badge color="blue">{tr('默认')}</Badge>}
+          <Badge color={!profile.enabled?'gray':profile.available?'green':'orange'}>{!profile.enabled?tr("status.disabled"):profile.available?tr("agentProfiles.runtimeAdapterAvailableSignCheckedSeparately"):tr("common.comingLaterRelease")}</Badge>
+          {profile.id===config.agents.defaultProfile&&<Badge color="blue">{tr("common.default")}</Badge>}
         </Flex>
-        <Text as="p" size="1" color="gray">{profile.bin} · {tr('隔离目录')} {profile.home}</Text>
+        <Text as="p" size="1" color="gray">{profile.bin} · {tr("common.isolatedDirectory")} {profile.home}</Text>
         <Text as="p" size="1" color="gray"><Code variant="ghost">namo agent probe --profile {quote(profile.id)} --config {quote(config.file)}</Code></Text>
         {profile.adapter==='codex'?<Text as="p" size="1" color="gray"><Code variant="ghost">namo login --profile {quote(profile.id)} --config {quote(config.file)}</Code></Text>
-          :<Text as="p" size="1" color="gray">{tr('当前版本没有为此适配器提供 login 命令；probe 不会登录或调用模型。')}</Text>}
+          :<Text as="p" size="1" color="gray">{tr("agentProfiles.releaseNotProvideLoginCommandAdapterProbe")}</Text>}
       </div>)}
     </div>
 
     <form onSubmit={event=>{event.preventDefault();void save();}}>
       <fieldset disabled={busy||locked}>
-        <Field label={tr('新工作流默认配置')} htmlFor="agent-default-profile"><Choice id="agent-default-profile" value={draft.defaultProfile}
+        <Field label={tr("agentProfiles.defaultProfileNewWorkstreams")} htmlFor="agent-default-profile"><Choice id="agent-default-profile" value={draft.defaultProfile}
           options={defaultOptions} disabled={busy||locked} onChange={value=>edit(current=>({...current,defaultProfile:value}))}/></Field>
-        <Text as="p" size="1" color="gray">{tr('保存不会迁移既有工作流、排队或等待任务，也不会重启服务。内置 codex 的命令、模型和时限仍在“设置”中管理。')}</Text>
-        <Heading as="h3" size="3" mt="5">{tr('自定义配置')}</Heading>
-        {!draft.profiles.length&&<Text as="p" size="2" color="gray">{tr('尚无自定义配置。可以先登记未来要接入的 Agent，但当前只有 Codex 可运行。')}</Text>}
+        <Text as="p" size="1" color="gray">{tr("agentProfiles.savingNotMigrateExistingWorkstreamsQueuedWaiting")}</Text>
+        <Heading as="h3" size="3" mt="5">{tr("agentProfiles.customProfiles")}</Heading>
+        {!draft.profiles.length&&<Text as="p" size="2" color="gray">{tr("agentProfiles.noCustomProfilesYetYouCanSave")}</Text>}
         {draft.profiles.map((profile,index)=><div className="profile-account" key={profile.key}>
           <Flex align="end" gap="3" wrap="wrap">
-            <Field label={tr('配置编号')} htmlFor={`agent-profile-id-${index}`}><TextField.Root id={`agent-profile-id-${index}`} value={profile.id} maxLength={48}
+            <Field label={tr("agentProfiles.profileId")} htmlFor={`agent-profile-id-${index}`}><TextField.Root id={`agent-profile-id-${index}`} value={profile.id} maxLength={48}
               placeholder="team-codex" onChange={event=>editProfile(profile.key,{id:event.target.value})}/></Field>
-            <Field label={tr('适配器')} htmlFor={`agent-profile-adapter-${index}`}><Choice id={`agent-profile-adapter-${index}`} value={profile.adapter}
+            <Field label={tr("agentProfiles.adapter")} htmlFor={`agent-profile-adapter-${index}`}><Choice id={`agent-profile-adapter-${index}`} value={profile.adapter}
               options={adapters} onChange={value=>editProfile(profile.key,{adapter:value as AgentAdapter})}/></Field>
             <Text as="label" size="2"><Flex align="center" gap="2"><Checkbox checked={profile.enabled!==false}
-              onCheckedChange={checked=>editProfile(profile.key,{enabled:checked===true})}/>{tr('启用')}</Flex></Text>
+              onCheckedChange={checked=>editProfile(profile.key,{enabled:checked===true})}/>{tr("common.enabled")}</Flex></Text>
             <Button type="button" variant="soft" color="red" onClick={()=>edit(current=>{
               const profiles=current.profiles.filter(item=>item.key!==profile.key);
               return {...current,profiles,defaultProfile:current.defaultProfile===profile.id?'codex':current.defaultProfile};
-            })}><Icon name="trash" />{tr('移除')}</Button>
+            })}><Icon name="trash" />{tr("common.remove")}</Button>
           </Flex>
           <div className="form-grid">
-            <Field label={tr('命令或完整路径（留空使用适配器默认值）')} htmlFor={`agent-profile-bin-${index}`}><TextField.Root id={`agent-profile-bin-${index}`}
+            <Field label={tr("agentProfiles.commandFullPathLeaveBlankAdapterDefault")} htmlFor={`agent-profile-bin-${index}`}><TextField.Root id={`agent-profile-bin-${index}`}
               value={profile.bin??''} maxLength={4096} autoComplete="off" onChange={event=>editProfile(profile.key,{bin:event.target.value})}/></Field>
-            <Field label={tr('模型（留空使用适配器默认值）')} htmlFor={`agent-profile-model-${index}`}><TextField.Root id={`agent-profile-model-${index}`}
+            <Field label={tr("agentProfiles.modelLeaveBlankAdapterDefault")} htmlFor={`agent-profile-model-${index}`}><TextField.Root id={`agent-profile-model-${index}`}
               value={profile.model??''} maxLength={4096} autoComplete="off" onChange={event=>editProfile(profile.key,{model:event.target.value})}/></Field>
           </div>
-          {profile.adapter!=='codex'&&<Text as="p" size="1" color="orange">{tr('此适配器支持预登记和只读探针，尚不能执行任务、登录或设为默认。')}</Text>}
+          {profile.adapter!=='codex'&&<Text as="p" size="1" color="orange">{tr("agentProfiles.adapterSupportsPreregistrationReadProbesCannotExecute")}</Text>}
         </div>)}
         <Button type="button" variant="soft" onClick={()=>edit(current=>({...current,profiles:[...current.profiles,
-          {key:crypto.randomUUID(),id:'',adapter:'codex',enabled:true}]}))}><Icon name="plus" />{tr('添加 Agent 配置')}</Button>
+          {key:crypto.randomUUID(),id:'',adapter:'codex',enabled:true}]}))}><Icon name="plus" />{tr("agentProfiles.addAgentProfile")}</Button>
       </fieldset>
       <Flex gap="3" mt="5" wrap="wrap" align="center">
-        <Button type="submit" loading={busy} disabled={!dirty||locked||conflict}><Icon name="save" />{tr('保存 Agent 配置')}</Button>
-        <ConfirmButton title={tr('重新载入 Agent 配置？')} description={tr('当前 Agent 草稿将被丢弃。')} action={tr('重新载入')} disabled={busy||locked}
+        <Button type="submit" loading={busy} disabled={!dirty||locked||conflict}><Icon name="save" />{tr("agentProfiles.saveAgentProfiles")}</Button>
+        <ConfirmButton title={tr("agentProfiles.reloadAgentProfiles")} description={tr("agentProfiles.currentAgentDraftDiscarded")} action={tr("common.reload")} disabled={busy||locked}
           onConfirm={async()=>{setBusy(true);try{const latest=await api.state();load(latest.config);setNotice('');await refresh();}
-            catch(failure){await handleFailure(failure);throw failure;}finally{setBusy(false);}}}><Icon name="reset" />{tr('重新载入')}</ConfirmButton>
-        {dirty&&<Text size="1" color="gray">{tr('有未保存修改。')}</Text>}
+            catch(failure){await handleFailure(failure);throw failure;}finally{setBusy(false);}}}><Icon name="reset" />{tr("common.reload")}</ConfirmButton>
+        {dirty&&<Text size="1" color="gray">{tr("common.unsavedChanges")}</Text>}
       </Flex>
     </form>
   </section>;

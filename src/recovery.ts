@@ -16,7 +16,7 @@ export class Recovery {
     const delivery = /^D-[1-9]\d*$/.test(subject);
     const row = delivery ? this.store.db.prepare(`SELECT o.*,i.senderId,i.chatKey,i.taskId FROM outbox o JOIN inbox i ON i.key=o.inboxKey WHERE o.id=?`).get(Number(subject.slice(2)))
       : /^N-[A-F0-9]{12}$/.test(subject) ? this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(subject) : undefined;
-    if (!row || !this.allowed(row as any, actor)) throw new RecoveryError(tr("未找到可访问的记录"));
+    if (!row || !this.allowed(row as any, actor)) throw new RecoveryError(tr("recovery.noAccessibleRecordFound"));
     const hasRunners = !!this.store.db.prepare("SELECT 1 FROM sqlite_master WHERE name='runner_jobs' AND type='table'").get();
     const quarantined = !delivery && hasRunners ? this.store.db.prepare(`SELECT j.runId,j.pid,j.runtimePid,j.state FROM runner_jobs j JOIN task_runs r ON r.id=j.runId WHERE r.taskId=? AND j.state IN ('lost','reviewed')`).all(row.id) : [];
     const lost = quarantined.filter(job => job.state === 'lost');
@@ -30,9 +30,9 @@ export class Recovery {
       error: row.error, kind: row.kind, part: row.part, platformReceipt: delivery ? !!row.platformId : undefined,
       content: delivery ? row.content : undefined, reviewed, actionable,
       actions: actionable ? delivery ? ['received', ...(row.kind === 'result' ? ['retry'] : []), 'dismiss'] : ['reviewed'] : [],
-      guidance: lost.length ? tr("独立执行进程失联，项目与并发占位保留。必须在本机确认运行进程及其子进程已停止，核对代码和外部操作，再标记已核对以解除占位；不会重跑原任务。")
-        : delivery ? tr("先在飞书核对。确认收到只记账；重发只发送这段已保存结果，可能重复；放弃发送不会删除历史。")
-        : tr("先核对代码、Git 和外部操作。标记已核对不会改变执行结论或重跑；如需继续，请明确发起后续任务。"),
+      guidance: lost.length ? tr("recovery.independentRunnerLostContactItsProjectConcurrency")
+        : delivery ? tr("recovery.checkFeishuFirstConfirmingReceiptUpdatesRecords")
+        : tr("recovery.checkCodeGitExternalActionsFirstMarking"),
       history: this.store.db.prepare('SELECT action,note,createdAt FROM reconciliations WHERE subject=? ORDER BY id DESC LIMIT 20').all(subject),
       snapshot, inboxKey: row.inboxKey };
   }
@@ -45,22 +45,22 @@ export class Recovery {
     }).slice(0, 100);
   }
   resolve(r: Resolution, actor: Actor, local = false): { duplicate: boolean } {
-    if (!r.requestId || r.requestId.length > 256 || !r.note?.trim() || r.note.length > 1000) throw new RecoveryError(tr("请填写不超过 1000 字的核对依据"));
+    if (!r.requestId || r.requestId.length > 256 || !r.note?.trim() || r.note.length > 1000) throw new RecoveryError(tr("recovery.enterReviewNotesMostCharacters"));
     return this.store.transaction(() => {
       const old = this.store.db.prepare('SELECT subject,actor,action,note FROM reconciliations WHERE requestId=?').get(r.requestId);
       if (old) {
-        if (old.subject!==r.subject || old.actor!==actor.id || old.action!==r.action || old.note!==r.note.trim()) throw new RecoveryError(tr("操作编号已用于其他请求"));
+        if (old.subject!==r.subject || old.actor!==actor.id || old.action!==r.action || old.note!==r.note.trim()) throw new RecoveryError(tr("recovery.operationIdAlreadyUsedAnotherRequest"));
         return { duplicate:true };
       }
       const x = this.inspect(r.subject, local ? undefined : actor);
-      if (x.stamp!==r.stamp || !x.actionable || !x.actions.includes(r.action)) throw new RecoveryError(tr("记录已变化或操作不可用，请刷新后重新核对"));
-      if (r.action==='retry' && x.state==='unknown' && !r.acknowledgeDuplicate) throw new RecoveryError(tr("发送结果不明；重发可能产生重复消息，需明确确认"));
+      if (x.stamp!==r.stamp || !x.actionable || !x.actions.includes(r.action)) throw new RecoveryError(tr("recovery.recordChangedActionUnavailableRefreshReviewAgain"));
+      if (r.action==='retry' && x.state==='unknown' && !r.acknowledgeDuplicate) throw new RecoveryError(tr("recovery.deliveryUnknownResendingMayCreateDuplicateMessages"));
       if (x.snapshot.lostRunners?.length) {
-        if (!local) throw new RecoveryError(tr("独立进程失联必须通过本机核对入口处理，确认进程及子进程均已停止后再解除占位"));
+        if (!local) throw new RecoveryError(tr("recovery.lostRunnersMustReviewedLocallyConfirmProcess"));
         if (x.snapshot.lostRunners.some((job: { pid: number | null; runtimePid: number | null }) =>
           [job.pid,job.runtimePid].some(pid => pid && processState(pid) !== 'dead')
           || (process.platform !== 'win32' && job.runtimePid && processGroupState(job.runtimePid) !== 'dead')))
-          throw new RecoveryError(tr("原运行 PID 或执行器进程组仍存在或状态不明，不能解除占位；未终止任何进程"));
+          throw new RecoveryError(tr("recovery.originalPidRuntimeProcessGroupStillExists"));
         for (const job of x.snapshot.lostRunners) {
           this.store.db.prepare("UPDATE runner_jobs SET state='reviewed',updatedAt=? WHERE runId=? AND state='lost'").run(Date.now(), job.runId);
           runnerEvent(this.store, job.runId, 'locally_reviewed');

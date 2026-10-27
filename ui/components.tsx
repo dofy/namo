@@ -4,10 +4,10 @@ import { AlertDialog, Badge, Button, Callout, Flex, Select, Text } from '@radix-
 import { message } from './api';
 
 const labels = (): Record<string, string> => ({
-  queued: tr("排队中"), running: tr("执行中"), waiting: tr("等待补充"), succeeded: tr("已完成"), failed: tr("未完成"), cancelled: tr("已取消"),
-  interrupted: tr("已中断"), needs_attention: tr("需要核对"), unknown: tr("发送结果不明"), sent: tr("平台已接收"),
-  confirmed: tr("人工确认收到"), dismissed: tr("已放弃发送"), pending: tr("等待发送"), sending: tr("正在发送"),
-  deferred: tr("等待提示"), suppressed: tr("已省略过时提示"), idle: tr("空闲"),
+  queued: tr("common.queued"), running: tr("status.running"), waiting: tr("common.waitingInput"), succeeded: tr("status.completed"), failed: tr("common.failed"), cancelled: tr("common.cancelled"),
+  interrupted: tr("common.interrupted"), needs_attention: tr("common.needsReview"), unknown: tr("components.deliveryUnknown"), sent: tr("components.acceptedPlatform"),
+  confirmed: tr("components.receiptConfirmedManually"), dismissed: tr("components.deliveryDismissed"), pending: tr("components.pendingDelivery"), sending: tr("components.sending"),
+  deferred: tr("components.noticePending"), suppressed: tr("components.outdatedNoticeOmitted"), idle: tr("common.idle"),
 });
 export const statusLabel = (state: string) => labels()[state] ?? state;
 export function StatusBadge({ state }: { state: string }) {
@@ -35,7 +35,7 @@ export function Choice({ id, value, onChange, options, disabled }: {
     <Select.Content position="popper">{options.map(option => <Select.Item key={option.value} value={encode(option.value)}>{option.label}</Select.Item>)}</Select.Content>
   </Select.Root>;
 }
-export function ConfirmButton({ children, title, description, action = tr("确认"), onConfirm, disabled = false, danger = false, variant = 'soft' }: {
+export function ConfirmButton({ children, title, description, action = tr("components.confirm"), onConfirm, disabled = false, danger = false, variant = 'soft' }: {
   children: ReactNode; title: string; description: string; action?: string; onConfirm: () => Promise<void>;
   disabled?: boolean; danger?: boolean; variant?: 'solid' | 'soft' | 'outline';
 }) {
@@ -47,7 +47,7 @@ export function ConfirmButton({ children, title, description, action = tr("确�
       <AlertDialog.Description size="2">{description}</AlertDialog.Description>
       {error && <Notice error>{error}</Notice>}
       <Flex gap="3" justify="end" mt="5">
-        <AlertDialog.Cancel><Button variant="soft" color="gray" disabled={busy}>{tr("返回")}</Button></AlertDialog.Cancel>
+        <AlertDialog.Cancel><Button variant="soft" color="gray" disabled={busy}>{tr("components.back")}</Button></AlertDialog.Cancel>
         <Button color={danger ? 'red' : undefined} loading={busy} onClick={async () => {
           if (busy) return;
           setBusy(true); setError('');

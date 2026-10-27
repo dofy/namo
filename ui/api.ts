@@ -12,7 +12,7 @@ async function request<T>(path: string, body?: unknown, signal?: AbortSignal): P
     ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }),
   });
   const data = await response.json();
-  if (!response.ok) throw new ApiError(data.error || tr("请求未完成，请刷新后重试"), response.status);
+  if (!response.ok) throw new ApiError(data.error || tr("api.requestIncompleteRefreshTryAgain"), response.status);
   return data as T;
 }
 export const api = {
@@ -42,4 +42,4 @@ export const api = {
   diagnose: () => request<Diagnostic[]>('/api/diagnose', {}),
   saveProfile: (configRevision: string, profile: UserProfile, patch: ProfileValues) => request<UserProfile>('/api/profiles', { configRevision, userId: profile.userId, version: profile.version, patch }),
 };
-export const message = (error: unknown) => error instanceof Error ? error.message : tr("操作未完成，请重试");
+export const message = (error: unknown) => error instanceof Error ? error.message : tr("api.actionIncompletePleaseTryAgain");

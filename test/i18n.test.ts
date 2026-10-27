@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { systemLocale, translate } from '../src/i18n.js';
 import { t as tr, withLocale } from '../src/locale.js';
 import { english } from '../src/locales/en.js';
+import { chinese } from '../src/locales/zh-CN.js';
 
 test('system language recognizes browser and POSIX locales with an English fallback', () => {
   assert.equal(systemLocale(['zh-Hans-CN', 'en-US']), 'zh-CN');
@@ -17,24 +18,37 @@ test('system language recognizes browser and POSIX locales with an English fallb
   assert.equal(systemLocale([]), 'en');
 });
 
-test('translations preserve interpolation slots and never reinterpret inserted user data', () => {
-  for (const [key, value] of Object.entries(english)) {
-    assert.ok(value.trim(), `Empty translation: ${key}`);
-    assert.doesNotMatch(value, /[\u3400-\u9fff]/, `Chinese in English translation: ${key}`);
-    assert.deepEqual([...key.matchAll(/\{\d+\}/g)].map(m => m[0]).sort(), [...value.matchAll(/\{\d+\}/g)].map(m => m[0]).sort(), key);
+test('locale dictionaries have the same stable English keys and matching interpolation slots', () => {
+  assert.deepEqual(Object.keys(chinese).sort(), Object.keys(english).sort());
+  for (const key of Object.keys(english) as (keyof typeof english)[]) {
+    assert.match(key, /^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)+$/, `Invalid message key: ${key}`);
+    assert.ok(english[key].trim(), `Empty English translation: ${key}`);
+    assert.ok(chinese[key].trim(), `Empty Chinese translation: ${key}`);
+    // Language options intentionally use their native names in every locale.
+    if (key !== 'assistant.chinese') assert.doesNotMatch(english[key], /[\u3400-\u9fff]/, `Chinese in English translation: ${key}`);
+    assert.deepEqual([...chinese[key].matchAll(/\{\d+\}/g)].map(m => m[0]).sort(), [...english[key].matchAll(/\{\d+\}/g)].map(m => m[0]).sort(), key);
+    assert.equal(translate('en', key), english[key]);
+    assert.equal(translate('zh-CN', key), chinese[key]);
   }
-  assert.equal(translate('en', '工作目录：{0}', '/project/中文/{1}'), 'Working directory: /project/中文/{1}');
-  assert.equal(translate('zh-CN', '工作目录：{0}', '/project/English'), '工作目录：/project/English');
+});
+
+test('translations use message IDs and never reinterpret inserted user data', () => {
+  assert.equal(translate('en', "cli.workingDirectory", '/project/中文/{1}'), 'Working directory: /project/中文/{1}');
+  assert.equal(translate('zh-CN', "cli.workingDirectory", '/project/English'), '工作目录：/project/English');
+  // @ts-expect-error Unknown keys are rejected by TypeScript and are safe at runtime.
   assert.equal(translate('en', 'constructor'), 'constructor');
+  // @ts-expect-error Chinese copy is not a message ID.
+  assert.equal(translate('en', '工作目录：{0}'), '工作目录：{0}');
+  assert.equal(translate('zh-CN', 'cli.workingDirectory', 'nav.memoryProfiles'), '工作目录：nav.memoryProfiles');
 });
 
 test('simultaneous locale contexts do not change each other or the background chat default', async () => {
   const results = await Promise.all(['en', 'zh-CN'].map(locale => withLocale(locale as 'en' | 'zh-CN', async () => {
     await new Promise(resolve => setTimeout(resolve, locale === 'en' ? 10 : 1));
-    return tr('未找到任务');
+    return tr("tasks.notFound");
   })));
   assert.deepEqual(results, ['Task not found', '未找到任务']);
-  assert.equal(tr('未找到任务'), '未找到任务');
+  assert.equal(tr("tasks.notFound"), '未找到任务');
 });
 
 test('CLI follows system language, supports explicit overrides, and keeps machine output clean', t => {

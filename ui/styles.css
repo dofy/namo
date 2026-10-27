@@ -109,6 +109,9 @@ summary { cursor: pointer; font-size: 13px; color: #47657c; }
 .audit > div { padding: 8px 0; border-bottom: 1px solid #dce3e9; }
 .audit p { margin: 3px 0; }
 .profiles-page { max-width: 820px; }
+.memory-profiles-page { max-width: 820px; }
+.memory-profiles-page .rt-TabsTriggerInner, .memory-profiles-page .rt-TabsTriggerInnerHidden { gap: 8px; }
+.memory-profiles-panel { padding-top: 20px; }
 .profile-identity { display: flex; gap: 10px 18px; flex-wrap: wrap; margin: 20px 0; overflow-wrap: anywhere; }
 .profile-account { margin: 10px 0 24px; }
 .profile-account .profile-identity { margin: 12px 0; }
@@ -156,6 +159,10 @@ footer { font-size: 12px; color: #637180; margin-top: 65px; padding-bottom: 12px
   .save-bar > button { flex: 1; }
   .issue-row { padding: 14px; }
   footer { margin-top: 35px; }
+}
+@media (max-width: 480px) {
+  .memory-profiles-header { flex-direction: column; gap: 12px; }
+  .memory-profiles-page .rt-TabsList { --tab-padding-x: 4px; --tab-inner-padding-x: 4px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
