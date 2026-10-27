@@ -46,3 +46,7 @@ For manually managed **foreground** deployments, `github.tokenEnv` may name an e
 Configuration, scopes, fake HTTP failures, restart and revocation are covered by local tests. Real private-repository acceptance uses the explicitly selected login or token and is recorded separately from deployment.
 
 本地测试覆盖配置、身份范围、模拟 HTTP 失败、重启与撤销。真实私有仓库验收使用明确选择的本机登录或令牌，并与部署状态分开记录。
+
+On 2026-10-27, local gh login passed real private-PR check-run and commit-status observation, durable wait/resume and Feishu receipt confirmation. See the [delivery record](archive/local-gh-delivery-20261027.md). Separate-token and other live failure scenarios are not implied by that result.
+
+2026-10-27，本机 gh 登录已通过真实私有 PR 的 check run / commit status 读取、持久等待恢复及飞书收件确认。见[交付记录](archive/local-gh-delivery-20261027.md)。这不替代独立令牌或其他真实失败场景的验收。
