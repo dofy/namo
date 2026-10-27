@@ -71,7 +71,9 @@ test('simultaneous answer and cancellation use independent SQLite writers; ackno
   await until(() => new Tasks(f.store).get(f.store.get('root')?.taskId ?? '')?.state === 'waiting');
   const taskId = f.store.get('root')!.taskId!, waitId = new Waits(f.store).current(taskId)!.id;
   await f.engine.stop();
-  const answer = message('answer', 'blue'); f.store.enqueue(answer);
+  // Persist the real resume command. A bare unlinked "blue" is a new task if
+  // cancellation wins, which would test routing a new instruction, not resume.
+  const answer = message('answer', `/resume ${waitId} blue`); f.store.enqueue(answer);
   const moduleUrl = (name: string) => new URL(`../src/${name}.js`, import.meta.url).href;
   const children = ['answer', 'cancel'].map(action => {
     const code = `import {Store} from ${JSON.stringify(moduleUrl('store'))};
