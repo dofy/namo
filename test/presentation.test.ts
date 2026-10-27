@@ -55,8 +55,7 @@ test('long task gets one compact progress card and completion does not resend it
 test('queued task reports waiting, and never-sent progress is suppressed on cancellation', async t => {
   const hold = held(), f = fixture(t, hold.runtime); f.engine.start(); f.engine.accept(message('active'));
   await wait(hold.started); f.engine.accept(message('queued')); f.age('queued');
-  await f.engine.pump(); await wait(() => f.cards.length === 1);
-  assert.match(JSON.stringify(f.cards[0]), /排队中|正在排队/);
+  await f.engine.pump(); await wait(() => f.cards.some(card=>/排队中|正在排队/.test(JSON.stringify(card))));
   f.engine.accept(message('queued-two')); f.age('queued-two'); f.tasks.progress();
   const task = f.tasks.get(f.store.get('queued-two')!.taskId!)!;
   assert.equal(f.tasks.cancel(task), true);

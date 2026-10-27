@@ -15,7 +15,7 @@ export interface Task extends Workstream {
 export interface Revision { inboxKey: string; text: string; version: number; dispatch: string; }
 export const scopeOf = (m: Incoming) => m.envelope?.scopeKey ?? m.chatKey;
 export const sessionKey = (w: string) => `workstream:${w}`;
-export const PROGRESS_DELAY_MS = 12_000;
+export const PROGRESS_DELAY_MS = 200;
 const id = (prefix: string) => `${prefix}-${randomBytes(6).toString('hex').toUpperCase()}`;
 export class TaskInputError extends Error {}
 export function policyHash(c?: Config['codex']): string {
@@ -148,6 +148,9 @@ export class Tasks {
     return this.store.transaction(() => {
       if (!this.store.claim(t.inboxKey)) throw new Error('task_already_claimed');
       this.store.db.prepare("UPDATE tasks SET state='running',startedAt=COALESCE(startedAt,?) WHERE id=? AND state='queued'").run(Date.now(), t.id);
+      // A quick wait may have suppressed the never-sent acknowledgement. Resume
+      // that same intent, never recreate or retry an accepted/uncertain card.
+      this.store.db.prepare("UPDATE outbox SET state='deferred',error=NULL WHERE inboxKey=? AND kind='progress' AND state='suppressed' AND error='progress_obsolete' AND payload IS NULL").run(t.inboxKey);
       this.store.db.prepare("UPDATE task_messages SET dispatch='applied' WHERE taskId=? AND version<=? AND dispatch='pending'").run(t.id, t.inputVersion);
       const run = randomUUID();
       this.store.db.prepare("INSERT INTO task_runs(id,taskId,inputVersion,state,startedAt) VALUES(?,?,?,'running',?)").run(run, t.id, t.inputVersion, Date.now());
@@ -224,7 +227,7 @@ export class Tasks {
           this.store.db.prepare("UPDATE outbox SET state='suppressed',error='progress_obsolete' WHERE id=?").run(row.id);
         } else if (row.state === 'pending' || now - Number(row.createdAt) >= delay) {
           this.store.db.prepare("UPDATE outbox SET state='pending',content=? WHERE id=? AND payload IS NULL")
-            .run(row.execution === 'queued' ? '正在排队，开始处理后会继续回复。' : '正在处理，完成后会在这里回复。', row.id);
+            .run(row.execution === 'queued' ? '已收到，正在排队；开始处理后会继续回复。' : '已收到，正在处理；完成后会在这里回复。', row.id);
         }
       }
     });

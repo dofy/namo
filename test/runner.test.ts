@@ -74,8 +74,9 @@ function fixture(t: { after(fn: () => Promise<void>): void }) {
   return { dir, data, project, file, config, store, tasks, receiver, deliveries, job, calls };
 }
 
-test('detached worker finishes while receiver is stopped; restart consumes one saved result and evidence', async t => {
-  const f = fixture(t), first = f.receiver(); first.start(); first.accept(message('first'));
+test('detached worker finishes offline with delayed feedback; restart consumes one saved result and evidence', async t => {
+  const f = fixture(t); f.config.feishu.progressDelayMs=12_000;
+  const first = f.receiver(); first.start(); first.accept(message('first'));
   await wait(() => f.calls() === 1 && !!f.job()?.runtimePid);
   const before = f.job(), taskId = f.store.get('first')!.taskId!;
   assert.equal(f.store.db.prepare("SELECT state FROM outbox WHERE inboxKey='first' AND kind='progress'").get()?.state,'deferred');
