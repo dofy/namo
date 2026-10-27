@@ -51,7 +51,7 @@ CLI / receiver 启动和周期调度调用：
 
 ```ts
 const waits = new ExternalWaits(store);
-const adapter = new GitHubRestAdapter({ token }); // token 可省略
+const adapter = new ScopedGitHubAdapter(store, config.github); // 受保护配置与真实任务身份
 await waits.pollOpen(adapter); // 默认每批最多 4 条，单条观察共享 15 秒期限
 
 for (const wait of waits.ready()) {
@@ -71,9 +71,11 @@ for (const wait of waits.ready()) {
 `GitHubRestAdapter`：
 
 - 只向固定的 `https://api.github.com` 发 GET 请求，不接受任意 API base URL，不执行 `gh`，也不读取主机的 GitHub 登录。
-- 默认不认证，适用于公开仓库；私有仓库可由受保护配置在进程内注入 token。token 不进入等待记录、错误或日志。
+- 默认不认证，适用于公开仓库；产品通过 ScopedGitHubAdapter 对受保护配置中的确切仓库、用户和私聊任务再次鉴权后才注入 token。token 不进入等待记录、错误或日志。配置入口和权限见[私有 GitHub](private-github.md)。
 - 先读取 PR HEAD，再读取固定 SHA 上的 exact check runs / commit statuses，最后再次读取 PR HEAD，缩小检查期间换 HEAD 的竞态窗口。
 - 单请求 15 秒总期限、响应体默认 2 MB 上限；禁止重定向；HTTP、格式、限流与网络错误只输出有限错误码。
 - check run 同名同 app 返回多条、commit status context 返回多条、检查缺失或平台返回未知状态时全部 fail closed 为 `unknown`。
 
 持续离线、GitHub 限流或 token 权限不足时，系统不能保证按时观察到结果；等待只会保持 open 直到下次轮询或超时。平台 API 成功、Namo 已持久化 ready、恢复任务已消费和最终消息已送达仍是四个不同事实。
+
+私有观察在恢复前重新读取配置、校验授权范围。令牌替换、仓库/用户撤销后的旧 ready 结果不会直接恢复；到期仍正常结束。此处代码片段用于说明底层接口，产品应通过 `pollAndResume` 的授权复核路径消费结果。

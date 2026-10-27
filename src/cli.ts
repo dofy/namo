@@ -47,10 +47,11 @@ async function main(): Promise<void> {
   if (args.includes('--help') || args.includes('-h') || ['help', '-h', '--help'].includes(command)) { console.log(help()
     + '\n  migrate              OpenClaw import preview / OpenClaw 导入预览（不会自动接管）'
     + '\n  migrate inspect      Read-only source metadata / 只读来源元数据检查'
+    + '\n  github configure / status  ' + tr('配置私有仓库检查读取，或查看配置状态')
     + '\n  approval             Controlled Git push approval / 受控 Git push 审批'
     + '\n\n' + tr('界面语言：--lang system|en|zh-CN，或设置 NAMO_LANG；默认跟随系统，无法匹配时使用英文。') + '\n' + tr('项目：{0}', PROJECT_URL)); return; }
-  if (!['resolve','migrate','approval'].includes(command)&&positional.length > (['agent', 'service', 'config','issue'].includes(command) ? 2 : 1)) throw new Error(tr("命令参数过多，运行 namo --help 查看用法"));
-  const known = ['approval','migrate','ui','issues','issue','resolve','init', 'doctor', 'agent', 'login', 'start', 'status', 'logs', 'service', 'config', 'check'];
+  if (!['resolve','migrate','approval'].includes(command)&&positional.length > (['agent', 'service', 'config','issue','github'].includes(command) ? 2 : 1)) throw new Error(tr("命令参数过多，运行 namo --help 查看用法"));
+  const known = ['github','approval','migrate','ui','issues','issue','resolve','init', 'doctor', 'agent', 'login', 'start', 'status', 'logs', 'service', 'config', 'check'];
   if (!known.includes(command)) throw new Error(tr("未知命令：{0}。运行 namo --help", command));
   const file = configFile(flag('--config'));
   if (command === 'config') { if (positional[1] !== 'path') throw new Error(tr("用法：namo config path")); console.log(file); return; }
@@ -85,6 +86,12 @@ async function main(): Promise<void> {
     return;
   }
   if (!existsSync(file)) throw new Error(tr("尚无配置，请先运行 namo init，或通过 --config 指定现有配置"));
+  if(command==='github'){
+    if(positional[1]==='status'){console.log(JSON.stringify(new Management(file).config().github,null,2));return;}
+    if(positional[1]!=='configure')throw new Error(tr('用法：namo github configure / status'));
+    if(!process.stdin.isTTY||!process.stdout.isTTY)throw new Error(tr('请在本机交互终端配置 GitHub，不要通过参数或管道输入凭据。'));
+    const ui=new TerminalPrompter();try{await(await import('./github-cli.js')).configureGitHub(file,ui);}finally{ui.close();}return;
+  }
   if(command==='ui') {
     const {startUi,openUi}=await import('./ui.js');const ui=await startUi(new Management(file));
     try{await openUi(ui.entryUrl);}catch(e){await ui.close();throw e;}
@@ -102,7 +109,7 @@ async function main(): Promise<void> {
     }return;
   }
   const configRevision=digest(readFileSync(file,'utf8'));
-  const config = loadConfig(file); redact = makeRedactor([config.feishu.appSecret]);
+  const config = loadConfig(file); redact = makeRedactor([config.feishu.appSecret,config.github?.token??'']);
   if(configRevision!==digest(readFileSync(file,'utf8')))throw new Error(tr("配置正在修改，请重试"));
   const dbFile = join(config.dataDir, 'bot.sqlite');
   if (command === 'approval') {

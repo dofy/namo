@@ -29,7 +29,9 @@ export interface ConfigView {
   values: ConfigValues;
   file: string;
   feishu: { appId: string; domain: string; secretConfigured: boolean; pairedUsers: number; restrictedChats: number };
+  github?: { credentialConfigured:boolean; credentialSource:string; tokenEnv?:string; repositories:string[]; allowedUserIds:string[] };
 }
+export interface GitHubConfigPatch { github: {repositories:string[];allowedUserIds:string[]};newGithubToken?:string;clearGithubToken?:boolean }
 export interface TaskSummary {
   id: string; workstreamId: string; project: string | null; state: string; inputVersion: number;
   startedAt: number | null; finishedAt: number | null; error: string | null;
@@ -69,10 +71,11 @@ export interface AssistantValues {
 export interface AssistantView { schema:1; version:number; updatedAt:number|null; active:boolean; values:AssistantValues }
 export type MemoryViewKind = 'preference' | 'user_fact' | 'project_knowledge' | 'task_summary' | 'history_quote' | 'handoff';
 export type MemoryViewStatus = 'active' | 'pending_review' | 'disabled' | 'deleted';
-export interface MemoryViewScope { kind:'owner'|'project'|'chat'; ownerId:string; project:string|null; chatKey:string|null }
+export interface MemoryViewScope { kind:'owner'|'project'|'chat'|'global'|'local'; ownerId:string; project:string|null; chatKey:string|null }
 export interface MemoryViewItem {
   id:string; version:number; kind:MemoryViewKind; status:MemoryViewStatus; scope:MemoryViewScope;
   source:{kind:string;ref:string}; text:string|null; usable:boolean; contentChars:number;
+  visibility?:{privacy:'shared'|'private'|'chat';chatKey:string|null};
   createdAt:number; updatedAt:number; expiresAt:number|null;
 }
 export interface MemoryImportCandidate {

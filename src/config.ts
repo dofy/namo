@@ -3,6 +3,7 @@ import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { configFile } from './paths.js';
+import { parseGitHubAccessConfig, type GitHubAccessConfig } from './github-access.js';
 
 export interface Config {
   file: string;
@@ -24,6 +25,7 @@ export interface Config {
     remotes: Array<{ name: string; url: string; transport: 'https' | 'ssh' | 'local-test'; credentialHelpers?: string[] }>;
   };
   concurrency: number;
+  github?: GitHubAccessConfig;
   agent?: 'codex';
 }
 
@@ -42,6 +44,9 @@ export function parseConfig(d: any, absolute: string): Config {
   };
   const f = d.feishu ?? {};
   const c = d.codex ?? {};
+  const github=parseGitHubAccessConfig(d.github,process.env);
+  const pairedUserIds=list(f.allowedUserIds??[],'feishu.allowedUserIds');
+  if(github?.allowedUserIds.some(id=>!pairedUserIds.includes(id)))throw new Error('github_access_user_not_paired');
   const g = d.gitApprovals ?? {};
   if (!g || typeof g !== 'object' || Array.isArray(g)) throw new Error('gitApprovals must be an object');
   if (d.agent !== undefined && d.agent !== 'codex') throw new Error(tr("当前版本只支持 codex；Claude Code 和 OpenClaw Gateway 尚未接入"));
@@ -88,11 +93,11 @@ export function parseConfig(d: any, absolute: string): Config {
     remoteNames.add(value.name); gitRemotes.push({ name: value.name, url: value.url, transport: value.transport, credentialHelpers: value.credentialHelpers ? [...new Set(value.credentialHelpers as string[])] : undefined });
   }
   return {
-    file: absolute, dataDir, concurrency, agent: 'codex',
+    file: absolute, dataDir, concurrency, agent: 'codex', github,
     feishu: {
       appId: f.appId ?? '',
       appSecret: f.appSecret || process.env[f.appSecretEnv ?? 'FEISHU_APP_SECRET'] || '',
-      allowedUserIds: list(f.allowedUserIds ?? [], 'feishu.allowedUserIds'),
+      allowedUserIds: pairedUserIds,
       allowedChatIds: list(f.allowedChatIds ?? [], 'feishu.allowedChatIds'),
       requireMention: f.requireMention !== false,
       cards: f.cards === true, reactions:f.reactions!==false, progressUpdates:f.progressUpdates!==false,

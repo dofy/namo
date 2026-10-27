@@ -62,7 +62,8 @@ export type ExternalPollAction = Readonly<{ externalWaitId: string; taskWaitId?:
  * Poll outside any model turn, atomically queue each ready result once, and
  * terminate timeout/stale waits without executing another model turn.
  */
-export async function pollAndResume(store: Store, adapter: GitHubObservationAdapter, now = Date.now(), clock?: () => number): Promise<ExternalPollAction[]> {
+export async function pollAndResume(store: Store, adapter: GitHubObservationAdapter, now = Date.now(), clock?: () => number,
+  currentAdapter:()=>GitHubObservationAdapter=()=>adapter): Promise<ExternalPollAction[]> {
   const waits = new ExternalWaits(store);
   const wallStartedAt = Date.now();
   const currentTime = () => clock ? clock() : now + Math.max(0, Date.now() - wallStartedAt);
@@ -77,6 +78,18 @@ export async function pollAndResume(store: Store, adapter: GitHubObservationAdap
       actions.push({ externalWaitId: external.id, taskWaitId, action: ended ? external.state : 'deferred' });
       continue;
     }
+    // Recheck saved ready observations too: a restart must not resume private
+    // results after the credential, repository or user grant has been revoked.
+    if(external.expiresAt<=currentTime()){
+      // Consume only to transition an expired ready record; this callback must
+      // never run because consume checks expiry before exposing evidence.
+      waits.consume(external.id,{taskId:external.taskId,ownerId:external.ownerId,chatId:external.chatId},()=>{throw new ExternalWaitBridgeError('external_wait_expiry_race');},currentTime());
+      const ended=endExternalTaskWait(store,taskWaitId,external.id,'timed_out',currentTime());
+      actions.push({externalWaitId:external.id,taskWaitId,action:ended?'timed_out':'deferred'});continue;
+    }
+    try {if(currentAdapter().authorize?.(external.target,external)!==external.observation?.authorizationScope)
+      throw new ExternalWaitBridgeError('external_wait_access_changed');}
+    catch {actions.push({externalWaitId:external.id,taskWaitId,action:'deferred'});continue;}
     let resumed = false;
     const settledAt = currentTime();
     try {

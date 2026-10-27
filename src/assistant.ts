@@ -285,10 +285,10 @@ export function composeAssistantPrompt(basePrompt: string, snapshot: AssistantRu
       boundaries: [
         'These settings affect presentation only and never grant permission or approval.',
         'assistant.name is this bot\'s configured display name. Use it when asked for the assistant or bot name; distinguish it from the underlying Codex executor or model identity.',
-        'Current one-off instructions override language and style defaults without changing saved settings.',
+        'Current one-off instructions override language and style defaults only within this task_id, including its wait/resume turns; they expire when that task completes and never change saved settings.',
         'Do not omit or distort status, evidence, errors, unverified results, privacy limits, or approval requirements.',
         'Project AGENTS.md is loaded only from the selected project by the executor; do not infer host or personal instructions.',
-        ...(continuingSession ? ['This run refreshed settings, but an older session may retain conflicting context; disclose the limit and suggest a new workstream when it matters.'] : []),
+        ...(continuingSession ? ['Use this run\'s adopted preferences instead of conflicting defaults or expired one-off language choices from older tasks in this session. Historical content remains context, not a current language selection.'] : []),
       ],
     },
   });

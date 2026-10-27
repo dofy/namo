@@ -25,15 +25,15 @@ Namo manages messages, queues, projects, sessions and execution boundaries. The 
 - **Independent runners:** active tasks run separately from the receiver. Uncertain or interrupted work is retained for review instead of blindly rerunning it.
 - **Execution evidence:** file patches, command exit codes, artifact checks and Git HEAD snapshots, with capture limits made explicit.
 - **Assistant and scoped memory:** opt-in assistant identity and style, versioned owner/project/chat memories, explicit correction/disable/delete, and bounded handoffs. Memories never grant operation authority.
-- **Materials and artifacts:** bounded reading of merged-forward text and direct UTF-8 text files, plus authorized delivery of selected task files. Image artifacts can be delivered as files, but image input is not interpreted.
+- **Materials and artifacts:** bounded reading of merged-forward text and direct UTF-8 text files, plus authorized delivery of selected task files. Direct PNG/JPEG images are passed to Codex as bounded, immutable image inputs.
 - **Local workbench:** a dashboard, searchable task and session lists, user/project/status/date filters, pagination, details, profiles, assistant settings, memory review, configuration and connection diagnostics.
 - **Concise chat replies:** durable acceptance reactions, original-message/topic routing, safe rich text and a single updatable progress card. Buttons require the Feishu callback subscription.
-- **Controlled continuations:** exact-head public GitHub check waits can resume the same task without model polling; a limited-protection Git push approval path binds one approval to one task, commit, remote and branch.
+- **Controlled continuations:** exact-head GitHub check waits (public, or explicitly configured private repositories) can resume the same task without model polling; a limited-protection Git push approval path binds one approval to one task, commit, remote and branch.
 - **Local service management:** guided setup, isolated official Codex login, diagnostics, immutable service releases and macOS background service commands.
 
 The workbench and CLI support **English and Simplified Chinese**. They follow the system language by default and fall back to English for unsupported languages. Task content, user input and execution logs retain their original language.
 
-Schema 8 includes the roadmap integrations above and has passed review and deployment on the maintained local instance. Existing installations require an explicit service upgrade. Image input, PDF/Office/audio material interpretation, reminders, background delegation and offline message backfill remain unsupported. See the [development plan](docs/development-plan.md) for deployment status and outstanding real-world acceptance checks.
+Schema 8 includes the roadmap integrations above and has passed review and deployment on the maintained local instance. Existing installations require an explicit service upgrade. PDF/Office/audio material interpretation, reminders, background delegation and offline message backfill remain unsupported. See the [development plan](docs/development-plan.md) for deployment status and outstanding real-world acceptance checks.
 
 ## Get started
 
@@ -99,7 +99,7 @@ See the [command reference (Chinese)](docs/getting-started.md#聊天命令) and 
 - Write permission also permits file deletion. Cancellation, timeout or context reset does not undo completed actions.
 - Git push approvals bind an exact task, owner/chat, project, configured remote, branch, HEAD SHA, configuration revision and expiry, then allow a single execution attempt. This is **limited protection**, not complete enforcement: a generally networked agent or another credential path could bypass the approval entrypoint. Deployment is not implemented as a generic target.
 - OpenClaw import requires an explicitly selected source file, supported version and application. It never imports provider authentication, gateways, plugins or tasks, and it cannot automatically take over a receiver; cutover and rollback remain an explicit, verified manual gate.
-- GitHub external waits use unauthenticated read-only access by default and therefore target public repositories. Private-repository token injection exists only as an adapter capability and is not exposed in product configuration.
+- GitHub waits default to anonymous public access. Configure a separate fine-grained token, exact repositories and paired users in **Connections → GitHub** or `namo github configure`; private access is limited to direct messages and never authorizes Git pushes. See [private GitHub setup](docs/private-github.md).
 - A platform send receipt means the platform accepted the message, not that the user read it. Ambiguous sends are retained for review.
 - A sleeping or disconnected host cannot provide continuous service. There is no offline history backfill.
 - Never commit `config.local.json`, `data/`, logs, tokens or authentication files. Namo does not automatically import personal MCP servers, plugins or third-party model gateways.

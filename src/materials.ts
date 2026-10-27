@@ -46,7 +46,7 @@ export interface MaterialReadAdapter {
   readResource(request: Readonly<{
     messageId: string;
     fileKey: string;
-    kind: 'file';
+    kind: 'file' | 'image';
     chatId: string;
     maxBytes: number;
     deadlineMs: number;
@@ -67,6 +67,8 @@ export interface MaterialNode {
   untrusted: true;
   text?: string;
   bytes?: number;
+  /** Host-verified image reference, never a path or encoded image in the prompt. */
+  imageId?: string;
   error?: string;
 }
 

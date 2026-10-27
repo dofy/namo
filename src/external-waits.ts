@@ -39,6 +39,8 @@ export interface GitHubObservation {
   pullState: 'open' | 'closed' | 'unknown';
   checks: readonly CheckObservation[];
   observedAt: number;
+  /** Credential/scope fingerprint only, never the credential itself. */
+  authorizationScope?: string;
 }
 
 export interface ExternalWait {
@@ -83,7 +85,8 @@ export interface ExternalWaitResume {
 }
 
 export interface GitHubObservationAdapter {
-  observe(target: Readonly<GitHubTarget>, checks: readonly RequiredCheck[], deadlineMs: number): Promise<GitHubObservation>;
+  authorize?(target: Readonly<GitHubTarget>, context: ExternalWaitBinding): string|undefined;
+  observe(target: Readonly<GitHubTarget>, checks: readonly RequiredCheck[], deadlineMs: number, context?:ExternalWaitBinding): Promise<GitHubObservation>;
 }
 
 export interface ExternalWaitBinding { taskId: string; ownerId: string; chatId: string }
@@ -144,6 +147,7 @@ function observationHash(value: GitHubObservation): string {
 
 function validateObservation(value: GitHubObservation): void {
   if (!value || value.source !== 'github_rest' || !Number.isSafeInteger(value.observedAt) || value.observedAt < 0
+    || value.authorizationScope!==undefined && !/^[a-f0-9]{64}$/.test(value.authorizationScope)
     || !['open','closed','unknown'].includes(value.pullState) || !Array.isArray(value.checks))
     throw new ExternalWaitError('external_wait_invalid_observation');
   validateTarget(value.target);
@@ -337,7 +341,7 @@ export class ExternalWaits {
     if (wait.expiresAt <= now) { this.expire(now); return this.get(id); }
     try {
       const deadlineMs = Date.now() + Math.min(wait.expiresAt - now, POLL_TIMEOUT_MS);
-      const observation = await beforeDeadline(adapter.observe(wait.target, wait.requiredChecks, deadlineMs), deadlineMs);
+      const observation = await beforeDeadline(adapter.observe(wait.target, wait.requiredChecks, deadlineMs,wait), deadlineMs);
       return this.apply(id, wait.revision, observation, currentTime());
     } catch { return this.failedPoll(id, wait.revision, currentTime()); }
   }

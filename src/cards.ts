@@ -5,19 +5,19 @@ import { digest } from './paths.js';
 import { readEvidence } from './evidence.js';
 import { hasExecution, taskStateLabel, taskStatus } from './presentation.js';
 import { progressState } from './feedback.js';
-import { richPost, hasMarkdown, fenceState } from './richtext.js';
+import { cardMarkdown, hasMarkdown, openFence } from './richtext.js';
 import { Waits, WaitInputError, linkedExternalWait } from './waits.js';
 
 export interface CardEvent { operator?: { open_id?: string }; context?: { open_chat_id?: string; open_message_id?: string }; action?: { value?: { namo?: string } }; }
 const plain=(content:string)=>({tag:'plain_text',content});
 export function renderTaskCard(t: Task, content: string, kind: string, part: number, actions: { action:string; token:string; label?: string }[] = []): object {
   const title=part?'回复（续）':kind==='external-wait'?'等待外部检查':taskStateLabel(t.state);
-  const body=kind==='result'&&hasMarkdown(content)?{tag:'lark_md',content:(richPost(content) as {zh_cn:{content:{text:string}[][]}}).zh_cn.content[0][0].text}:plain(content);
+  const body=kind==='result'&&hasMarkdown(content)?{tag:'markdown',content:cardMarkdown(content)}:{tag:'div',text:plain(content)};
   const answers=actions.filter(a=>a.action.startsWith('answer:')),controls=actions.filter(a=>!a.action.startsWith('answer:'));
   const buttons=(group:typeof actions)=>({tag:'action',actions:group.map(a=>({tag:'button',text:plain(a.label??(a.action==='cancel'?'停止任务':'查看详情')),type:a.action.startsWith('answer:')?'primary':'default',value:{namo:a.token},
     ...(a.action==='cancel'?{confirm:{title:plain('停止这项任务？'),text:plain('已发生的操作不会自动撤销。')}}:{})}))});
-  return {config:{wide_screen_mode:true},header:{title:plain(title),template:kind==='progress'?'blue':t.state==='succeeded'?'green':t.state==='cancelled'?'grey':'orange'},
-    elements:[{tag:'div',text:body},
+  return {config:{wide_screen_mode:true,update_multi:true},header:{title:plain(title),template:kind==='progress'?'blue':t.state==='succeeded'?'green':t.state==='cancelled'?'grey':'orange'},
+    elements:[body,
       ...(answers.length?[buttons(answers),{tag:'hr'}]:[]),
       ...(t.project&&!part?[{tag:'note',elements:[plain(`项目：${t.project}`)]}]:[]),
       ...(controls.length?[buttons(controls)]:[])]};
@@ -25,13 +25,13 @@ export function renderTaskCard(t: Task, content: string, kind: string, part: num
 export class Cards {
   constructor(private store: Store) {}
   prepare(output: Outbox): object | undefined {
-    if(output.payload) {const p=JSON.parse(output.payload);return p.textOnly?undefined:p;}
+    if(output.payload) {const p=JSON.parse(output.payload);return p.textOnly||p.noCard?undefined:p;}
     if(!['progress','result'].includes(output.kind) && !output.kind.startsWith('wait:')) return;
     const task=this.store.db.prepare('SELECT * FROM tasks WHERE inboxKey=?').get(output.inboxKey) as unknown as Task|undefined;
     if(!task) return;
     return this.store.transaction(()=>{
       if(output.kind==='result'&&task.state==='succeeded'&&!readEvidence(this.store,task.id).some(hasExecution)) {
-        this.store.db.prepare('UPDATE outbox SET payload=? WHERE id=?').run(JSON.stringify({textOnly:true}),output.id);
+        this.store.db.prepare('UPDATE outbox SET payload=? WHERE id=?').run(JSON.stringify({noCard:true}),output.id);
         return;
       }
       const wait=output.kind.startsWith('wait:')?new Waits(this.store).get(output.kind.slice(5)):undefined;
@@ -42,7 +42,8 @@ export class Cards {
         .run(a.token,output.id,task.id,a.action,task.inputVersion,Date.now()+900_000);
       const content=output.kind==='progress'?`${output.content}\n\n${progressState(this.store,task).content}`:choices&&!output.part?`${wait!.question}\n\n点击下面的答案继续，也可以引用这条消息自由回复。`:output.content;
       const prefix=output.part?this.store.db.prepare('SELECT content FROM outbox WHERE inboxKey=? AND kind=? AND part<? ORDER BY part').all(output.inboxKey,output.kind,output.part).map(row=>String(row.content)).join(''):'';
-      const display=(output.kind==='result'&&fenceState(prefix)?'```\n':'')+content;
+      const fence=output.kind==='result'?openFence(prefix):undefined;
+      const display=(fence?fence+'\n':'')+content;
       const payload=renderTaskCard(task,display,wait&&linkedExternalWait(this.store,wait.id)?'external-wait':output.kind,output.part,actions);
       this.store.db.prepare('UPDATE outbox SET payload=? WHERE id=?').run(JSON.stringify(payload),output.id);
       return payload;

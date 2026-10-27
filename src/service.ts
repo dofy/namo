@@ -193,7 +193,10 @@ export async function serviceAction(action: string, c: Config): Promise<Record<s
       catch (error) { unlinkSync(plist); throw error; }
     } finally { finishInstall(); }
     const r = spawnSync('launchctl', ['bootstrap', domain(), plist], { stdio: 'pipe', timeout: 10000 });
-    if (r.status !== 0) { unlinkSync(plist); throw new Error(tr("launchd 安装失败，请确认处于 macOS 桌面登录会话")); }
+    // A timeout or failed command receipt does not prove launchd rejected the
+    // registration. Keep both files so status/stop/start can reconcile it without
+    // guessing or launching a second receiver.
+    if (r.status !== 0) throw new Error(tr("launchd 启动结果未确认，服务登记已保留。请先运行 namo service status 核对；确认未运行后可用 namo service start 重试"));
   } else if (action === 'upgrade') {
     if (!existsSync(plist)) throw new Error(tr("服务未安装，请先运行 namo service install"));
     const finishUpgrade = acquireLock(join(c.dataDir, 'config-edit.lock'));

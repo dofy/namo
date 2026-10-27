@@ -18,20 +18,63 @@ export function inline(text: string): Node[] {
   if (cursor < text.length) out.push(literal(text.slice(cursor)));
   return out.length ? out : [literal(' ')];
 }
-export const hasMarkdown=(text:string)=> /(?:\*\*|`|\[[^\]]+\]\(|(?:^|\n)(?:#{1,6}|[-*]|[0-9]+\.)\s)/.test(text);
+export const hasMarkdown=(text:string)=> /(?:\*\*|`|~~|(?<!\w)_[^_\n]+_(?!\w)|(?<!\w)\*[^*\n]+\*(?!\w)|\[[^\]]+\]\(|(?:^|\n)\s{0,3}(?:#{1,6}\s|>\s?|[-+*]\s|[0-9]+[.)]\s|~{3,}|\|.*\|)|(?:^|\n)\s*:?-{3,}:?\s*\|)/.test(text);
 export const plainMessage=(text:string)=>text.replace(/<(?=\/?at\b)/gi,'<\u200b');
-export function fenceState(text:string):boolean {return (text.match(/^\s*```/gm)?.length??0)%2===1;}
-export function safeMarkdown(text:string):string {
-  // Escape platform tags before Markdown parsing; images never trigger URL fetches.
-  return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/!\[([^\]\n]*)\]\([^\n)]*\)/g,'[image: $1]')
-    .replace(/\[([^\]\n]+)\]\(([^\n)]*)\)/g,(whole,label:string,href:string)=>{
-      try {const url=new URL(href);return ['http:','https:'].includes(url.protocol)&&!url.username&&!url.password?whole:label;}catch{return label;}
-    });
+export function openFence(text:string):string|undefined {
+  let fence:string|undefined;
+  for(const line of text.split('\n')){
+    const match=/^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if(!match)continue;
+    if(!fence)fence=match[1];
+    else if(match[1][0]===fence[0]&&match[1].length>=fence.length&&!match[2].trim())fence=undefined;
+  }
+  return fence;
 }
-export function richPost(text: string, initiallyFenced = false): object {
-  const framed=(initiallyFenced?'```\n':'')+text;
-  const balanced=framed+(fenceState(framed)?'\n```':'');
+export function fenceState(text:string):boolean {return !!openFence(text);}
+const balanceFences=(text:string):string=>{const fence=openFence(text);return text+(fence?'\n'+fence:'');};
+/** Transform prose only: code fences must keep their literal contents. */
+function proseLines(text:string, transform:(line:string,index:number,lines:string[])=>string):string {
+  let fence:{mark:string;length:number}|undefined;
+  const lines=text.split('\n');
+  return lines.map((line,index)=>{
+    const match=/^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if(fence){if(match&&match[1][0]===fence.mark&&match[1].length>=fence.length&&!match[2].trim())fence=undefined;return line;}
+    if(match){fence={mark:match[1][0],length:match[1].length};return line;}
+    return transform(line,index,lines);
+  }).join('\n');
+}
+const safeLink=(href:string):boolean=>{try {const url=new URL(href);return ['http:','https:'].includes(url.protocol)&&!url.username&&!url.password;}catch{return false;}};
+export function safeMarkdown(text:string):string {
+  // Neutralize platform tags and images even in code: not every client supports
+  // the same fence syntax. Retain > so ordinary blockquotes can still render.
+  return text.split('\n').map(line=>{
+    const definition=/^ {0,3}\[([^\]]+)\]:\s*(?:<([^>]*)>|(\S+))(?:\s+.*)?$/.exec(line);
+    if(definition&&!safeLink(definition[2]??definition[3]))line=definition[1];
+    return line.replace(/!\[([^\]\n]*)\](?:\([^\n)]*\)|\[[^\]\n]*\])?/g,'[image: $1]')
+      .replace(/\[([^\]\n]+)\]\(([^\n)]*)\)/g,(whole,label:string,href:string)=>safeLink(href)?whole:label)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  }).join('\n');
+}
+/** JSON 1.0 cards lack headings, blockquotes and Markdown tables. */
+export function cardMarkdown(text:string):string {
+  let table=false;
+  const adapted=proseLines(text,(line,index,lines)=>{
+    const separator=/^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(lines[index+1]??'');
+    const starts=line.includes('|')&&separator;
+    if(starts||table&&line.includes('|')){
+      const prefix=table?'':'```text\n';table=true;
+      const next=lines[index+1]??'';
+      if(!next.includes('|')||/^ {0,3}(`{3,}|~{3,})/.test(next)){table=false;return prefix+line+'\n```';}
+      return prefix+line;
+    }
+    const prefix=table?'```\n':'';table=false;
+    return prefix+line.replace(/^ {0,3}#{1,6}[ \t]+(.+?)\s*$/,(_match,title:string)=>`**${title.replace(/[ \t]+#+[ \t]*$/,'')}**`).replace(/^ {0,3}>\s?/,'│ ');
+  });
+  return safeMarkdown(balanceFences(adapted));
+}
+export function richPost(text: string, initiallyFenced: boolean|string = false): object {
+  const framed=(initiallyFenced?(typeof initiallyFenced==='string'?initiallyFenced:'```')+'\n':'')+text;
+  const balanced=balanceFences(framed);
   return {zh_cn:{title:'',content:[[{tag:'md',text:safeMarkdown(balanced)}]]}};
 }
 /** Bound serialized payload bytes, split at lines first, retain source character order. */

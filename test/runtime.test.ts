@@ -23,6 +23,8 @@ createInterface({input:process.stdin}).on('line', line=>{
  if(m.method==='turn/start'){
   if(m.params.sandboxPolicy || m.params.permissions!=='feishu-bot')return write({id:m.id,error:{code:-32600,message:'legacy permissions rejected'}});
   const prompt=m.params.input[0].text;
+  if(prompt==='image-input' && (m.params.input.length!==2 || m.params.input[1].type!=='localImage' || !m.params.input[1].path.endsWith('/accepted.png')))
+   return write({id:m.id,error:{code:-32602,message:'image input missing'}});
   if(prompt==='hang')return write({id:m.id,result:{turn:{id:'turn-one'}}});
   if(prompt==='disconnect')return process.exit(1);
   const threadId=m.params.threadId;
@@ -67,6 +69,13 @@ test('failed turn cannot pass as a successful response even if text was emitted'
   const { dir, runtime } = fixture(t);
   await assert.rejects(runtime.run({ cwd: dir, prompt: 'fail', signal: new AbortController().signal,
     onThread: () => {}, onTurn: () => {} }), (e: unknown) => e instanceof RuntimeError && e.code === 'turn_failed');
+});
+
+test('host-accepted images use official localImage input items alongside text',async t=>{
+  const {dir,runtime}=fixture(t),path=join(dir,'accepted.png');
+  const result=await runtime.run({cwd:dir,prompt:'image-input',images:[{id:'a'.repeat(64),path,sha256:'b'.repeat(64),mime:'image/png',width:1,height:1,bytes:1}],
+    signal:new AbortController().signal,onThread(){},onTurn(){}});
+  assert.equal(result.text,'public answer');
 });
 
 test('stream disconnect fails promptly and hanging turns obey the timeout', async t => {

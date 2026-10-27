@@ -95,3 +95,32 @@ test('a real card callback reaches the scheduler and resumes the same task and t
   await until(()=>s.get('first')?.state==='replied');
   assert.equal(calls,2);assert.equal(s.db.prepare("SELECT COUNT(*) n FROM outbox WHERE kind='result' AND state='sent'").get()?.n,1);
 });
+
+test('a temporary language answer resumes only its task and never changes preferences for the next task',async t=>{
+  const {Engine}=await import('../src/engine.js');
+  const {Profiles}=await import('../src/profiles.js');
+  const {AssistantSettings}=await import('../src/assistant.js');
+  const dir=mkdtempSync(join(tmpdir(),'namo-language-')),s=new Store(join(dir,'db'));
+  const profiles=new Profiles(s,{channel:'feishu',appId:'app',userId:'alice'}),assistant=new AssistantSettings(s);
+  profiles.update(0,{language:'zh-TW'},{source:'local-owner'});
+  const originalProfile=profiles.get(),originalSettings=assistant.read();let calls=0,firstTask='';
+  const engine=new Engine(s,{async run(r){
+    const prompt=JSON.parse(r.prompt);calls++;r.onThread('same-thread');r.onTurn(`turn-${calls}`);
+    if(calls===1){firstTask=prompt.task_id;const request={threadId:'same-thread',turnId:'turn-1',callId:'language',question:'中文还是英文？',choices:['中文','英文']};
+      return {text:'',threadId:'same-thread',turnId:'turn-1',waiting:{...request,id:r.onWait!(request)}};}
+    assert.equal(r.threadId,'same-thread');
+    if(calls===2){assert.equal(prompt.task_id,firstTask);assert.equal(prompt.reply,'英文');assert.match(prompt.note,/只对本任务有效/);}
+    else {assert.notEqual(prompt.task_id,firstTask);assert.match(prompt.note,/其他已结束任务.*已经失效/);assert.doesNotMatch(JSON.stringify(prompt.messages),/英文/);}
+    return {text:calls===2?'English confirmation.':'新的任务使用中文。',threadId:'same-thread',turnId:`turn-${calls}`};
+  }},{async send(_c,_t,id){return id;},async sendCard(_c,_p,id){return id;}},{dataDir:dir,concurrency:1,feishu:{cards:true}});
+  t.after(async()=>{await engine.stop();s.close();rmSync(dir,{recursive:true,force:true});});
+  const until=async(fn:()=>boolean)=>{const end=Date.now()+6000;while(!fn()){if(Date.now()>end)throw Error('timeout');await new Promise(r=>setTimeout(r,10));}};
+  const message=(key:string,text:string)=>({key,messageId:key,chatKey:'chat',chatId:'chat',senderId:'alice',text});
+  engine.start();engine.accept(message('choose','问我中文还是英文'));
+  await until(()=>!!s.db.prepare("SELECT 1 FROM outbox WHERE kind LIKE 'wait:%' AND state='sent'").get());
+  const action=s.db.prepare("SELECT a.token,o.platformId FROM card_actions a JOIN outbox o ON o.id=a.outboxId WHERE a.action='answer:1'").get()!;
+  engine.acceptCard({operator:{open_id:'alice'},context:{open_chat_id:'chat',open_message_id:String(action.platformId)},action:{value:{namo:String(action.token)}}});
+  await until(()=>s.get('choose')?.state==='replied');engine.accept(message('next','现在处理下一件事'));
+  await until(()=>s.get('next')?.state==='replied');assert.equal(calls,3);
+  assert.deepEqual(profiles.get(),originalProfile);assert.deepEqual(assistant.read(),originalSettings);
+});

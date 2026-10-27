@@ -27,9 +27,9 @@ function currentPage(): UiPage {
 }
 export function App({ initial, startupError }: { initial?: ManagementState; startupError?: string }) {
   const locale = useLocale(), languagePreference = useLanguagePreference();
-  const pages: Record<UiPage, string> = { assistant:tr("助手设置"), memory:tr("长期记忆"), dashboard: tr("概览"), tasks: tr("任务"), sessions: tr("会话"), settings: tr("项目与权限"), profiles: tr("用户档案"), connections: tr("Agent 与飞书") };
+  const pages: Record<UiPage, string> = { assistant:tr("助手设置"), memory:tr("长期记忆"), dashboard: tr("概览"), tasks: tr("任务"), sessions: tr("会话"), settings: tr("项目与权限"), profiles: tr("用户档案"), connections: tr("连接设置") };
   const navigation: Record<UiPage, string> = { ...pages, assistant:tr('助手'), memory:tr('记忆'), settings:tr('项目管理'), profiles:tr('个人档案'), connections:tr('连接设置') };
-  const descriptions: Record<UiPage, string> = { assistant:tr("设置助手的身份和表达偏好。"), memory:tr("管理明确保存的偏好、知识与交接。"), dashboard: tr("运行概况与需要你留意的事。"), tasks: tr("查找任务，查看执行进度与结果。"), sessions: tr("沿着上下文，找回每一条工作线。"), settings: tr("决定它在哪里工作，能做哪些事。"), profiles: tr("保存称呼、语言与时区。"), connections: tr("把本地 Agent 和飞书连接起来。") };
+  const descriptions: Record<UiPage, string> = { assistant:tr("设置助手的身份和表达偏好。"), memory:tr("管理明确保存的偏好、知识与交接。"), dashboard: tr("运行概况与需要你留意的事。"), tasks: tr("查找任务，查看执行进度与结果。"), sessions: tr("沿着上下文，找回每一条工作线。"), settings: tr("决定它在哪里工作，能做哪些事。"), profiles: tr("保存称呼、语言与时区。"), connections: tr("管理 Codex、飞书和 GitHub 连接。") };
   const [state, setState] = useState(initial), [view, setView] = useState(currentPage), [target, setTarget] = useState<DetailTarget | null>(null);
   const [search, setSearch] = useState(() => location.search.slice(1));
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(startupError ? { text: startupError, error: true } : null);
@@ -124,7 +124,7 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
         {view === 'dashboard' && <section aria-label={tr("概览内容")}><DashboardPage state={state} navigate={go} onOpen={onOpen} enabled={!expired} /></section>}
         {(view === 'tasks' || view === 'sessions') && <section aria-label={view === 'tasks' ? tr("任务内容") : tr("会话内容")}><TasksPage key={view} kind={view} state={state} onOpen={onOpen} navigate={go} search={search} enabled={!expired} /></section>}
         <section hidden={view !== 'settings'} aria-label={tr("项目与权限内容")}><SettingsPage config={state.config} recoveryAvailable={state.recoveryAvailable && !expired} refresh={refresh} notify={notify} /></section>
-        <section hidden={view !== 'connections'} aria-label={tr("Agent 与飞书内容")}><ConnectionsPage config={state.config} /></section>
+        <section hidden={view !== 'connections'} aria-label={tr("Agent 与飞书内容")}><ConnectionsPage config={state.config} profiles={state.profiles} refresh={refresh} expired={expired} /></section>
         <section hidden={view !== 'profiles'} aria-label={tr("用户档案内容")}><ProfilesPage profiles={state.profiles ?? { available: false, configRevision: state.config.revision, entries: [], reason: tr("当前工作台进程尚未支持用户档案，请关闭并重新运行 namo ui。") }} expired={expired} refresh={refresh} /></section>
       </>}
       <footer>{tr("Namo 把消息交给 Agent，也把执行状态交还给你。")}</footer>

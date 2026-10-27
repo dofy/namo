@@ -17,6 +17,7 @@ import { MigrationMemory, MigrationMemoryError, migrationMemoryStatus } from './
 import { Profiles, ProfileError } from './profiles.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
 import { Browse, BrowseError } from './browse.js';
+import { parseGitHubAccessConfig, publicGitHubAccess } from './github-access.js';
 
 export class ManagementError extends Error { constructor(message:string,readonly status=409){super(message);} }
 export interface ManagementDeps {
@@ -42,9 +43,20 @@ export class Management {
     try{return this.deps.status(loadConfig(this.file));}
     catch{return {running:activeData(this.dataDir),ready:false,connection:'unknown',configInvalid:true};}
   }
+  private redactor():(text:string)=>string {
+    const {raw}=this.source(),f=raw.feishu??{};let token=typeof raw.github?.token==='string'?raw.github.token:'';
+    try {token=parseGitHubAccessConfig(raw.github,process.env)?.token??'';}catch{const key=raw.github?.tokenEnv;if(typeof key==='string'&&/^NAMO_GITHUB_[A-Z][A-Z0-9_]*$/.test(key))token=process.env[key]??token;}
+    return makeRedactor([typeof f.appSecret==='string'?f.appSecret:'',process.env[f.appSecretEnv??'FEISHU_APP_SECRET']??'',token]);
+  }
   private read<T>(fn:(s:Store)=>T):T|undefined {
     const path=join(this.dataDir,'bot.sqlite');if(!existsSync(path))return;
     const s=new Store(path,true);try{return fn(s);}finally{s.close();}
+  }
+  private sanitize<T>(value:T):T {
+    const redact=this.redactor();
+    const visit=(item:unknown):unknown=>typeof item==='string'?redact(item):Array.isArray(item)?item.map(visit)
+      :item&&typeof item==='object'?Object.fromEntries(Object.entries(item).map(([key,entry])=>[key,visit(entry)])):item;
+    return visit(value) as T;
   }
   private write<T>(fn:(s:Store)=>T):T {
     const version=this.read(s=>Number(s.db.prepare('PRAGMA user_version').get()?.user_version));
@@ -54,9 +66,10 @@ export class Management {
   config():any {
     const {raw,revision}=this.source(),c=raw.codex??{},f=raw.feishu??{};
     let valid=true;try{parseConfig(raw,this.file);}catch{valid=false;}
+    let github=publicGitHubAccess();try {github=publicGitHubAccess(parseGitHubAccessConfig(raw.github,process.env));}catch{/* Keep an invalid credential out of the projection. */}
     const service=this.status();let applied:string|undefined;
     try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid)applied=h.configRevision;}catch{/* Not yet instrumented. */}
-    return {revision,valid,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
+    return {revision,valid,github,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
       values:{projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.allowLocalCommits??false,
         concurrency:raw.concurrency??2,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
         reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??12000,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},
@@ -71,7 +84,7 @@ export class Management {
         workstreams:s.db.prepare('SELECT id,project,createdAt FROM workstreams ORDER BY createdAt DESC LIMIT 30').all(),
         issues:schema===SCHEMA_VERSION?new Recovery(s).list():[],queue:s.status()};
     });
-    return {service:this.status(),config:this.config(),database:db??{schema:0,tasks:[],issues:[],workstreams:[]},recoveryAvailable:db?.schema===SCHEMA_VERSION,profiles:this.profiles(),assistant:this.read(s=>new AssistantSettings(s).read())};
+    return this.sanitize({service:this.status(),config:this.config(),database:db??{schema:0,tasks:[],issues:[],workstreams:[]},recoveryAvailable:db?.schema===SCHEMA_VERSION,profiles:this.profiles(),assistant:this.read(s=>new AssistantSettings(s).read())});
   }
   assistant(action: string, version: number, values: unknown): unknown {
     try {return this.write(s=>{const settings=new AssistantSettings(s);
@@ -95,7 +108,7 @@ export class Management {
       return new Map(s.db.prepare('SELECT userId,name FROM user_profiles WHERE channel=? AND appId=?').all(f.domain,f.appId)
         .map(row=>[String(row.userId),String(row.name)]));
     })??new Map<string,string>();
-    const redact=makeRedactor([f.appSecret].filter(Boolean));
+    const redact=this.redactor();
     return {ownerId:selected,owners:ids.map(id=>({id,label:redact(names.get(id)??'')||id})),projects:Object.keys(config.codex.projects??{}),
       appId:f.appId,channel:f.domain,secret:f.appSecret};
   }
@@ -110,7 +123,7 @@ export class Management {
     try{
       const identity=this.memoryIdentity(ownerId),result=this.read(s=>{
         if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)throw new ManagementError(tr("在线数据尚未升级，记忆暂不可编辑；请在维护窗口升级接收服务"),409);
-        const redact=makeRedactor([identity.secret].filter(Boolean)),memory=new Memories(s,redact),chats=this.memoryChats(s,identity.ownerId,identity.projects);
+        const redact=this.redactor(),memory=new Memories(s,redact),chats=this.memoryChats(s,identity.ownerId,identity.projects);
         return {available:true,ownerId:identity.ownerId,owners:identity.owners,projects:identity.projects,chats,
           imports:new MigrationMemory(s,{dataDir:this.dataDir,configFile:this.file,appId:identity.appId},redact).list(),
           items:memory.manage({kind:'local-owner',authenticated:true,ownerId:identity.ownerId}),limits:{entryChars:MEMORY_LIMITS.entryChars,
@@ -125,7 +138,7 @@ export class Management {
     try{return this.write(s=>{
       const account=s.db.prepare("SELECT value FROM settings WHERE key='account'").get()?.value;
       if(account&&account!==identity.appId)throw new ManagementError(tr("应用与数据目录不匹配，不能读取或修改档案"),409);
-      const redactor=makeRedactor([identity.secret].filter(Boolean)),memory=new Memories(s,redactor),chats=this.memoryChats(s,identity.ownerId,identity.projects);
+      const redactor=this.redactor(),memory=new Memories(s,redactor),chats=this.memoryChats(s,identity.ownerId,identity.projects);
       if(!input||typeof input!=='object'||Array.isArray(input))throw new ManagementError(tr("请求内容无效"),400);
       const value=input as Record<string,unknown>,authority:MemoryAuthority={kind:'local-owner',authenticated:true,ownerId:identity.ownerId,
         source:{kind:'local-owner',ref:`workbench:${randomUUID()}`}};
@@ -152,8 +165,8 @@ export class Management {
     });}catch(e){if(e instanceof MemoryError)throw this.memoryError(e);if(e instanceof MigrationMemoryError)throw new ManagementError(e.message,migrationMemoryStatus(e));throw e;}
   }
   private memoryState(s:Store,identity:ReturnType<Management['memoryIdentity']>):unknown {
-    const memory=new Memories(s,makeRedactor([identity.secret].filter(Boolean)));
-    const redact=makeRedactor([identity.secret].filter(Boolean));
+    const memory=new Memories(s,this.redactor());
+    const redact=this.redactor();
     return {available:true,ownerId:identity.ownerId,owners:identity.owners,projects:identity.projects,chats:this.memoryChats(s,identity.ownerId,identity.projects),
       imports:new MigrationMemory(s,{dataDir:this.dataDir,configFile:this.file,appId:identity.appId},redact).list(),
       items:memory.manage({kind:'local-owner',authenticated:true,ownerId:identity.ownerId}),limits:{entryChars:MEMORY_LIMITS.entryChars,
@@ -175,9 +188,7 @@ export class Management {
   }
   private projections(s: Store): Browse {
     const {raw}=this.source(),f=raw.feishu??{};
-    return new Browse(s,{appId:f.appId??'',channel:f.domain??'feishu'},makeRedactor([
-      typeof f.appSecret==='string'?f.appSecret:'',process.env[f.appSecretEnv??'FEISHU_APP_SECRET']??'',
-    ]));
+    return new Browse(s,{appId:f.appId??'',channel:f.domain??'feishu'},this.redactor());
   }
   browse(kind:'tasks'|'sessions'|'dashboard'|'options',params=new URLSearchParams()):unknown {
     const result=this.read(s=>{
@@ -201,7 +212,7 @@ export class Management {
     if(typeof f.appId!=='string'||!f.appId||!['feishu','lark'].includes(f.domain??'feishu')||!Array.isArray(f.allowedUserIds)||f.allowedUserIds.some((id:unknown)=>typeof id!=='string'||!id))return unavailable(tr("请先完成应用配置和用户配对"));
     try{return this.read(s=>{
       if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)return unavailable(tr("在线数据尚未升级，档案暂不可编辑；请在维护窗口升级接收服务"));
-      return {available:true,configRevision:revision,entries:[...new Set<string>(f.allowedUserIds)].map(userId=>new Profiles(s,{channel:f.domain??'feishu',appId:f.appId,userId}).get())};
+      return this.sanitize({available:true,configRevision:revision,entries:[...new Set<string>(f.allowedUserIds)].map(userId=>new Profiles(s,{channel:f.domain??'feishu',appId:f.appId,userId}).get())});
     })??unavailable(tr("尚无服务数据库，请先完成初始化"));}
     catch(e){if(e instanceof ProfileError)return unavailable(e.message);throw e;}
   }
@@ -212,7 +223,7 @@ export class Management {
       if(configRevision!==revision)throw new ManagementError(tr("应用配置已变化，请刷新并重新选择用户"));
       if(typeof userId!=='string'||!Array.isArray(f.allowedUserIds)||!f.allowedUserIds.includes(userId))throw new ManagementError(tr("只能管理当前应用中已配对用户的档案"));
       if(typeof f.appId!=='string'||!f.appId||!['feishu','lark'].includes(f.domain??'feishu'))throw new ManagementError(tr("应用身份无效"));
-      const redact=makeRedactor([typeof f.appSecret==='string'?f.appSecret:'',process.env[f.appSecretEnv??'FEISHU_APP_SECRET']??''].filter(Boolean));
+      const redact=this.redactor();
       if(JSON.stringify(patch)!==redact(JSON.stringify(patch)??''))throw new ManagementError(tr("档案不能包含凭据，请移除后重试"));
       return this.write(s=>new Profiles(s,{channel:f.domain??'feishu',appId:f.appId,userId}).update(version,patch,{source:'local-owner'}));
     }catch(e){if(e instanceof ProfileError)throw new ManagementError(e.message);throw e;}finally{release();}
@@ -222,10 +233,10 @@ export class Management {
     try {
       const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError(tr("配置已被其他页面或程序修改，请刷新后重试"));
       if(!patch||typeof patch!=='object'||Array.isArray(patch))throw new ManagementError(tr("配置内容无效"));
-      const allowed=['projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret'];
+      const allowed=['projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken'];
       if(Object.keys(patch).some(k=>!allowed.includes(k)))throw new ManagementError(tr("包含不允许编辑的配置项"));
       const next=structuredClone(raw);next.codex??={};next.feishu??={};
-      for(const key of allowed.filter(k=>!['concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
+      for(const key of allowed.filter(k=>!['concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
       if(next.codex.defaultProject==='')delete next.codex.defaultProject;
       if(Object.hasOwn(patch,'concurrency'))next.concurrency=patch.concurrency;
       for(const k of ['cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs'])if(Object.hasOwn(patch,k))next.feishu[k]=patch[k];
@@ -233,6 +244,15 @@ export class Management {
         if(typeof patch.newSecret!=='string'||patch.newSecret.length>256)throw new ManagementError(tr("Secret 格式无效"));
         if(patch.newSecret)next.feishu.appSecret=patch.newSecret;
       }
+      if(patch.github!==undefined){
+        if(!patch.github||typeof patch.github!=='object'||Array.isArray(patch.github)||Object.keys(patch.github).some(k=>!['repositories','allowedUserIds'].includes(k)))throw new ManagementError(tr('GitHub 配置无效'),400);
+        next.github={...next.github,...patch.github};
+      }
+      if(patch.clearGithubToken!==undefined&&typeof patch.clearGithubToken!=='boolean')throw new ManagementError(tr('GitHub 配置无效'),400);
+      if(patch.newGithubToken!==undefined&&(typeof patch.newGithubToken!=='string'||patch.newGithubToken.length>4096))throw new ManagementError(tr('GitHub 凭据格式无效'),400);
+      if(patch.clearGithubToken&&patch.newGithubToken)throw new ManagementError(tr('不能同时清除和更新 GitHub 凭据'),400);
+      if(patch.newGithubToken||patch.clearGithubToken){next.github??={};delete next.github.tokenEnv;delete next.github.token;
+        if(patch.newGithubToken)next.github.token=patch.newGithubToken;}
       try{parseConfig(next,this.file);}catch{throw new ManagementError(tr("配置未通过校验：请核对项目目录、默认项目、权限、并发和超时；原配置没有覆盖"));}
       const editor=new ConfigEditor(this.file);if(digest(readFileSync(this.file,'utf8'))!==revision)throw new ManagementError(tr("配置已变化，请刷新"));
       editor.save(next);return this.config();
@@ -267,17 +287,17 @@ export class Management {
     if(!/^N-[A-F0-9]{12}$/.test(id))throw new ManagementError(tr("任务编号无效"));
     return this.read(s=>{const tasks=new Tasks(s),t=tasks.get(id);if(!t)throw new ManagementError(tr("未找到任务"));
       const summary=this.projections(s).taskSummary(id);
-      return {...tasks.detail(t) as object,title:summary?.title,ownerId:summary?.ownerId,ownerName:summary?.ownerName,createdAt:summary?.createdAt,
-        results:s.db.prepare("SELECT content,state,part FROM outbox WHERE inboxKey=? AND kind='result' ORDER BY part").all(t.inboxKey)};});
+      return this.sanitize({...tasks.detail(t) as object,title:summary?.title,ownerId:summary?.ownerId,ownerName:summary?.ownerName,createdAt:summary?.createdAt,
+        results:s.db.prepare("SELECT content,state,part FROM outbox WHERE inboxKey=? AND kind='result' ORDER BY part").all(t.inboxKey)});});
   }
   issue(id:string):any {
     return this.read(s=>{
       if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)throw new ManagementError(tr("请先升级接收服务以启用异常核对"));
-      const {snapshot:_s,inboxKey:_k,...safe}=new Recovery(s).inspect(id);return safe;
+      const {snapshot:_s,inboxKey:_k,...safe}=new Recovery(s).inspect(id);return this.sanitize(safe);
     });
   }
   reconcile(request:Resolution):any {
-    const c=loadConfig(this.file);request={...request,note:makeRedactor([c.feishu.appSecret])(request.note??'')};
+    loadConfig(this.file);request={...request,note:this.redactor()(request.note??'')};
     try{return this.write(s=>new Recovery(s).resolve(request,{id:'local-owner'},true));}catch(e){if(e instanceof RecoveryError)throw new ManagementError(e.message);throw e;}
   }
   cancel(id:string,inputVersion:number,requestId:string):any {
@@ -297,5 +317,5 @@ export class Management {
       return {duplicate:false};
     }));
   }
-  async diagnose():Promise<any> {return this.deps.diagnose(this.file,false);}
+  async diagnose():Promise<any> {return this.sanitize(await this.deps.diagnose(this.file,false));}
 }

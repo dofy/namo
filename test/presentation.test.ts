@@ -37,7 +37,7 @@ test('quick conversation sends one plain answer while retaining task and run rec
   assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM tasks').get()?.n, 1);
   assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM task_runs').get()?.n, 1);
   assert.equal(f.store.db.prepare("SELECT state FROM outbox WHERE kind='progress'").get()?.state, 'suppressed');
-  assert.equal(JSON.parse(String(f.store.db.prepare("SELECT payload FROM outbox WHERE kind='result'").get()?.payload)).textOnly, true);
+  assert.equal(JSON.parse(String(f.store.db.prepare("SELECT payload FROM outbox WHERE kind='result'").get()?.payload)).noCard, true);
   assert.equal(f.engine.accept(message('ping')), false);
 });
 

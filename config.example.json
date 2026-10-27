@@ -24,5 +24,9 @@
     "readPaths": [],
     "denyPaths": [],
     "allowLocalCommits": false
+  },
+  "github": {
+    "repositories": [],
+    "allowedUserIds": []
   }
 }

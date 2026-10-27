@@ -40,9 +40,9 @@ export function normalizeEvent(event: FeishuEvent, config: Config['feishu'], bot
         if (item.tag === 'text') return item.text ?? '';
         if (item.tag === 'a') return `${item.text ?? ''} (${item.href ?? ''})`;
         if (item.tag === 'at') return `[提及 ${item.user_name ?? item.user_id ?? ''}]`;
-        materials.push({ type: String(item.tag ?? 'unknown').slice(0, 48), resourceKey: typeof item.image_key === 'string' ? item.image_key.slice(0, 512) : undefined,
+        materials.push({ type: item.tag==='img'?'image':String(item.tag ?? 'unknown').slice(0, 48), resourceKey: typeof item.image_key === 'string' ? item.image_key.slice(0, 512) : undefined,
           limitation: '仅保存资源描述，尚未读取内容' });
-        return '[此富文本元素暂不支持读取]';
+        return item.tag==='img'?'[图片附件]':'[此富文本元素暂不支持读取]';
       }).join(''))].filter(Boolean).join('\n');
     }
   } else {
@@ -172,10 +172,11 @@ export class FeishuTransport implements Sender {
         sentAt:item.create_time?Number(item.create_time):undefined,author:{id:item.sender?.id}}));
     },
     readResource: async request => {
-      const result=await this.client.im.messageResource.get({path:{message_id:request.messageId,file_key:request.fileKey},params:{type:'file'}});
+      const result=await this.client.im.messageResource.get({path:{message_id:request.messageId,file_key:request.fileKey},params:{type:request.kind}});
       const stream=result.getReadableStream(); const chunks:Buffer[]=[];let size=0;
       const timer=setTimeout(()=>stream.destroy(new Error('material_timeout')),Math.max(1,request.deadlineMs-Date.now()));
       try {for await(const chunk of stream){const bytes=Buffer.from(chunk);size+=bytes.length;if(size>request.maxBytes)throw new Error('material_bytes_limit');chunks.push(bytes);}return {bytes:Buffer.concat(chunks)};}
+      catch(error){const code=error instanceof Error&&['material_timeout','material_bytes_limit'].includes(error.message)?error.message:'material_access_failed';throw Object.assign(new Error(code),{bytesRead:size});}
       finally {clearTimeout(timer);stream.destroy();}
     },
   };

@@ -117,6 +117,17 @@ test('missing steer capability is visible as unresolved rather than silently con
   assert.equal(f.tasks.revisions(task.id).length, 1);
 });
 
+test('running image amendments are rejected visibly without changing the task or steering text alone', async t => {
+  let done: ((v:typeof result)=>void)|undefined,steers=0;
+  const f=setup(t,{run(r){r.onReady?.({async steer(){steers++;return 'accepted';}});return new Promise(resolve=>{done=resolve;});}});
+  f.engine.start();f.engine.accept(msg('first'));await wait(()=>!!done);
+  const task=f.tasks.list(msg('x'))[0],amendment=msg('image-change',`/amend ${task.id} 看图片`);
+  amendment.envelope!.materials=[{type:'image',resourceKey:'image-key'}];f.engine.accept(amendment);
+  assert.equal(f.tasks.get(task.id)?.inputVersion,1);assert.equal(f.store.get(amendment.key)?.taskId,null);
+  assert.equal(steers,0);assert.match(String(f.store.db.prepare("SELECT content FROM outbox WHERE inboxKey=? AND kind='result'").get(amendment.key)?.content),/暂不支持追加附件/);
+  done!(result);await wait(()=>f.tasks.get(task.id)?.state==='succeeded');
+});
+
 test('different chats sharing a project serialize while an independent project runs', async t => {
   const running: { r: RunRequest; done: (v: typeof result) => void }[] = [];
   const f = setup(t, { run(r) { return new Promise(resolve => running.push({ r, done: resolve })); } }, true);

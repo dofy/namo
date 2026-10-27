@@ -115,6 +115,8 @@ test('prompt composition states precedence, safety boundaries, versions, and res
   assert.equal(prompt.assistant_context.adopted_versions.assistant, saved.version);
   assert.equal(prompt.assistant_context.adopted_versions.profile, 1);
   assert.deepEqual(prompt.assistant_context.precedence.slice(0, 3), ['service behavior and authorization', 'current explicit task request', 'project output conventions']);
-  assert.match(prompt.assistant_context.boundaries.join(' '), /never grant permission|Do not omit|older session/);
+  assert.match(prompt.assistant_context.boundaries.join(' '), /never grant permission/);
+  assert.match(prompt.assistant_context.boundaries.join(' '), /expire when that task completes/);
+  assert.match(prompt.assistant_context.boundaries.join(' '), /expired one-off language choices/);
   assert.equal(prompt.task.messages[0].text, 'Use English this time');
 });

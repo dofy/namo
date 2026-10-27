@@ -1,5 +1,6 @@
 import { test } from 'node:test';import assert from 'node:assert/strict';import { mkdtempSync,mkdirSync,readFileSync,writeFileSync,readdirSync,rmSync } from 'node:fs';import { tmpdir } from 'node:os';import { join } from 'node:path';
-import { Store } from '../src/store.js';import { Management } from '../src/management.js';import { startUi } from '../src/ui.js';import { digest } from '../src/paths.js';import { Tasks } from '../src/tasks.js';import { request as httpRequest } from 'node:http';
+import { Store } from '../src/store.js';import { Management, ManagementError } from '../src/management.js';import { startUi } from '../src/ui.js';import { digest } from '../src/paths.js';import { Tasks } from '../src/tasks.js';import { request as httpRequest } from 'node:http';
+import { Profiles } from '../src/profiles.js';
 function fixture(t:any,deps:any={}){
  const dir=mkdtempSync(join(tmpdir(),'namo-ui-')),data=join(dir,'data'),project=join(dir,'project'),file=join(dir,'config.json');mkdirSync(data);mkdirSync(project);
  const raw={version:1,agent:'codex',dataDir:data,custom:{keep:'untouched'},feishu:{appId:'cli_test',appSecret:'PRIVATE_TEST_SECRET_7381',allowedUserIds:['alice'],allowedChatIds:[],extraSecret:'PRIVATE_EXTRA_991'},codex:{bin:'codex',home:join(data,'auth'),projects:{app:project},defaultProject:'app',sandbox:'workspace-write',networkAccess:false,allowLocalCommits:true,denyPaths:[],readPaths:[],timeoutMs:600000},concurrency:1};
@@ -109,4 +110,95 @@ test('profile endpoint retains authentication, origin and conflict guards',async
  assert.equal((await post('/api/profiles',patch,cookie)).status,200);
  assert.equal((await post('/api/profiles',{...patch,patch:{name:'stale'}},cookie)).status,409);
  assert.equal(f.manager.profiles().entries[0].name,'小七');
+});
+
+const githubCredential = 'management-fixture-private-token-52941';
+const githubScope = {repositories:['octo-org/private-app'],allowedUserIds:['alice']};
+
+test('GitHub credential saves preserve empty values, scope and unrelated settings; clearing is explicit',t=>{
+ const f=fixture(t),initial=f.manager.config();
+ assert.equal(initial.github.credentialConfigured,false);
+ const saved=f.manager.save(initial.revision,{github:githubScope,newGithubToken:githubCredential});
+ assert.deepEqual(saved.github,{...githubScope,credentialConfigured:true,credentialSource:'token'});
+ assert.equal(JSON.parse(readFileSync(f.file,'utf8')).github.token,githubCredential);
+ assert.equal(JSON.parse(readFileSync(f.file,'utf8')).custom.keep,'untouched');
+ assert.equal(JSON.parse(readFileSync(f.file,'utf8')).feishu.appSecret,f.raw.feishu.appSecret);
+ assert.equal(JSON.stringify(saved).includes(githubCredential),false);
+ const unchanged=f.manager.save(saved.revision,{github:githubScope,newGithubToken:'',model:'new-model'});
+ assert.equal(JSON.parse(readFileSync(f.file,'utf8')).github.token,githubCredential);
+ assert.equal(unchanged.github.credentialConfigured,true);
+ const beforeConflict=readFileSync(f.file,'utf8');
+ assert.throws(()=>f.manager.save(initial.revision,{newGithubToken:'stale-fixture-token'}),error=>error instanceof ManagementError&&error.status===409);
+ assert.equal(readFileSync(f.file,'utf8'),beforeConflict);
+ const cleared=f.manager.save(unchanged.revision,{newGithubToken:'',clearGithubToken:true});
+ assert.deepEqual(cleared.github,{...githubScope,credentialConfigured:false,credentialSource:'none'});
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));
+ assert.equal(Object.hasOwn(raw.github,'token'),false);assert.equal(Object.hasOwn(raw.github,'tokenEnv'),false);
+ assert.deepEqual(raw.github.repositories,githubScope.repositories);assert.deepEqual(raw.github.allowedUserIds,['alice']);
+});
+
+test('GitHub environment credentials can be retained, replaced or cleared without exposing the resolved value',t=>{
+ const envName='NAMO_GITHUB_MANAGEMENT_TEST',previous=process.env[envName],envCredential='environment-fixture-token-88425';
+ process.env[envName]=envCredential;
+ t.after(()=>{if(previous===undefined)delete process.env[envName];else process.env[envName]=previous;});
+ const f=fixture(t);writeFileSync(f.file,JSON.stringify({...f.raw,github:{...githubScope,tokenEnv:envName}}));
+ const initial=f.manager.config();
+ assert.deepEqual(initial.github,{...githubScope,credentialConfigured:true,credentialSource:'environment',tokenEnv:envName});
+ assert.equal(JSON.stringify(f.manager.state()).includes(envCredential),false);
+ const retained=f.manager.save(initial.revision,{newGithubToken:''});
+ assert.equal(retained.github.credentialSource,'environment');
+ assert.equal(JSON.parse(readFileSync(f.file,'utf8')).github.tokenEnv,envName);
+ const replaced=f.manager.save(retained.revision,{newGithubToken:githubCredential});
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));
+ assert.equal(raw.github.token,githubCredential);assert.equal(Object.hasOwn(raw.github,'tokenEnv'),false);
+ assert.equal(replaced.github.credentialSource,'token');assert.equal(JSON.stringify(replaced).includes(githubCredential),false);
+ writeFileSync(f.file,JSON.stringify({...raw,github:{...githubScope,tokenEnv:envName}}));
+ const cleared=f.manager.save(f.manager.config().revision,{clearGithubToken:true});
+ assert.equal(cleared.github.credentialConfigured,false);assert.equal(cleared.github.credentialSource,'none');
+ assert.equal(Object.hasOwn(JSON.parse(readFileSync(f.file,'utf8')).github,'tokenEnv'),false);
+ assert.equal(process.env[envName],envCredential,'clearing configuration never mutates the environment');
+});
+
+test('GitHub configuration HTTP saves reject stale revisions and unpaired users without echoing credentials',async t=>{
+ const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());
+ const post=(path:string,body:unknown,cookie='')=>fetch(ui.url+path,{method:'POST',headers:{Origin:ui.url,'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify(body)});
+ const login=await post('/api/session',{code:new URL(ui.entryUrl).hash.slice(1)}),cookie=login.headers.get('set-cookie')!;
+ const revision=f.manager.config().revision;
+ const saved=await post('/api/config',{revision,patch:{github:githubScope,newGithubToken:githubCredential}},cookie);
+ assert.equal(saved.status,200);assert.equal((await saved.text()).includes(githubCredential),false);
+ const before=readFileSync(f.file,'utf8'),current=f.manager.config().revision;
+ const stale=await post('/api/config',{revision,patch:{clearGithubToken:true}},cookie);
+ assert.equal(stale.status,409);assert.equal((await stale.text()).includes(githubCredential),false);
+ for(const patch of [
+  {github:{...githubScope,allowedUserIds:['unpaired-user']},newGithubToken:githubCredential},
+  {github:{...githubScope,token:githubCredential}},
+  {newGithubToken:githubCredential+'\ninvalid'},
+  {newGithubToken:githubCredential,clearGithubToken:true},
+ ]){
+  const rejected=await post('/api/config',{revision:current,patch},cookie);
+  assert.ok(rejected.status>=400&&rejected.status<500);
+  assert.equal((await rejected.text()).includes(githubCredential),false);
+  assert.equal(readFileSync(f.file,'utf8'),before);
+ }
+ const state=await fetch(ui.url+'/api/state',{headers:{Cookie:cookie}});
+ assert.equal(state.status,200);assert.equal((await state.text()).includes(githubCredential),false);
+});
+
+test('configured GitHub credentials are redacted from historical task errors, diagnostics and profiles',async t=>{
+ const f=fixture(t,{diagnose:async()=>[{id:'fixture',status:'fail',message:`failure ${githubCredential}`,next:githubCredential}]});
+ f.manager.save(f.manager.config().revision,{github:githubScope,newGithubToken:githubCredential});
+ const s=new Store(join(f.data,'bot.sqlite'));
+ s.enqueue({key:'github-history',messageId:'github-history',chatKey:'chat',chatId:'chat',senderId:'alice',text:`Check ${githubCredential}`});
+ const task=new Tasks(s).create(s.get('github-history')!,{cwd:f.project,policyHash:'p'});
+ s.db.prepare("UPDATE tasks SET state='failed',error=? WHERE id=?").run(githubCredential,task.id);
+ s.db.prepare("UPDATE inbox SET state='delivery_unknown',error=? WHERE key='github-history'").run(githubCredential);
+ s.addOutput('github-history','result',`private result ${githubCredential}`);
+ s.db.prepare("UPDATE outbox SET state='unknown',error=? WHERE inboxKey='github-history'").run(githubCredential);
+ new Profiles(s,{channel:'feishu',appId:f.raw.feishu.appId,userId:'alice'}).update(0,{name:githubCredential},{source:'local-owner'});
+ s.close();
+ const outputs=[f.manager.state(),f.manager.detail(task.id),f.manager.profiles(),await f.manager.diagnose()];
+ for(const output of outputs)assert.equal(JSON.stringify(output).includes(githubCredential),false);
+ assert.throws(()=>f.manager.saveProfile(f.manager.config().revision,'alice',1,{name:githubCredential}),error=>{
+  assert.ok(error instanceof ManagementError);assert.match(error.message,/凭据/);assert.equal(error.message.includes(githubCredential),false);return true;
+ });
 });

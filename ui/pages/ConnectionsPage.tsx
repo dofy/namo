@@ -2,12 +2,15 @@ import { t as tr } from '../i18n';
 import { Icon } from '../Icon';
 import { useState } from 'react';
 import { Button, Code, Heading, Link, Text } from '@radix-ui/themes';
-import type { ConfigView, Diagnostic } from '../../src/ui-contract';
+import type { ConfigView, Diagnostic, ProfileState } from '../../src/ui-contract';
 import { api, message } from '../api';
 import { Notice } from '../components';
+import { GitHubSettings } from '../GitHubSettings';
 
 const quote = (value: string) => "'" + value.split("'").join("'\"'\"'") + "'";
-export function ConnectionsPage({ config }: { config: ConfigView }) {
+export function ConnectionsPage({ config, profiles, refresh, expired }: {
+  config: ConfigView; profiles: ProfileState; refresh: () => Promise<unknown>; expired: boolean;
+}) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [checks, setChecks] = useState<Diagnostic[]>([]);
   return <>
     <div className="connection"><div><Heading as="h2" size="5">Codex</Heading><Text as="p" size="2" color="gray">{tr("官方 app-server · 独立登录环境")}</Text></div>
@@ -37,5 +40,6 @@ export function ConnectionsPage({ config }: { config: ConfigView }) {
       <Code variant="ghost">{'namo service stop --config ' + quote(config.file) + '\nnamo init --config ' + quote(config.file)}</Code>
       <Text as="p" size="2" color="gray">{tr("初始化不能与同一应用的在线接收端同时连接。")}</Text>
     </div>
+    <GitHubSettings config={config} profiles={profiles} refresh={refresh} expired={expired} />
   </>;
 }

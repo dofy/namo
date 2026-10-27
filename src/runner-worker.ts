@@ -11,6 +11,7 @@ import { runnerJob, runnerEvent } from './runner-store.js';
 import { recordActivity } from './feedback.js';
 import { Waits } from './waits.js';
 import { requestWait } from './external-wait-bridge.js';
+import { loadRunImages } from './image-inputs.js';
 
 process.umask(0o077);
 async function main(): Promise<void> {
@@ -46,7 +47,7 @@ async function main(): Promise<void> {
       if (resolve(database) !== join(config.dataDir, 'bot.sqlite') || revision !== runnerJob(store, runId)!.configRevision
         || task.policyHash !== policyHash(config.codex) || realpathSync(task.cwd) !== task.cwd
         || (task.project && config.codex.projects?.[task.project] !== task.cwd)) throw new RuntimeError('task_configuration_changed');
-      const redact = makeRedactor([config.feishu.appSecret]);
+      const redact = makeRedactor([config.feishu.appSecret,config.github?.token??'']);
       if (store.get(task.inboxKey)?.cancelRequested || abort.signal.aborted) throw new RuntimeError('cancelled');
       write(() => { evidence = new EvidenceRecorder(store, runId, task.cwd, config.codex.denyPaths, redact); });
       const steer = (): void => {
@@ -77,7 +78,7 @@ async function main(): Promise<void> {
         } catch { storageFailed = true; abort.abort('storage_failed'); }
       }, 200);
       const raw = await new CodexRuntime(config.codex).run({ taskId: task.id, runId,
-        cwd: task.cwd, prompt: runnerJob(store, runId)!.prompt,
+        cwd: task.cwd, prompt: runnerJob(store, runId)!.prompt, images:loadRunImages(store,config.dataDir,runId),
         threadId: tasks.thread(task), signal: abort.signal,
         onProcess: pid => write(() => { store.db.prepare('UPDATE runner_jobs SET runtimePid=? WHERE runId=?').run(pid, runId); runnerEvent(store, runId, 'runtime_started'); }),
         onThread: thread => write(() => {

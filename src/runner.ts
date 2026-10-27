@@ -9,6 +9,7 @@ import { codexEnvironment } from './safety.js';
 import { Store } from './store.js';
 import { RuntimeError, type Runtime, type RunRequest, type RunResult } from './runtime.js';
 import { runnerJob, runnerEvent, reconcileRunner } from './runner-store.js';
+import { saveRunImages } from './image-inputs.js';
 
 /** The receiver only observes. The detached worker owns the model and durable result. */
 export class RunnerRuntime implements Runtime {
@@ -30,6 +31,7 @@ export class RunnerRuntime implements Runtime {
       if (r.signal.aborted) throw new RuntimeError(r.signal.reason === 'receiver_stopped' ? 'receiver_detached' : 'cancelled');
       this.store.db.prepare("INSERT INTO runner_jobs(runId,owner,state,createdAt,updatedAt,configRevision,prompt) VALUES(?,?,'starting',?,?,?,?)")
         .run(runId, owner, Date.now(), Date.now(), digest(readFileSync(this.config.file, 'utf8')), r.prompt);
+      saveRunImages(this.store,runId,r.images??[]);
       runnerEvent(this.store, runId, 'reserved'); launch = true;
     });
     if (launch) {

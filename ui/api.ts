@@ -1,5 +1,5 @@
 import { t as tr, getLocale } from './i18n';
-import type { ApplyResult, AssistantView, AssistantValues, BrowseOptions, ConfigValues, ConfigView, Dashboard, Diagnostic, Issue, ManagementState, MemoryMutation, MemoryViewState, PageResult, ProfileValues, ResolutionAction, SessionSummary, TaskDetail, TaskList, UserProfile } from '../src/ui-contract';
+import type { ApplyResult, AssistantView, AssistantValues, BrowseOptions, ConfigValues, ConfigView, GitHubConfigPatch, Dashboard, Diagnostic, Issue, ManagementState, MemoryMutation, MemoryViewState, PageResult, ProfileValues, ResolutionAction, SessionSummary, TaskDetail, TaskList, UserProfile } from '../src/ui-contract';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -30,6 +30,7 @@ export const api = {
   task: (id: string, signal?: AbortSignal) => request<TaskDetail>(`/api/tasks/${encodeURIComponent(id)}`, undefined, signal),
   issue: (id: string, signal?: AbortSignal) => request<Issue>(`/api/issues/${encodeURIComponent(id)}`, undefined, signal),
   save: (revision: string, patch: ConfigValues & { newSecret: string }) => request<ConfigView>('/api/config', { revision, patch }),
+  saveGitHub: (revision: string, patch: GitHubConfigPatch) => request<ConfigView>('/api/config', { revision, patch }),
   apply: (revision: string) => request<ApplyResult>('/api/apply', { revision, confirmed: true }),
   cancel: (task: TaskDetail) => request('/api/cancel', { id: task.id, inputVersion: task.inputVersion, requestId: crypto.randomUUID() }),
   resolve: (issue: Issue, action: ResolutionAction, note: string) => request('/api/resolve', {
