@@ -10,6 +10,8 @@ export interface PublicProgressEvent {
   text: string;
   threadId?: string;
   turnId?: string;
+  outcome?: 'success' | 'failure' | 'unknown';
+  plan?: { total: number; completed: number; running: number };
 }
 interface Entry extends Omit<PublicProgressEvent, 'threadId' | 'turnId'> { sequence: number; }
 export interface PublicProgress {
@@ -18,7 +20,9 @@ export interface PublicProgress {
   updatedAt: number;
   events: Entry[];
   // Bounded tombstones prevent late starts from replacing completed tools.
-  seen: { id: string; status: PublicProgressEvent['status']; hash: string }[];
+  seen: { id: string; status: PublicProgressEvent['status']; hash: string; kind?: PublicProgressEvent['kind']; outcome?: PublicProgressEvent['outcome'] }[];
+  plan?: PublicProgressEvent['plan'];
+  limited?: boolean;
 }
 const hash = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 24);
 
@@ -33,6 +37,11 @@ export function recordProgress(store: Store, runId: string, event: PublicProgres
   if (!event || typeof event.id !== 'string' || !event.id || event.id.length > 256
     || !['commentary','plan','tool'].includes(event.kind) || !['running','completed','failed'].includes(event.status)
     || typeof event.text !== 'string' || event.text.length > 16_000) return;
+  if (event.outcome !== undefined && !['success','failure','unknown'].includes(event.outcome)) return;
+  if (event.plan && (event.kind !== 'plan' || typeof event.plan !== 'object' || Array.isArray(event.plan)
+    || Object.keys(event.plan).some(key=>!['total','completed','running'].includes(key))
+    || ![event.plan.total,event.plan.completed,event.plan.running].every(n=>Number.isSafeInteger(n)&&n>=0)
+    || event.plan.total < 1 || event.plan.total > 100 || event.plan.completed+event.plan.running > event.plan.total)) return;
   store.transaction(() => {
     const run = store.db.prepare(`SELECT r.*,t.state AS taskState FROM task_runs r JOIN tasks t ON t.id=r.taskId
       WHERE r.id=? AND NOT EXISTS(SELECT 1 FROM task_runs newer WHERE newer.taskId=r.taskId AND newer.rowid>r.rowid)`).get(runId);
@@ -50,15 +59,32 @@ export function recordProgress(store: Store, runId: string, event: PublicProgres
       .replace(/\s+/g, ' ').trim()).slice(0, 180).join('');
     if (!text) return;
     const report = readProgress(store, runId) ?? { revision: 0, firstAt: Date.now(), updatedAt: 0, events: [], seen: [] };
-    const id = hash(event.kind + ':' + event.id), digest = hash(text), old = report.seen.find(x => x.id === id);
+    const id = hash(event.kind + ':' + event.id), digest = hash(JSON.stringify([text,event.outcome,event.plan])), old = report.seen.find(x => x.id === id);
     if (old && (event.kind === 'tool' && old.status !== 'running' && event.status === 'running'
       || old.status === event.status && old.hash === digest)) return;
-    report.seen = [...report.seen.filter(x => x.id !== id), { id, status: event.status, hash: digest }].slice(-256);
+    if (!old&&report.seen.length>=256) report.limited=true;
+    report.seen = [...report.seen.filter(x => x.id !== id), { id, status: event.status, hash: digest, kind: event.kind,
+      ...(event.outcome ? {outcome:event.outcome} : {}) }].slice(-256);
+    if(event.plan)report.plan={...event.plan};
     report.revision++;
     report.updatedAt = Date.now();
     report.events = [...report.events.filter(x => x.id !== id),
-      { id, kind: event.kind, status: event.status, text, sequence: report.revision }].slice(-5);
+      { id, kind: event.kind, status: event.status, text, sequence: report.revision,
+        ...(event.outcome ? {outcome:event.outcome} : {}) }].slice(-5);
     store.db.prepare('INSERT INTO run_progress(runId,report) VALUES(?,?) ON CONFLICT(runId) DO UPDATE SET report=excluded.report')
       .run(runId, JSON.stringify(report));
   });
+}
+
+/** Counts observed tool outcomes, never numbers claimed in commentary. */
+export function progressTotals(store: Store, taskId: string) {
+  const reports=store.db.prepare('SELECT p.report FROM task_runs r JOIN run_progress p ON p.runId=r.id WHERE r.taskId=? ORDER BY r.rowid')
+    .all(taskId).map(row=>JSON.parse(String(row.report)) as PublicProgress);
+  const tools=reports.flatMap(report=>report.seen.filter(event=>event.kind==='tool'));
+  return { total:tools.length,
+    succeeded:tools.filter(e=>e.status==='completed'&&e.outcome==='success').length,
+    failed:tools.filter(e=>e.status==='failed'||e.outcome==='failure').length,
+    unknown:tools.filter(e=>e.status!=='failed'&&e.outcome!=='failure'&&(e.status!=='completed'||e.outcome!=='success')).length,
+    plan:reports.filter(report=>report.plan).at(-1)?.plan,
+    limited:reports.some(report=>report.limited||report.seen.some(e=>!e.kind)) };
 }
