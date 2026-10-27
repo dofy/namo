@@ -1,4 +1,4 @@
-import { seedRun } from './helpers.js';
+import { isolatedGit, seedRun } from './helpers.js';
 import { approvals as approvalRecords } from '../src/business-storage.js';
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,11 +9,8 @@ import { join } from 'node:path';
 import { ApprovalError, ExecFileGitRunner, GitApprovals, type ApprovalTaskContext } from '../src/approvals.js';
 import { Store } from '../src/store.js';
 
-const git = existsSync('/usr/bin/git') ? '/usr/bin/git' : realpathSync(execFileSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).trim());
+const git = isolatedGit({ after });
 const CONFIG_REVISION = 'b'.repeat(64);
-const originalHome = process.env.HOME, isolatedGitHome = mkdtempSync(join(tmpdir(), 'namo-approval-git-home-'));
-process.env.HOME = isolatedGitHome;
-after(() => { process.env.HOME = originalHome; rmSync(isolatedGitHome, { recursive: true, force: true }); });
 
 function command(cwd: string, args: string[]): string { return execFileSync(git, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim(); }
 function markerScript(path: string, marker: string, passthrough = false): void {

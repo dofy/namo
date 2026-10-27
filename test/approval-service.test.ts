@@ -1,7 +1,8 @@
-import { test } from 'node:test';
+import { after, test } from 'node:test';
+import { isolatedGit } from './helpers.js';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ApprovalService } from '../src/approval-service.js';
@@ -11,28 +12,14 @@ import type { Incoming } from '../src/store.js';
 import { Store } from '../src/store.js';
 import { Tasks, policyHash } from '../src/tasks.js';
 
-const git = existsSync('/usr/bin/git') ? '/usr/bin/git' : realpathSync(execFileSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).trim());
+const git = isolatedGit({ after });
 const revision = 'c'.repeat(64);
-const isolatedContexts = new WeakSet<object>();
-function isolateGitHome(t: { after(fn: () => void): void }): void {
-  if (isolatedContexts.has(t)) return;
-  isolatedContexts.add(t);
-  const originalGitHome = process.env.HOME;
-  const testGitHome = mkdtempSync(join(tmpdir(), 'namo-approval-service-git-home-'));
-  process.env.HOME = testGitHome;
-  t.after(() => {
-    if (originalGitHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalGitHome;
-    rmSync(testGitHome, { recursive: true, force: true });
-  });
-}
 function command(cwd: string, args: string[]): string { return execFileSync(git, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim(); }
 function incoming(key: string, text: string, chatType: 'p2p' | 'group' = 'p2p'): Incoming {
   return { key, messageId: `m-${key}`, chatKey: 'chat-owner', chatId: 'chat-owner', senderId: 'ou_owner', text,
     envelope: { version: 1, type: 'message', kind: 'instruction', chatType, scopeKey: 'chat-owner', materials: [], limitations: [] } };
 }
 function fixture(t: { after(fn: () => void): void }) {
-  isolateGitHome(t);
   const root = mkdtempSync(join(tmpdir(), 'namo-approval-service-')); t.after(() => rmSync(root, { recursive: true, force: true }));
   const repo = join(root, 'repo'), bare = join(root, 'remote.git'), data = join(root, 'data'); mkdirSync(repo); mkdirSync(data);
   command(root, ['init', '--bare', bare]); command(repo, ['init']); command(repo, ['config', 'user.name', 'Test']); command(repo, ['config', 'user.email', 'test@example.invalid']);
