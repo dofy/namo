@@ -1,3 +1,4 @@
+import { parseAgentRegistry, type AgentRegistryConfig } from './agent-registry.js';
 import { t as tr } from './locale.js';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -30,6 +31,7 @@ export interface Config {
   concurrency: number;
   github?: GitHubAccessConfig;
   agent?: 'codex';
+  agents?: AgentRegistryConfig;
 }
 
 export function loadConfig(file?: string): Config {
@@ -106,6 +108,7 @@ export function parseConfig(d: any, absolute: string): Config {
   }
   return {
     file: absolute, dataDir, concurrency, agent: 'codex', github,
+    agents: parseAgentRegistry(d.agents, dirname(absolute)),
     feishu: {
       appId: f.appId ?? '',
       appSecret: f.appSecret || process.env[f.appSecretEnv ?? 'FEISHU_APP_SECRET'] || '',

@@ -7,6 +7,7 @@ import { api, message } from '../api';
 import { Notice } from '../components';
 import { ServiceAccessSettings } from '../ServiceAccessSettings';
 import { GitHubSettings } from '../GitHubSettings';
+import { AgentRegistrySettings } from '../components/AgentRegistrySettings';
 
 const quote = (value: string) => "'" + value.split("'").join("'\"'\"'") + "'";
 export function ConnectionsPage({ config, profiles, refresh, expired }: {
@@ -30,6 +31,7 @@ export function ConnectionsPage({ config, profiles, refresh, expired }: {
       <Code variant="ghost">namo login --config {quote(config.file)}</Code>
       <Text as="p" size="2" color="gray">{tr("诊断只检查环境和连接，不调用模型。")}</Text>
     </div>
+    <AgentRegistrySettings config={config} refresh={refresh} expired={expired} />
     <div className="connection"><div><Heading as="h2" size="5">{tr("飞书机器人")}</Heading>
       <Text as="p" size="2" color="gray">{config.feishu.appId}  {config.feishu.access?tr("· 组织服务"):tr("· 已配对 {0} 位用户",config.feishu.pairedUsers)} {config.feishu.secretConfigured ? tr("凭据已配置") : tr("凭据未配置")}</Text></div>
       <Link href={config.feishu.domain === 'lark' ? 'https://open.larksuite.com/app' : 'https://open.feishu.cn/app'} target="_blank" rel="noopener noreferrer">{tr("打开飞书后台")}</Link>

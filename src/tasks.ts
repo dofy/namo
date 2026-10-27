@@ -1,12 +1,12 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import type { Config } from './config.js';
+import { legacyPolicyHash, agentSessionKey, type AgentSelection } from './agent-registry.js';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { Store, type Inbox, type Incoming } from './store.js';
 import { readEvidence } from './evidence.js';
 import { runnerDetails } from './runner-store.js';
 import { Waits } from './waits.js';
 import { RuntimeError } from './runtime.js';
 
-export interface ProjectBinding { project?: string; cwd: string; policyHash: string; }
+export interface ProjectBinding { project?: string; cwd: string; policyHash: string; agentSelection?: AgentSelection; }
 export interface Workstream extends ProjectBinding { id: string; chatKey: string; scopeKey: string; ownerId: string; }
 export interface Task extends Workstream {
   inboxKey: string; workstreamId: string; state: string; inputVersion: number;
@@ -18,14 +18,16 @@ export const sessionKey = (w: string) => `workstream:${w}`;
 export const PROGRESS_DELAY_MS = 200;
 const id = (prefix: string) => `${prefix}-${randomBytes(6).toString('hex').toUpperCase()}`;
 export class TaskInputError extends Error {}
-export function policyHash(c?: Config['codex']): string {
-  return createHash('sha256').update(JSON.stringify(c ? { agent: 'codex', sandbox: c.sandbox, network: c.networkAccess ?? false,
-    commits: c.allowLocalCommits ?? false, read: c.readPaths ?? [], deny: c.denyPaths ?? [], home: c.home, bin: c.bin, model: c.model,
-    ...(c.accessScope?{accessScope:c.accessScope}:{}) } : {})).digest('hex');
-}
+export const policyHash = legacyPolicyHash;
 
 export class Tasks {
   constructor(private store: Store) {}
+  selection(id: string): AgentSelection | undefined {
+    if (!this.store.db.prepare("SELECT 1 FROM sqlite_master WHERE name='execution_bindings' AND type='table'").get()) return;
+    const row = this.store.db.prepare('SELECT selection FROM execution_bindings WHERE subjectId=?').get(id);
+    return row ? JSON.parse(String(row.selection)) as AgentSelection : undefined;
+  }
+  sessionKey(t: Task): string { return agentSessionKey(t.workstreamId, this.selection(t.id)); }
   get(id: string): Task | undefined { return this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(id) as unknown as Task | undefined; }
   owned(id: string, m: Incoming): Task | undefined {
     const t = this.get(id.toUpperCase());
@@ -69,7 +71,8 @@ export class Tasks {
     if (!w) return false;
     this.bind(m, w); return true;
   }
-  create(m: Inbox, project: ProjectBinding, reference?: Task): Task {
+  create(m: Inbox, project: ProjectBinding, reference?: Task, selection?: AgentSelection): Task {
+    selection ??= project.agentSelection;
     return this.store.transaction(() => {
       let w = reference ? this.store.db.prepare('SELECT * FROM workstreams WHERE id=?').get(reference.workstreamId) as unknown as Workstream : this.binding(m);
       if (!w || w.cwd !== project.cwd || w.policyHash !== project.policyHash) {
@@ -80,16 +83,21 @@ export class Tasks {
         // Adopt a legacy thread only for an unambiguous owner and the same scope/cwd.
         const prior = this.store.db.prepare('SELECT 1 FROM workstreams WHERE chatKey=? AND id!=? LIMIT 1').get(m.chatKey, wid);
         const others = this.store.db.prepare('SELECT 1 FROM inbox WHERE chatKey=? AND senderId!=? LIMIT 1').get(m.chatKey, m.senderId);
-        if (!prior && !others && scopeOf(m) === m.chatKey) {
+        if (!prior && !others && scopeOf(m) === m.chatKey && (!selection || selection.profileId === 'codex')) {
           this.store.bindWorkspace(m.chatKey, project.cwd);
           const old = this.store.thread(m.chatKey);
           if (old) this.store.saveThread(sessionKey(wid), old);
         }
       }
+      const previous = this.selection(w.id);
+      if (previous && selection && JSON.stringify(previous) !== JSON.stringify(selection)) throw new RuntimeError('agent_binding_changed');
+      selection ??= previous;
+      if (selection) this.store.db.prepare('INSERT OR IGNORE INTO execution_bindings(subjectId,selection) VALUES(?,?)').run(w.id, JSON.stringify(selection));
       this.bind(m, w);
       const tid = id('N');
       this.store.db.prepare(`INSERT INTO tasks(id,inboxKey,workstreamId,ownerId,chatKey,scopeKey,project,cwd,policyHash)
         VALUES(?,?,?,?,?,?,?,?,?)`).run(tid, m.key, w.id, m.senderId, m.chatKey, scopeOf(m), project.project ?? null, project.cwd, project.policyHash);
+      if (selection) this.store.db.prepare('INSERT INTO execution_bindings(subjectId,selection) VALUES(?,?)').run(tid, JSON.stringify(selection));
       this.store.db.prepare("INSERT INTO task_messages(taskId,inboxKey,role,version) VALUES(?,?,'instruction',1)").run(tid, m.key);
       this.store.db.prepare('UPDATE inbox SET taskId=? WHERE key=?').run(tid, m.key);
       const materials = this.store.db.prepare(`SELECT key FROM inbox WHERE state='material' AND chatKey=? AND senderId=? AND materialUntil>=? ORDER BY seq`)
@@ -180,7 +188,7 @@ export class Tasks {
         sender_open_id: m.senderId, chat_id: m.chatId, text: m.text, context: m.envelope }; }) });
   }
   thread(t: Task): string | undefined {
-    const resume = new Waits(this.store).resume(t), thread = this.store.thread(sessionKey(t.workstreamId));
+    const resume = new Waits(this.store).resume(t), thread = this.store.thread(this.sessionKey(t));
     if (resume && thread !== resume.threadId) throw new RuntimeError('wait_context_changed');
     return resume?.threadId ?? thread;
   }
@@ -256,7 +264,7 @@ export class Tasks {
   }
   detail(t: Task): unknown {
     const modern=Number(this.store.db.prepare('PRAGMA user_version').get()?.user_version)>=8;
-    return { id: t.id, workstream: t.workstreamId, project: t.project, cwd: t.cwd, execution: t.state, inputVersion: t.inputVersion,
+    return { id: t.id, agent: this.selection(t.id) ?? {profileId: 'codex', adapter: 'codex', legacy: true}, workstream: t.workstreamId, project: t.project, cwd: t.cwd, execution: t.state, inputVersion: t.inputVersion,
       startedAt: t.startedAt, finishedAt: t.finishedAt, error: t.error,
       evidence: readEvidence(this.store, t.id),
       materials:this.store.db.prepare("SELECT s.value FROM settings s JOIN task_messages tm ON substr(s.key,1,length('material:'||tm.inboxKey||':'))='material:'||tm.inboxKey||':' WHERE tm.taskId=?").all(t.id).map(row=>{const m=JSON.parse(String(row.value));return {state:m.state,truncated:m.truncated,limitations:m.limitations,nodes:m.nodes.map(({text,...node}:Record<string,unknown>)=>node)};}),

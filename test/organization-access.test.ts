@@ -12,6 +12,7 @@ import { Tasks, policyHash } from '../src/tasks.js';
 import { Management } from '../src/management.js';
 import { Engine } from '../src/engine.js';
 import { assertReviewDelivery } from '../src/github-review.js';
+import { selectAgent,selectedPolicyHash,agentCodexConfig } from '../src/agent-registry.js';
 
 const f:Config['feishu']={appId:'app',appSecret:'fake',domain:'feishu',allowedUserIds:['legacy'],allowedChatIds:[],requireMention:true,access:{mode:'organization',tenantKey:'tenant'}};
 const event=(user='alice',tenant='tenant'):FeishuEvent=>({sender:{sender_type:'user',tenant_key:tenant,sender_id:{open_id:user}},message:{message_id:`message-${user}`,chat_id:'group',chat_type:'group',message_type:'text',content:'{"text":"@bot review PR"}',mentions:[{key:'@bot',id:{open_id:'bot'}}]}});
@@ -91,4 +92,17 @@ test('organization CLI configures admission and a shared repository without pair
   await withLocale('en',()=>configureGitHub(file,{async confirm(){return answers.shift()!;},async text(){return inputs.shift()!;},info(s){lines.push(s);},close(){}},manager));
   assert.deepEqual(manager.config().github.grants,[{repository:'org/private',organization:false,userIds:[],chatIds:['group']}]);
   assert.doesNotMatch(lines.join('\n'),/[\u4e00-\u9fff]/);
+});
+
+
+test('organization policies remain binding across agent profile selection',t=>{
+  const{dir}=fixture(t),file=join(dir,'config.json');
+  const c=parseConfig({dataDir:dir,feishu:f,codex:{networkAccess:true,readPaths:[dir]},agents:{profiles:{review:{adapter:'codex',enabled:true,model:'test-model'}}}},file);
+  const selection=selectAgent(c,'review'),policy=executionPolicy(c.codex,f,member(),undefined,github),effective={...c,codex:policy};
+  const chosen=agentCodexConfig(effective,selection);
+  assert.equal(chosen.sandbox,'read-only');assert.equal(chosen.networkAccess,false);assert.deepEqual(chosen.readPaths,[]);
+  assert.equal(chosen.accessScope,policy.accessScope);
+  assert.notEqual(selectedPolicyHash(effective,selection),selectedPolicyHash(c,selection));
+  const revoked={...c,codex:executionPolicy(c.codex,f,member(),undefined,{...github,grants:[]})};
+  assert.notEqual(selectedPolicyHash(effective,selection),selectedPolicyHash(revoked,selection));
 });

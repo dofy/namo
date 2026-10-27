@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync,writeFileSync,rmSync,mkdirSync } from 'node:fs';
+import { existsSync,mkdtempSync,writeFileSync,rmSync,mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { findExecutable,probeAgent } from '../src/agents.js';
+import { detectAgents,findExecutable,probeAgent } from '../src/agents.js';
 import { initialConfig } from '../src/onboarding.js';
 import { atomicJson } from '../src/paths.js';
 import { loadConfig } from '../src/config.js';
@@ -21,3 +21,14 @@ createInterface({input:process.stdin}).on('line',l=>{const m=JSON.parse(l);let r
 });
 function readDenied(){return `#!/usr/bin/env node
 import{createInterface}from'node:readline';createInterface({input:process.stdin}).on('line',l=>{const m=JSON.parse(l);if(m.id)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='permissionProfile/list'?{data:[{id:'feishu-bot',allowed:false}]}:m.method==='account/read'?{account:{}}:{}})+'\\n')});`}
+
+test('agent discovery never executes a generic PATH binary or exposes inherited credentials',t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-discovery-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const marker=join(dir,'executed');
+ writeFileSync(join(dir,'agent'),`#!/bin/sh
+touch '${marker}'
+`,{mode:0o700});
+ const path=process.env.PATH;process.env.PATH=dir;
+ try { const cursor=detectAgents().find(a=>a.id==='cursor');assert.equal(cursor?.installed,true);assert.equal(cursor?.supported,false);assert.equal(cursor?.version,undefined);assert.equal(existsSync(marker),false); }
+ finally {if(path===undefined)delete process.env.PATH;else process.env.PATH=path;}
+});

@@ -12,11 +12,11 @@ export interface CardEvent { operator?: { open_id?: string; tenant_key?: string 
 const plain=(content:string)=>({tag:'plain_text',content});
 export function renderTaskCard(t: Task, content: string, kind: string, part: number, actions: { action:string; token:string; label?: string }[] = []): object {
   const title=part?'回复（续）':kind==='external-wait'?'等待外部检查':taskStateLabel(t.state);
-  const body=kind==='result'&&hasMarkdown(content)?{tag:'markdown',content:cardMarkdown(content)}:{tag:'div',text:plain(content)};
+  const body=(kind==='result'||kind==='progress')&&hasMarkdown(content)?{tag:'markdown',content:cardMarkdown(content)}:{tag:'div',text:plain(content)};
   const answers=actions.filter(a=>a.action.startsWith('answer:')),controls=actions.filter(a=>!a.action.startsWith('answer:'));
   const buttons=(group:typeof actions)=>({tag:'action',actions:group.map(a=>({tag:'button',text:plain(a.label??(a.action==='cancel'?'停止任务':'查看详情')),type:a.action.startsWith('answer:')?'primary':'default',value:{namo:a.token},
     ...(a.action==='cancel'?{confirm:{title:plain('停止这项任务？'),text:plain('已发生的操作不会自动撤销。')}}:{})}))});
-  return {config:{wide_screen_mode:true,update_multi:true},header:{title:plain(title),template:kind==='progress'?'blue':t.state==='succeeded'?'green':t.state==='cancelled'?'grey':'orange'},
+  return {config:{wide_screen_mode:true,update_multi:true},header:{title:plain(title),template:t.state==='succeeded'?'green':t.state==='cancelled'?'grey':kind==='progress'&&['queued','running','waiting'].includes(t.state)?'blue':'orange'},
     elements:[body,
       ...(answers.length?[buttons(answers),{tag:'hr'}]:[]),
       ...(t.project&&!part?[{tag:'note',elements:[plain(`项目：${t.project}`)]}]:[]),
@@ -40,11 +40,14 @@ export class Cards {
         ...(['queued','running','waiting'].includes(task.state)?[{action:'cancel'}]:[])].map(a=>({...a,token:randomBytes(24).toString('base64url')}));
       for(const a of actions) this.store.db.prepare('INSERT INTO card_actions(token,outboxId,taskId,action,inputVersion,expiresAt) VALUES(?,?,?,?,?,?)')
         .run(a.token,output.id,task.id,a.action,task.inputVersion,Date.now()+900_000);
-      const content=output.kind==='progress'?`${output.content}\n\n${progressState(this.store,task).content}`:choices&&!output.part?`${wait!.question}\n\n点击下面的答案继续，也可以引用这条消息自由回复。`:output.content;
+      const content=output.kind==='progress'?progressState(this.store,task).content:choices&&!output.part?`${wait!.question}\n\n点击下面的答案继续，也可以引用这条消息自由回复。`:output.content;
       const prefix=output.part?this.store.db.prepare('SELECT content FROM outbox WHERE inboxKey=? AND kind=? AND part<? ORDER BY part').all(output.inboxKey,output.kind,output.part).map(row=>String(row.content)).join(''):'';
       const fence=output.kind==='result'?openFence(prefix):undefined;
       const display=(fence?fence+'\n':'')+content;
       const payload=renderTaskCard(task,display,wait&&linkedExternalWait(this.store,wait.id)?'external-wait':output.kind,output.part,actions);
+      // Receipt text is not host formatting. Keep it literal beside the
+      // structured Markdown progress block, including on the first card.
+      if(output.kind==='progress'&&output.content)(payload as {elements:unknown[]}).elements.unshift({tag:'div',text:plain(output.content)});
       this.store.db.prepare('UPDATE outbox SET payload=? WHERE id=?').run(JSON.stringify(payload),output.id);
       return payload;
     });

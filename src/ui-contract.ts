@@ -31,9 +31,42 @@ export interface ConfigView {
   values: ConfigValues;
   file: string;
   feishu: { appId: string; domain: string; secretConfigured: boolean; pairedUsers: number; restrictedChats: number; access?:OrganizationAccess|null; allowedUserIds?:string[]; allowedChatIds?:string[] };
+  agents: AgentRegistryView;
   github?: { credentialConfigured:boolean; credentialSource:string; localGh?:{login:string}; tokenEnv?:string; repositories:string[]; allowedUserIds:string[]; grants?:Array<Audience & {repository:string}> };
 }
 export interface GitHubConfigPatch { github: {source?:'gh'|'token'|'anonymous';repositories:string[];allowedUserIds:string[];grants?:Array<Audience & {repository:string}>};newGithubToken?:string;clearGithubToken?:boolean }
+export type AgentAdapter = 'codex' | 'claude' | 'cursor';
+export interface AgentProfileSpecView {
+  adapter: AgentAdapter;
+  enabled?: boolean;
+  bin?: string;
+  model?: string;
+  timeoutMs?: number;
+}
+export interface AgentProfileView {
+  id: string;
+  adapter: AgentAdapter;
+  enabled: boolean;
+  bin: string;
+  home: string;
+  model?: string;
+  timeoutMs: number;
+  revision: string;
+  available: boolean;
+}
+export interface AgentRegistryView {
+  defaultProfile: string;
+  memoryProfile: 'codex';
+  profiles: AgentProfileView[];
+  specs: Record<string, AgentProfileSpecView>;
+}
+export interface AgentRegistryPatch {
+  agents: {
+    defaultProfile?: string;
+    memoryProfile?: 'codex';
+    profiles?: Record<string, AgentProfileSpecView>;
+  };
+}
 export interface TaskSummary {
   id: string; workstreamId: string; project: string | null; state: string; inputVersion: number;
   startedAt: number | null; finishedAt: number | null; error: string | null;

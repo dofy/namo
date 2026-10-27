@@ -1,11 +1,13 @@
+import { selectAgent, selectedPolicyHash, AgentRegistryError, agentCodexConfig } from './agent-registry.js';
+import { runtimeFor } from './agents.js';
 import { readFileSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadConfig } from './config.js';
 import { digest } from './paths.js';
 import { makeRedactor } from './safety.js';
 import { Store } from './store.js';
-import { Tasks, policyHash, sessionKey } from './tasks.js';
-import { CodexRuntime, RuntimeError, type RunControls, type RunResult } from './runtime.js';
+import { Tasks } from './tasks.js';
+import { RuntimeError, type RunControls, type RunResult } from './runtime.js';
 import { EvidenceRecorder } from './evidence.js';
 import { runnerJob, runnerEvent } from './runner-store.js';
 import { recordActivity } from './feedback.js';
@@ -48,12 +50,15 @@ async function main(): Promise<void> {
     try {
       const config = loadConfig(file), revision = digest(readFileSync(file, 'utf8'));
       const policy = executionPolicy(config.codex,config.feishu,store.get(task.inboxKey)!,task.project??undefined,config.github);
+      const effectiveConfig = {...config,codex:policy};
+      const selection = tasks.selection(task.id) ?? selectAgent(effectiveConfig, 'codex');
+      const selectedConfig = agentCodexConfig(effectiveConfig, selection);
       if (resolve(database) !== join(config.dataDir, 'bot.sqlite') || revision !== runnerJob(store, runId)!.configRevision
-        || task.policyHash !== policyHash(policy) || realpathSync(task.cwd) !== task.cwd
+        || task.policyHash !== selectedPolicyHash(effectiveConfig, selection) || realpathSync(task.cwd) !== task.cwd
         || (task.project && config.codex.projects?.[task.project] !== task.cwd)) throw new RuntimeError('task_configuration_changed');
       const redact = makeRedactor([config.feishu.appSecret,config.github?.token??'']);
       if (store.get(task.inboxKey)?.cancelRequested || abort.signal.aborted) throw new RuntimeError('cancelled');
-      write(() => { evidence = new EvidenceRecorder(store, runId, task.cwd, config.codex.denyPaths, redact); });
+      write(() => { evidence = new EvidenceRecorder(store, runId, task.cwd, selectedConfig.denyPaths, redact); });
       const steer = (): void => {
         if (!controls || steering || abort.signal.aborted) return;
         steering = (async () => {
@@ -82,16 +87,16 @@ async function main(): Promise<void> {
           steer();
         } catch { storageFailed = true; abort.abort('storage_failed'); }
       }, 200);
-      const raw = await new CodexRuntime(policy).run({ taskId: task.id, runId,
+      const raw = await runtimeFor(effectiveConfig, selection).run({ taskId: task.id, runId,
         cwd: task.cwd, prompt: runnerJob(store, runId)!.prompt, images:loadRunImages(store,config.dataDir,runId),
         threadId: tasks.thread(task), signal: abort.signal,
         onProcess: pid => write(() => { store.db.prepare('UPDATE runner_jobs SET runtimePid=? WHERE runId=?').run(pid, runId); runnerEvent(store, runId, 'runtime_started'); }),
         onThread: thread => write(() => {
-          store.saveThread(sessionKey(task.workstreamId), thread); store.saveRun(task.inboxKey, thread); tasks.saveRun(runId, thread);
+          store.saveThread(tasks.sessionKey(task), thread); store.saveRun(task.inboxKey, thread); tasks.saveRun(runId, thread);
           runnerEvent(store, runId, 'thread_bound');
         }),
         onTurn: turn => write(() => {
-          const thread = store.thread(sessionKey(task.workstreamId))!;
+          const thread = store.thread(tasks.sessionKey(task))!;
           store.saveRun(task.inboxKey, thread, turn); tasks.saveRun(runId, thread, turn); runnerEvent(store, runId, 'turn_bound');
         }),
         onReview: args => readReview(store,file,task,args,abort.signal),
@@ -111,7 +116,7 @@ async function main(): Promise<void> {
       result = { ...raw, text: redact(raw.text), ...(raw.waiting ? { waiting: { ...raw.waiting, question: redact(raw.waiting.question), choices: raw.waiting.choices?.map(redact) } } : {}) };
     } catch (e) {
       error = abort.signal.reason === 'worker_stopped' ? 'interrupted'
-        : storageFailed ? 'runner_storage_error' : e instanceof RuntimeError ? e.code : 'runtime_error';
+        : storageFailed ? 'runner_storage_error' : e instanceof RuntimeError || e instanceof AgentRegistryError ? e.code : 'runtime_error';
     } finally { clearInterval(timer); await steering; }
     if (storageFailed) error = 'runner_storage_error';
     write(() => {

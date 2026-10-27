@@ -288,3 +288,20 @@ test('unclaimed start timeout fences late starters without rerunning; schema 4 m
   assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version, SCHEMA_VERSION);
   assert.equal(upgraded.db.prepare('SELECT COUNT(*) n FROM runner_jobs').get()?.n, 0); upgraded.close();
 });
+
+test('worker factory uses the pinned profile binary and isolated home, never the changed default', async t => {
+  const f=fixture(t);
+  const selectedBin=join(f.dir,'selected.mjs');
+  writeFileSync(selectedBin,fake.replace("appendFileSync(join(cwd,'calls'),'turn\\n');", "appendFileSync(join(cwd,'calls'),'turn\\n');appendFileSync(join(cwd,'selected-home'),process.env.CODEX_HOME);"),{mode:0o700});
+  const raw=JSON.parse(readFileSync(f.file,'utf8'));
+  raw.agents={defaultProfile:'review',profiles:{review:{adapter:'codex',bin:selectedBin}}};writeFileSync(f.file,JSON.stringify(raw));
+  Object.assign(f.config,loadConfig(f.file));
+  const engine=f.receiver();engine.accept(message('profile','instant'));
+  const task=f.tasks.get(f.store.get('profile')!.taskId!)!;
+  assert.equal(f.tasks.selection(task.id)?.profileId,'review');
+  raw.agents.defaultProfile='codex';writeFileSync(f.file,JSON.stringify(raw));Object.assign(f.config,loadConfig(f.file));
+  engine.start();await wait(()=>f.store.get('profile')?.state==='replied');
+  assert.equal(f.tasks.get(task.id)?.state,'succeeded');
+  assert.equal(readFileSync(join(f.project,'selected-home'),'utf8'),join(f.data,'agents','review'));
+  assert.equal(f.calls(),1);
+});
