@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
+import sqlite, { DatabaseSync } from 'node:sqlite';
+import { syncBuiltinESMExports } from 'node:module';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -29,4 +30,15 @@ test('empty or corrupt SQLite never yields a verified backup',async t=>{
 test('symlinked backup destinations are rejected before any copy outside data directory',async t=>{
   const f=fixture(t),external=join(f.root,'external');mkdirSync(external);symlinkSync(external,join(f.dataDir,'backups'));
   await assert.rejects(createUpgradeBackup(f.config,f.plist),/upgrade_backup_failed/);
+});
+
+
+test('a failed or silently empty backup operation cannot produce a verified receipt',async t=>{
+ for(const mode of ['throw','empty','corrupt'])await t.test(mode,async inner=>{
+  const f=fixture(inner),db=new DatabaseSync(f.database);db.exec("CREATE TABLE keep(value TEXT); INSERT INTO keep VALUES('safe')");const before=databaseFingerprint(db);db.close();
+  const mock=inner.mock.method(sqlite,'backup',async(_db:DatabaseSync,target:string)=>{if(mode==='throw')throw new Error('private backend detail');writeFileSync(target,mode==='empty'?'':'corrupt');return 1;});syncBuiltinESMExports();
+  inner.after(()=>{mock.mock.restore();syncBuiltinESMExports();});
+  await assert.rejects(createUpgradeBackup(f.config,f.plist),/^Error: upgrade_backup_failed$/);
+  const current=new DatabaseSync(f.database,{readOnly:true});assert.equal(databaseFingerprint(current),before);current.close();
+ });
 });

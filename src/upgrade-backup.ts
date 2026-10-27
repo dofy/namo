@@ -1,4 +1,4 @@
-import { DatabaseSync, backup } from 'node:sqlite';
+import sqlite, { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -50,7 +50,7 @@ export async function createUpgradeBackup(c: Config, plist: string): Promise<str
       try {
         healthy(source); fingerprint = databaseFingerprint(source);
         const target = join(directory, 'bot.sqlite');
-        await backup(source, target); regular(target); chmodSync(target, 0o600);
+        await sqlite.backup(source, target); regular(target); chmodSync(target, 0o600);
         if (!statSync(target).size) throw new Error('backup_database_empty');
         const copy = new DatabaseSync(target, { readOnly: true });
         try { healthy(copy); if (databaseFingerprint(copy) !== fingerprint) throw new Error('backup_database_mismatch'); }
