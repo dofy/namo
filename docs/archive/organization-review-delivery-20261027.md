@@ -50,6 +50,10 @@ The resent request completed successfully in one run using an isolated workspace
 
 No command or file-change actions were observed. The evidence projection finished without truncating its event list; tool payloads remain deliberately omitted, so generic tool evidence is still marked limited. The existing failed attempt remains in history and was not silently replayed.
 
-The final result was accepted by Feishu and read back through the bot API with matching message ID, target group and reviewed HEAD. This proves platform storage in the selected group, not a human read receipt. User confirmation of the displayed result is still pending. Private task/message IDs and result contents remain in the ignored local acceptance record.
+The final result was accepted by Feishu and read back through the bot API with matching message ID, target group and reviewed HEAD. This proves platform storage in the selected group, not a human read receipt. On 2026-10-27 the user confirmed receipt in the selected group and normal display, including the reviewed commit and truncated-patch explanation. This completes the requested live group PR review acceptance for this user/group/repository path. Private task/message IDs and result contents remain in the ignored local acceptance record.
 
 Real multi-member/unpaired-member, external-tenant, revocation, restart and changing-HEAD scenarios remain separate live follow-ups; their automated coverage does not substitute for those checks.
+
+## Acceptance closure
+
+User-confirmed outcome: “已收到，显示正常”. Organization admission, isolated execution, host-side GitHub authorization, fixed-HEAD PR reading, bounded review, Feishu group delivery/readback and actual recipient display are verified for the selected path. The previously documented broader multi-member and failure/recovery scenarios remain follow-ups. No GitHub comment, push, merge, deployment or permission broadening was performed by the review task.

@@ -19,9 +19,9 @@ Implementation: organization admission, explicit project/repository audiences, b
 
 实现：组织准入、项目 / 仓库显式授权、有界 PR 审查、撤权校验和中英文 UI / CLI。自动回归和隔离浏览器检查通过；部署和真实群聊验收分别记录。
 
-Deployment: the existing local service was upgraded with schema 10 and preserved records/credentials. Organization admission and one explicitly authorized group/repository grant are active. Live group execution and platform readback passed; recipient display confirmation remains pending; see [delivery evidence](archive/organization-review-delivery-20261027.md).
+Deployment: the existing local service was upgraded with schema 10 and preserved records/credentials. Organization admission and one explicitly authorized group/repository grant are active. Live group execution, platform readback and recipient display confirmation passed for the selected path; see [delivery evidence](archive/organization-review-delivery-20261027.md).
 
-部署：现有本机服务已升级，保持 schema 10，历史数据和凭据保留；已启用组织准入和一个明确授权的群 / 仓库范围。真实群聊执行与平台读回通过，收件人显示确认待完成。
+部署：现有本机服务已升级，保持 schema 10，历史数据和凭据保留；已启用组织准入和一个明确授权的群 / 仓库范围。指定场景的真实群聊执行、平台读回与收件人显示确认均已通过。
 
 Existing sessions retain their project binding. If that project is no longer granted to the chat, Namo refuses continuation; send `/new` and repeat the request to start in an isolated workspace. This does not grant access or copy the old native session.
 
