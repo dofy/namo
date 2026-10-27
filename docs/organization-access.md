@@ -18,3 +18,7 @@ Namo 是面向飞书组织的自托管 Agent 服务。工作站和服务器都�
 Implementation: organization admission, explicit project/repository audiences, bounded PR review, revocation checks and bilingual UI/CLI. Automated regression and isolated browser checks passed; deployment and live group acceptance are tracked separately.
 
 实现：组织准入、项目 / 仓库显式授权、有界 PR 审查、撤权校验和中英文 UI / CLI。自动回归和隔离浏览器检查通过；部署和真实群聊验收分别记录。
+
+Deployment: the existing local service was upgraded with schema 10 and preserved records/credentials. Organization admission and one explicitly authorized group/repository grant are active. Live group acceptance remains pending; see [delivery evidence](archive/organization-review-delivery-20261027.md).
+
+部署：现有本机服务已升级，保持 schema 10，历史数据和凭据保留；已启用组织准入和一个明确授权的群 / 仓库范围。真实群聊验收待完成。
