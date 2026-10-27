@@ -93,7 +93,8 @@ export type MemoryMutation =
   | {action:'disable'|'delete'|'activate';ownerId:string;id:string;version:number};
 export interface ManagementState {
   assistant?: AssistantView;
-  service: { running?: boolean; ready?: boolean; connection?: string };
+  service: { running?: boolean; ready?: boolean; connection?: string;
+    release?: { installed?: string; running?: string; matches?: boolean; verified?: boolean } };
   config: ConfigView;
   database: {
     schema: number; tasks: TaskSummary[]; issues: Issue[];

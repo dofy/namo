@@ -1,7 +1,7 @@
 import { t as tr, getLocale } from '../i18n';
 import { Icon } from '../Icon';
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Button, Heading, Text, TextField } from '@radix-ui/themes';
+import { Badge, Button, Text, TextField } from '@radix-ui/themes';
 import type { ProfileState, ProfileValues, UserProfile } from '../../src/ui-contract';
 import { api, message } from '../api';
 import { Choice, ConfirmButton, Field, Notice } from '../components';
@@ -44,15 +44,17 @@ export function ProfilesPage({ profiles, expired, refresh }: { profiles: Profile
     } finally { setBusy(false); }
   }
   return <div className="profiles-page">
-    <Text as="p" size="2" color="gray">{tr("档案仅向本人私聊及本机管理入口展示。当前用于查看和管理，尚未自动用于 Agent 回答或调度。")}</Text>
+    <Text as="p" size="2" color="gray">{tr('在助手设置中开启档案使用后，这些偏好会用于本人的私聊任务。')}</Text>
     {!profiles.available && <Notice>{profiles.reason}</Notice>}
     {profiles.available && !profiles.entries.length && <Notice>{tr("尚无已配对用户，请先通过 namo init 完成用户配对。")}</Notice>}
     {selected && <>
       <Field label={tr("已配对用户")} htmlFor="profile-user"><Choice id="profile-user" value={key(selected)} disabled={dirty || busy || !profiles.available}
         onChange={value => { const next = profiles.entries.find(p => key(p) === value); reset(next, profiles.configRevision); setNotice(''); }}
-        options={(current ? profiles.entries : [selected, ...profiles.entries]).map(p => ({ value: key(p), label: `${p.name || tr("未设置称呼")} · ${p.userId}` }))} /></Field>
-      <Text as="p" size="1" color="gray">{tr("身份来自当前应用的配对配置，平台展示名称尚未同步；下方字段为用户自设资料。修改资料不会关联其他应用的同名用户。")}</Text>
-      <div className="profile-identity"><Badge color="gray">{selected.channel === 'feishu' ? tr("飞书") : 'Lark'}</Badge><Text size="2">{tr("应用：")}{selected.appId}</Text><Text size="2">{tr("用户：")}{selected.userId}</Text></div>
+        options={(current ? profiles.entries : [selected, ...profiles.entries]).map(p => ({ value: key(p), label: p.name && profiles.entries.filter(other => other.name === p.name).length === 1 ? p.name : `${p.name || tr("未设置称呼")} · …${p.userId.slice(-8)}` }))} /></Field>
+      <details className="profile-account"><summary>{tr('配对账号详情')}</summary>
+        <div className="profile-identity"><Badge color="gray">{selected.channel === 'feishu' ? tr("飞书") : 'Lark'}</Badge><Text size="2">{tr("应用：")}{selected.appId}</Text><Text size="2">{tr("用户：")}{selected.userId}</Text></div>
+        <Text as="p" size="1" color="gray">{tr("身份来自当前应用的配对配置，平台展示名称尚未同步；下方字段为用户自设资料。修改资料不会关联其他应用的同名用户。")}</Text>
+      </details>
       {dirty && <Text as="p" size="1" color="gray">{tr("有未保存草稿，请保存或放弃后再选择其他用户。")}</Text>}
       {(!current || revision !== profiles.configRevision) && <Notice>{tr("配对或应用配置已变化，当前草稿保留；请放弃草稿并重新选择用户。")}</Notice>}
       {current && selected.version !== current.version && dirty && <Notice>{tr("此档案已有新版本。当前草稿保留，保存会检查冲突；请先核对已保存内容。")}</Notice>}
@@ -66,20 +68,20 @@ export function ProfilesPage({ profiles, expired, refresh }: { profiles: Profile
           </div>
           <Text as="p" size="1" color="gray">{tr("称呼最多 80 字；留空表示未设置。请勿在档案中填写密码或密钥。")}</Text>
         </fieldset>
-        <div className="save-bar">
+        <div className="profile-save">
           <Text as="p" size="2" color="gray">{selected.version ? tr("已保存版本 {0}", selected.version) : tr("尚未保存资料")}{selected.updatedAt ? ` · ${new Date(selected.updatedAt).toLocaleString(getLocale())}` : ''}</Text>
+          <div className="profile-save-actions"><Button type="submit" disabled={!dirty || !editable} loading={busy}><Icon name="save" />{tr("保存档案")}</Button>
           <ConfirmButton disabled={busy || expired} title={tr("重新载入已保存档案？")} description={tr("当前未保存草稿会被放弃。")} action={tr("载入已保存内容")} onConfirm={async () => {
             const latest = await api.state(); reset(latest.profiles.entries.find(p => key(p) === key(selected)) ?? latest.profiles.entries[0], latest.profiles.configRevision); setNotice(tr("已载入保存的档案。")); await refresh();
-          }}><Icon name="reset" />{tr("放弃草稿 / 重新载入")}</ConfirmButton>
-          <Button type="submit" disabled={!dirty || !editable} loading={busy}><Icon name="save" />{tr("保存档案")}</Button>
+          }}><Icon name="reset" />{tr('重新载入')}</ConfirmButton></div>
         </div>
       </form>
       <ConfirmButton danger disabled={busy || dirty || !editable || !Object.values(values(selected)).some(Boolean)} title={tr("清空这位用户的档案？")}
         description={tr("清空称呼、语言和时区，保留配对与权限。修改记录仅保留字段名、来源和版本；历史聊天、备份不随之删除。")} action={tr("清空档案")} onConfirm={() => save({ name: '', language: '', timezone: '' })}><Icon name="trash" />{tr("清空档案")}</ConfirmButton>
-      {!!selected.changes.length && <section className="audit"><Heading as="h2" size="4">{tr("最近修改")}</Heading>
+      {!!selected.changes.length && <details className="profile-history"><summary>{tr("最近修改")} ({selected.changes.length})</summary><div className="audit">
         {selected.changes.map(change => <div key={change.version}><Text as="p" size="2">{tr("版本")} {change.version} · {change.fields.map(f => labels[f]).join('、')} · {change.source === 'self' ? tr("本人飞书 / Lark 私聊") : tr("本机管理入口")}</Text>
           <Text size="1" color="gray">{new Date(change.createdAt).toLocaleString(getLocale())}{change.sourceRef ? tr(" · 来源消息 {0}", change.sourceRef) : ''}</Text></div>)}
-      </section>}
+      </div></details>}
     </>}
   </div>;
 }
