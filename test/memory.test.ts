@@ -225,6 +225,15 @@ test('project detail stays local while relevant global overviews support cross-p
   assert.throws(() => f.memory.upsertAutomatic(candidate({ level: 'local', project: 'other' }), authority()), /project does not match/);
 });
 
+test('cross-project relevance recognizes Chinese phrases and keeps empty context distinct from omitted context', t => {
+  const f = fixture(t);
+  const overview = f.memory.upsertAutomatic(candidate({ key: 'atlas.cn', project: 'atlas', kind: 'project_knowledge', text: '负责订单处理和支付。' }), authority())!;
+  const elsewhere = automaticMemoryStorageAccess({ ownerId: 'bob', chatKey: 'other-team', chatType: 'group', project: 'other' });
+  assert.deepEqual(f.memory.search(elsewhere, { relevantText: '检查订单处理流程' }).map(row => row.id), [overview.id]);
+  assert.deepEqual(f.memory.search(elsewhere, { relevantText: '' }).map(row => row.id), []);
+  assert.deepEqual(f.memory.search(elsewhere).map(row => row.id), [overview.id]);
+});
+
 test('automatic extraction is idempotent, corrects a concept in place, and cannot roll back newer observations', t => {
   const f = fixture(t), first = f.memory.upsertAutomatic(candidate(), authority())!;
   const same = f.memory.upsertAutomatic(candidate({ observedAt: 110, sourceMessageIds: ['message-repeat'] }), authority())!;

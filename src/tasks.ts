@@ -72,7 +72,14 @@ export class Tasks {
     if (!w) return false;
     this.bind(m, w); return true;
   }
-  create(m: Inbox, project: ProjectBinding, reference?: Task, selection?: AgentSelection): Task {
+  model(id: string): string | null | undefined {
+    const row = this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`task-model:${id}`);
+    return row ? JSON.parse(String(row.value)) as string | null : undefined;
+  }
+  freezeDefaultModel(id: string, model: string): void {
+    this.store.db.prepare("UPDATE settings SET value=? WHERE key=? AND value='null'").run(JSON.stringify(model), `task-model:${id}`);
+  }
+  create(m: Inbox, project: ProjectBinding, reference?: Task, selection?: AgentSelection, model?: string | null): Task {
     selection ??= project.agentSelection;
     return this.store.transaction(() => {
       let w = reference ? this.store.db.prepare('SELECT * FROM workstreams WHERE id=?').get(reference.workstreamId) as unknown as Workstream : this.binding(m);
@@ -99,6 +106,7 @@ export class Tasks {
       this.store.db.prepare(`INSERT INTO tasks(id,inboxKey,workstreamId,ownerId,chatKey,scopeKey,project,cwd,policyHash)
         VALUES(?,?,?,?,?,?,?,?,?)`).run(tid, m.key, w.id, m.senderId, m.chatKey, scopeOf(m), project.project ?? null, project.cwd, project.policyHash);
       if (selection) this.store.db.prepare('INSERT INTO execution_bindings(subjectId,selection) VALUES(?,?)').run(tid, JSON.stringify(selection));
+      if (model !== undefined) this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(`task-model:${tid}`, JSON.stringify(model));
       this.store.db.prepare("INSERT INTO task_messages(taskId,inboxKey,role,version) VALUES(?,?,'instruction',1)").run(tid, m.key);
       this.store.db.prepare('UPDATE inbox SET taskId=? WHERE key=?').run(tid, m.key);
       const materials = this.store.db.prepare(`SELECT key FROM inbox WHERE state='material' AND chatKey=? AND senderId=? AND materialUntil>=? ORDER BY seq`)

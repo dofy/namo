@@ -126,6 +126,7 @@ export interface ProfileChange {
 }
 export interface UserProfile extends ProfileIdentity, ProfileValues {
   version: number; updatedAt: number | null; changes: ProfileChange[];
+  defaultModel?: string;
 }
 export interface ProfileState { available: boolean; reason?: string; configRevision: string; entries: UserProfile[] }
 export interface TaskDetail {

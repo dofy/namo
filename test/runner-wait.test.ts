@@ -33,6 +33,8 @@ const finish = text => {
 createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line);
   if (m.method === 'initialize') return send({ id: m.id, result: {} });
+  if (m.method === 'config/read') return send({ id: m.id, result: { config: {} } });
+  if (m.method === 'model/list') return send({ id: m.id, result: { data: [{ model: 'default-model', isDefault: true }], nextCursor: null } });
   if (m.method === 'plugin/list') return send({ id: m.id, result: { marketplaces: [] } });
   if (m.method === 'skills/list') return send({ id: m.id, result: { data: [{ cwd: m.params.cwds[0], skills: [], errors: [] }] } });
   if (m.method === 'thread/start' || m.method === 'thread/resume') {

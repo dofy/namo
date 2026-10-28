@@ -141,6 +141,25 @@ async function initializedRpc(config: Config['codex'], skills: SkillAccess): Pro
   } catch (error) { await rpc.close(); throw error; }
 }
 
+export async function listCodexModels(config: Config['codex']): Promise<{id:string;name:string;isDefault:boolean}[]> {
+  mkdirSync(config.home, { recursive: true, mode: 0o700 });
+  const rpc = await initializedRpc(config, { settings: readSkillSettings(config.home), directories: [] });
+  try {
+    const result: {id:string;name:string;isDefault:boolean}[] = [];
+    let cursor: string | undefined;
+    for (let page=0; page<10; page++) {
+      const response = await rpc.request('model/list', {limit:100, ...(cursor ? {cursor} : {})}, 10000);
+      if (!Array.isArray(response.data)) throw new RuntimeError('model_catalog_invalid');
+      for (const model of response.data) if (model && model.hidden !== true && typeof model.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model.model))
+        result.push({id:model.model,name:typeof model.displayName === 'string' ? model.displayName.slice(0,100) : model.model,isDefault:model.isDefault === true});
+      if (!response.nextCursor) return result;
+      if (typeof response.nextCursor !== 'string' || response.nextCursor === cursor) throw new RuntimeError('model_catalog_invalid');
+      cursor=response.nextCursor;
+    }
+    throw new RuntimeError('model_catalog_too_large');
+  } finally { await rpc.close(); }
+}
+
 /** Discover without inference, then pin only enabled skill directories for this runtime. */
 export async function connectCodex(config: Config['codex'], cwd: string): Promise<Rpc> {
   mkdirSync(config.home, { recursive: true, mode: 0o700 });

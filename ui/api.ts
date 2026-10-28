@@ -26,6 +26,7 @@ export const api = {
     mutation.action==='import'?mutation.input:mutation.action==='correct'?{id:mutation.id,version:mutation.version,text:mutation.text}:{id:mutation.id,version:mutation.version}}),
   session: (code: string) => request('/api/session', { code }),
   state: (signal?: AbortSignal) => request<ManagementState>('/api/state', undefined, signal),
+  models: (signal?: AbortSignal) => request<{id:string;name:string;isDefault:boolean}[]>('/api/models', undefined, signal),
   tasks: (query: string, signal?: AbortSignal) => request<TaskList>(`/api/tasks?${query}`, undefined, signal),
   sessions: (query: string, signal?: AbortSignal) => request<PageResult<SessionSummary>>(`/api/sessions?${query}`, undefined, signal),
   dashboard: (signal?: AbortSignal) => request<Dashboard>('/api/dashboard', undefined, signal),
@@ -45,5 +46,6 @@ export const api = {
   approval: (input: ApprovalAction) => request<ApprovalView>('/api/approvals', input),
   inspectMigration: (sourceFile: string, sourceInstanceId: string) => request<MigrationInspection>('/api/migration-inspect', { sourceFile, sourceInstanceId }),
   saveProfile: (configRevision: string, profile: UserProfile, patch: ProfileValues) => request<UserProfile>('/api/profiles', { configRevision, userId: profile.userId, version: profile.version, patch }),
+  saveUserModel: (configRevision: string, profile: UserProfile, model: string) => request<{model:string}>('/api/user-model', {configRevision,userId:profile.userId,expected:profile.defaultModel ?? '',model}),
 };
 export const message = (error: unknown) => error instanceof Error ? error.message : tr("api.actionIncompletePleaseTryAgain");

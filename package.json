@@ -13,7 +13,7 @@
     "smoke:skills": "pnpm run build:server && node dist/scripts/smoke-skills.js",
     "prepack": "pnpm run build",
     "cli": "node bin/namo.js",
-    "build:server": "tsc -p tsconfig.json",
+    "build:server": "node scripts/clean-server-build.mjs && tsc -p tsconfig.json",
     "typecheck:ui": "tsc -p tsconfig.ui.json",
     "build:ui": "pnpm run typecheck:ui && vite build",
     "ui:watch": "vite build --watch"

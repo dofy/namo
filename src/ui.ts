@@ -69,6 +69,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/logs')return send(200,manager.logs());
         if(path==='/api/approvals')return send(200,manager.approvals());
         if(path==='/api/state')return send(200,manager.state());
+        if(path==='/api/models')return send(200,await manager.models());
         if(path==='/api/tasks')return send(200,manager.browse('tasks',new URL(req.url!,origin).searchParams));
         if(path==='/api/sessions')return send(200,manager.browse('sessions',new URL(req.url!,origin).searchParams));
         if(path==='/api/dashboard')return send(200,manager.browse('dashboard'));
@@ -91,6 +92,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/migration-inspect')return send(200,manager.inspectMigration(input));
         if(path==='/api/approvals')return send(200,await manager.approval(input));
         if(path==='/api/profiles')return send(200,manager.saveProfile(input.configRevision,input.userId,input.version,input.patch));
+        if(path==='/api/user-model')return send(200,{model:manager.saveUserModel(input.configRevision,input.userId,input.expected,input.model)});
         if(path==='/api/resolve')return send(200,manager.reconcile(input));
         if(path==='/api/cancel')return send(200,manager.cancel(input.id,input.inputVersion,input.requestId));
         return send(404,{error:tr("common.actionNotFound")});

@@ -10,7 +10,7 @@ import type { PublicProgressEvent } from '../src/public-progress.js';
 const FAKE = `#!/usr/bin/env node
 import { createInterface } from 'node:readline';
 const write = m => process.stdout.write(JSON.stringify(m)+'\\n');
-let waitAfterLate=false,apiRegistered=false;
+let waitAfterLate=false,apiRegistered=false,threadModel;
 createInterface({input:process.stdin}).on('line', line=>{
  const m=JSON.parse(line);
  if(m.id===99&&!m.method){
@@ -19,11 +19,13 @@ createInterface({input:process.stdin}).on('line', line=>{
  }
  if(!m.method || m.id===undefined)return;
  if(m.method==='initialize')return write({id:m.id,result:{}});
+ if(m.method==='config/read')return write({id:m.id,result:{config:m.params.cwd.endsWith('/model-configured')?{model:'configured-model'}:{}}});
  if(m.method==='plugin/list')return write({id:m.id,result:{marketplaces:[]}});
  if(m.method==='skills/list')return write({id:m.id,result:{data:[{cwd:m.params.cwds[0],skills:[],errors:[]}]}});
+ if(m.method==='model/list')return write({id:m.id,result:{data:[{model:'default-model',isDefault:true}],nextCursor:null}});
  if(m.method==='thread/start' && new Set((m.params.dynamicTools??[]).map(t=>Object.hasOwn(t,'type')?'canonical':'legacy')).size>1)return write({id:m.id,error:{code:-32600,message:'mixed dynamic tool formats'}});
  if(m.method==='thread/start')apiRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='github_api');
- if(m.method==='thread/start'||m.method==='thread/resume')return write({id:m.id,result:{thread:{id:m.params.threadId||'thread-one'}}});
+ if(m.method==='thread/start'||m.method==='thread/resume'){threadModel=m.params.model;return write({id:m.id,result:{thread:{id:m.params.threadId||'thread-one'}}});}
  if(m.method==='turn/interrupt'&&waitAfterLate){
   write({id:m.id,result:{}});
   write({method:'item/started',params:{threadId:m.params.threadId,turnId:'turn-one',item:{id:'cmd',type:'commandExecution',command:'pnpm test',status:'inProgress'}}});
@@ -38,6 +40,9 @@ createInterface({input:process.stdin}).on('line', line=>{
  if(m.method==='turn/start'){
   if(m.params.sandboxPolicy || m.params.permissions!=='feishu-bot')return write({id:m.id,error:{code:-32600,message:'legacy permissions rejected'}});
   const prompt=m.params.input[0].text;
+  if(prompt==='check-model' && (threadModel!=='chosen-model'||m.params.model!=='chosen-model'))return write({id:m.id,error:{code:-32602,message:'model mismatch'}});
+  if(prompt==='check-default' && (threadModel!=='default-model'||m.params.model!=='default-model'))return write({id:m.id,error:{code:-32602,message:'default mismatch'}});
+  if(prompt==='check-configured' && (threadModel!=='configured-model'||m.params.model!=='configured-model'))return write({id:m.id,error:{code:-32602,message:'configured default mismatch'}});
   if(prompt==='image-input' && (m.params.input.length!==2 || m.params.input[1].type!=='localImage' || !m.params.input[1].path.endsWith('/accepted.png')))
    return write({id:m.id,error:{code:-32602,message:'image input missing'}});
   if(prompt==='github-api'||prompt==='github-api-invalid'){
@@ -132,6 +137,20 @@ test('failed turn cannot pass as a successful response even if text was emitted'
   const { dir, runtime } = fixture(t);
   await assert.rejects(runtime.run({ cwd: dir, prompt: 'fail', signal: new AbortController().signal,
     onThread: () => {}, onTurn: () => {} }), (e: unknown) => e instanceof RuntimeError && e.code === 'turn_failed');
+});
+
+test('selected model reaches thread and turn, including default on resumed threads', async t => {
+  const {dir,runtime}=fixture(t);
+  for(const [model,prompt] of [['chosen-model','check-model'],[null,'check-default']] as const) {
+    const result=await runtime.run({cwd:dir,threadId:'thread-one',model,prompt,signal:new AbortController().signal,onThread(){},onTurn(){}});
+    assert.equal(result.text,'public answer');
+  }
+});
+
+test('configured Codex default takes precedence over catalog recommendation and is frozen', async t => {
+  const {dir,runtime}=fixture(t), frozen:string[]=[];
+  const result=await runtime.run({cwd:join(dir,'model-configured'),model:null,prompt:'check-configured',signal:new AbortController().signal,onThread(){},onTurn(){},onModel:model=>frozen.push(model)});
+  assert.equal(result.text,'public answer');assert.deepEqual(frozen,['configured-model']);
 });
 
 test('host-accepted images use official localImage input items alongside text',async t=>{

@@ -161,6 +161,19 @@ export class MemoryError extends Error {
   }
 }
 
+function relevanceScore(text: string, relevant: string, project: string | null): number {
+  if (!relevant) return 0;
+  const tokens = text.match(/[a-z0-9_./-]{2,}|[\p{Script=Han}]{2,}/gu) ?? [];
+  const words = new Set(tokens.flatMap(token => {
+    if (!/\p{Script=Han}/u.test(token)) return [token];
+    const characters = [...token];
+    return characters.slice(0, -1).map((character, index) => character + characters[index + 1]);
+  }));
+  let score = 0;
+  for (const word of words) if (relevant.includes(word)) score++;
+  return score + (project && relevant.includes(project.toLocaleLowerCase()) ? 3 : 0);
+}
+
 const idPattern = /^M-[A-F0-9]{16}$/;
 const runPattern = /^[A-Za-z0-9._-]{1,200}$/;
 const unsafeSingleLine = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u;
@@ -483,17 +496,14 @@ export class Memories {
     const authorized = this.allMeta(access.ownerId, access.kind === 'verified-user', 'active').filter(meta => this.authorized(meta, access) && meta.status === 'active'
       && (meta.expiresAt === null || meta.expiresAt > now) && this.lineageValid(meta, now, new Set()));
     const results: MemorySearchResult[] = [];
+    const relevant = (options.relevantText ?? '').normalize('NFKC').toLocaleLowerCase();
     for (const meta of authorized) {
       const raw = this.requireContent(meta);
       let clean: string | undefined, sourceRef: string | undefined;
       try { clean = this.redact(raw); sourceRef = this.redact(meta.source.ref); } catch { clean = undefined; sourceRef = undefined; }
       if (clean === undefined || sourceRef === undefined || unsafeText.test(clean) || unsafeSingleLine.test(sourceRef)) continue;
       const haystack = clean.toLocaleLowerCase();
-      const relevant = (options.relevantText ?? '').normalize('NFKC').toLocaleLowerCase();
-      const tokens=haystack.match(/[a-z0-9_./-]{2,}|[\p{Script=Han}]{2,}/gu)??[];
-      const words = [...new Set(tokens.flatMap(token=>/\p{Script=Han}/u.test(token)?[...token].slice(0,-1).map((c,i)=>c+[...token][i+1]):[token]))];
-      const relevance = words.reduce((n,word) => n + (relevant.includes(word) ? 1 : 0),0)
-        + (meta.scope.project && relevant.includes(meta.scope.project.toLocaleLowerCase()) ? 3 : 0);
+      const relevance = relevanceScore(haystack, relevant, meta.scope.project);
       // Local details are project-bound. Shared project overviews can be used
       // across projects when the current discussion actually mentions them.
       if (options.relevantText !== undefined && meta.scope.kind === 'global' && meta.kind === 'project_knowledge'

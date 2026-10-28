@@ -16,6 +16,7 @@ import { Recovery } from '../src/recovery.js';
 import { digest } from '../src/paths.js';
 import { Management } from '../src/management.js';
 import { Cards } from '../src/cards.js';
+import { setUserModel } from '../src/model-preferences.js';
 
 const wait = (condition: () => boolean, timeoutMs = 7000) => waitFor(condition, timeoutMs);
 const fake = `#!/usr/bin/env node
@@ -29,10 +30,13 @@ const done=text=>{clearInterval(timer);send({method:'item/completed',params:{thr
 createInterface({input:process.stdin}).on('line',line=>{
  const m=JSON.parse(line);if(m.id===undefined)return;
  if(m.method==='initialize')return send({id:m.id,result:{}});
+ if(m.method==='config/read')return send({id:m.id,result:{config:{}}});
+ if(m.method==='model/list')return send({id:m.id,result:{data:[{model:'default-model',isDefault:true}],nextCursor:null}});
  if(m.method==='plugin/list')return send({id:m.id,result:{marketplaces:[]}});
  if(m.method==='skills/list')return send({id:m.id,result:{data:[{cwd:m.params.cwds[0],skills:[],errors:[]}]}});
- if(m.method==='thread/start'||m.method==='thread/resume'){cwd=m.params.cwd;return send({id:m.id,result:{thread:{id:thread}}});}
+ if(m.method==='thread/start'||m.method==='thread/resume'){cwd=m.params.cwd;appendFileSync(join(cwd,'model-params'),JSON.stringify({thread:m.params.model})+'\\n');return send({id:m.id,result:{thread:{id:thread}}});}
  if(m.method==='turn/start'){
+  appendFileSync(join(cwd,'model-params'),JSON.stringify({turn:m.params.model})+'\\n');
   appendFileSync(join(cwd,'calls'),'turn\\n');send({id:m.id,result:{turn:{id:turn}}});
   send({method:'item/started',params:{threadId:thread,turnId:turn,item:{id:'command',type:'commandExecution',command:'node --test',cwd,status:'inProgress'}}});
   const prompt=JSON.parse(m.params.input[0].text);
@@ -82,6 +86,17 @@ function organization(f: ReturnType<typeof fixture>, github?: object) {
   writeFileSync(f.file, JSON.stringify(raw)); Object.assign(f.config, loadConfig(f.file));
   const input = message('organization'); input.envelope!.tenantKey = 'tenant'; return input;
 }
+
+test('queued task keeps its user model through detached worker startup', async t => {
+  const f=fixture(t), identity={channel:'feishu' as const,appId:'app',userId:'alice'}, receiver=f.receiver();
+  setUserModel(f.store,identity,'model-one');
+  receiver.accept(message('model-task','instant'));
+  setUserModel(f.store,identity,'model-two');
+  receiver.start();
+  await wait(()=>f.store.get('model-task')?.state==='replied');
+  const rows=readFileSync(join(f.project,'model-params'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
+  assert.deepEqual(rows,[{thread:'model-one'},{turn:'model-one'}]);
+});
 
 test('saving presentation settings does not cancel an organization worker; revocation still does', async t => {
   const f = fixture(t), input = organization(f), receiver = f.receiver(); receiver.start(); receiver.accept(input);

@@ -85,7 +85,7 @@ NAMO_LANG=zh-CN namo ui
 
 ## 聊天命令
 
-常用入口：`/project` 切换项目，`/task` 查看任务，`/cancel` 停止任务，`/new` 开始新上下文，`/profile` 管理本人档案，`/help` 查看命令。
+常用入口：`/project` 切换项目，`/task` 查看任务，`/cancel` 停止任务，`/new` 开始新上下文，`/profile` 管理本人档案，私聊 `/model` 查看或设置用户默认模型，`/help` 查看命令。
 
 完整用法见[聊天命令](docs/getting-started.md#聊天命令)；文件交付、记忆与审批分别见[文档索引](docs/README.md)。
 

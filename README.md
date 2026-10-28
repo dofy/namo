@@ -87,7 +87,7 @@ NAMO_LANG=zh-CN namo ui
 
 ## Chat commands
 
-Use `/project` to switch projects, `/task` to inspect a task, `/cancel` to stop it, `/new` for a fresh context, `/profile` for your profile, and `/help` for available commands.
+Use `/project` to switch projects, `/task` to inspect a task, `/cancel` to stop it, `/new` for a fresh context, `/profile` for your profile, and `/help` for available commands. In a private chat, `/model` shows model choices, `/model MODEL_ID` sets your default, and `/model default` follows the service default. The workbench can also set each user's default. Explicit selections are saved with accepted tasks; availability depends on the Codex account.
 
 See the [command reference (Chinese)](docs/getting-started.md#聊天命令) and [documentation index (Chinese)](docs/README.md) for delivery, memory and approvals.
 

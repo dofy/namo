@@ -8,6 +8,8 @@ import type { AutoMemoryInput } from './auto-memory.js';
 export interface RunRequest {
   taskId?: string; runId?: string;
   threadId?: string; cwd: string; prompt: string; signal: AbortSignal;
+  model?: string | null;
+  onModel?: (model: string) => void;
   images?: readonly ImageInput[];
   onThread: (id: string) => void; onTurn: (id: string) => void;
   onReady?: (controls: RunControls) => void;

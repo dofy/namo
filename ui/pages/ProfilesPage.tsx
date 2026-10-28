@@ -8,6 +8,24 @@ import { Choice, ConfirmButton, Field, Notice } from '../components';
 
 const key = (p: UserProfile) => JSON.stringify([p.channel, p.appId, p.userId]);
 const values = (p: UserProfile): ProfileValues => ({ name: p.name, language: p.language, timezone: p.timezone });
+function UserModelSettings({profile, revision, editable, refresh}: {profile:UserProfile; revision:string; editable:boolean; refresh:()=>Promise<unknown>}) {
+  const [saved,setSaved]=useState(profile.defaultModel ?? ''), [draft,setDraft]=useState(profile.defaultModel ?? '');
+  const [busy,setBusy]=useState(false), [notice,setNotice]=useState(''), [error,setError]=useState('');
+  const [models,setModels]=useState<{id:string;name:string;isDefault:boolean}[]>([]), [catalogFailed,setCatalogFailed]=useState(false);
+  useEffect(()=>{const controller=new AbortController();void api.models(controller.signal).then(setModels).catch(()=>{if(!controller.signal.aborted)setCatalogFailed(true);});return()=>controller.abort();},[]);
+  useEffect(()=>{if(draft===saved){setSaved(profile.defaultModel ?? '');setDraft(profile.defaultModel ?? '');}},[profile.defaultModel]);
+  return <form onSubmit={async event=>{event.preventDefault();setBusy(true);setError('');setNotice('');try {
+    const result=await api.saveUserModel(revision,{...profile,defaultModel:saved},draft.trim());setSaved(result.model);setDraft(result.model);
+    setNotice(tr('model.saved'));try {await refresh();} catch {setNotice(tr('model.savedRefreshFailed'));}
+  } catch(e){setError(message(e));} finally {setBusy(false);}}}>
+    <Field label={tr('model.userDefault')} htmlFor="profile-model"><TextField.Root id="profile-model" list="profile-model-options" value={draft} maxLength={128} placeholder={tr('model.inherit')} disabled={!editable||busy} onChange={event=>setDraft(event.target.value)} /></Field>
+    <datalist id="profile-model-options">{models.map(model=><option key={model.id} value={model.id}>{model.name}</option>)}</datalist>
+    <Text as="p" size="1" color="gray">{tr('model.help')}</Text>
+    {catalogFailed&&<Text as="p" size="1" color="gray">{tr('model.catalogUnavailable')}</Text>}
+    {notice&&<Notice>{notice}</Notice>}{error&&<Notice error>{error}</Notice>}
+    <Button type="submit" disabled={!editable||draft.trim()===saved} loading={busy}>{tr('model.save')}</Button>
+  </form>;
+}
 export function ProfilesPage({ profiles, expired, refresh }: { profiles: ProfileState; expired: boolean; refresh: () => Promise<unknown> }) {
   const labels = { name: tr("profiles.name"), language: tr("common.language"), timezone: tr("common.timezone") };
   const [selected, setSelected] = useState<UserProfile | undefined>(profiles.entries[0]);
@@ -59,6 +77,7 @@ export function ProfilesPage({ profiles, expired, refresh }: { profiles: Profile
       {(!current || revision !== profiles.configRevision) && <Notice>{tr("profiles.pairingAppConfigurationChangedDraftPreservedDiscard")}</Notice>}
       {current && selected.version !== current.version && dirty && <Notice>{tr("profiles.newerVersionProfileExistsDraftPreservedReview")}</Notice>}
       {notice && <Notice>{notice}</Notice>}{error && <Notice error>{error}</Notice>}
+      <UserModelSettings key={key(selected)} profile={current ?? selected} revision={revision} editable={editable} refresh={refresh} />
       <form onSubmit={async event => { event.preventDefault(); if (busy) return; try { await save(draft); } catch (e) { setError(message(e)); } }}>
         <fieldset disabled={busy || !editable}>
           <Field label={tr("profiles.preferredName")} htmlFor="profile-name"><TextField.Root id="profile-name" value={draft.name} maxLength={160} placeholder={tr("profiles.exampleSeven")} onChange={event => { setDraft(p => ({ ...p, name: event.target.value })); setDirty(true); }} /></Field>

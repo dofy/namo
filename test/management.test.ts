@@ -59,6 +59,26 @@ test('HTTP localizes application errors per request while preserving user task t
  }
 });
 test('configuration projection excludes credentials and preserves unknown fields on save',t=>{const f=fixture(t),before=f.manager.config();assert.doesNotMatch(JSON.stringify(f.manager.state()),/PRIVATE_TEST_SECRET|PRIVATE_EXTRA/);const saved=f.manager.save(before.revision,{model:'test-model'});const raw=JSON.parse(readFileSync(f.file,'utf8'));assert.equal(raw.custom.keep,'untouched');assert.equal(raw.feishu.extraSecret,f.raw.feishu.extraSecret);assert.equal(raw.feishu.appSecret,f.raw.feishu.appSecret);assert.equal(saved.values.model,'test-model');assert.equal(readdirSync(join(f.data,'config-backups')).length,1);assert.throws(()=>f.manager.save(before.revision,{model:'stale'}),/配置已被/);});
+test('user model saves are scoped to paired users and reject stale edits',t=>{
+ const f=fixture(t),rev=f.manager.config().revision;
+ assert.equal(f.manager.saveUserModel(rev,'alice','','model-one'),'model-one');
+ assert.equal(f.manager.profiles().entries.find(p=>p.userId==='alice')?.defaultModel,'model-one');
+ assert.throws(()=>f.manager.saveUserModel(rev,'alice','','model-two'),/变化/);
+ assert.throws(()=>f.manager.saveUserModel(rev,'stranger','','model-two'));
+ assert.throws(()=>f.manager.saveUserModel(rev,'alice','model-one','../invalid'));
+ assert.equal(f.manager.saveUserModel(rev,'alice','model-one',''),'');
+});
+test('user model HTTP endpoint requires the local session and origin',async t=>{
+ const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());
+ const revision=f.manager.config().revision, body=JSON.stringify({configRevision:revision,userId:'alice',expected:'',model:'model-one'});
+ const post=(cookie='',origin=ui.url)=>fetch(ui.url+'/api/user-model',{method:'POST',headers:{'Content-Type':'application/json',Origin:origin,...(cookie?{Cookie:cookie}:{})},body});
+ assert.equal((await post()).status,401);
+ const login=await fetch(ui.url+'/api/session',{method:'POST',headers:{Origin:ui.url,'Content-Type':'application/json'},body:JSON.stringify({code:new URL(ui.entryUrl).hash.slice(1)})});
+ const cookie=login.headers.get('set-cookie')!;
+ assert.equal((await post(cookie,'https://attacker.invalid')).status,403);
+ assert.equal((await post(cookie)).status,200);
+ assert.equal((await post(cookie)).status,409);
+});
 test('invalid configuration and unapproved fields cannot overwrite saved configuration',t=>{const f=fixture(t),before=readFileSync(f.file,'utf8'),revision=f.manager.config().revision;assert.throws(()=>f.manager.save(revision,{projects:{app:'/missing-namo-project'}}),/校验/);assert.throws(()=>f.manager.save(revision,{dataDir:'/tmp'}),/不允许/);assert.throws(()=>f.manager.save(revision,{sandbox:'danger-full-access'}),/校验/);assert.equal(readFileSync(f.file,'utf8'),before);});
 test('UI can repair an invalid project path without changing identity or data directory',t=>{const f=fixture(t);writeFileSync(f.file,JSON.stringify({...f.raw,codex:{...f.raw.codex,projects:{app:'/not-a-project'}}}));assert.equal(f.manager.config().valid,false);f.manager.save(f.manager.config().revision,{projects:{app:f.project}});assert.equal(f.manager.config().valid,true);assert.equal(JSON.parse(readFileSync(f.file,'utf8')).feishu.appId,f.raw.feishu.appId);});
 test('reading old schema does not migrate it and management writes fail closed',t=>{const f=fixture(t),s=new Store(join(f.data,'bot.sqlite'));s.db.exec('DROP TABLE reconciliations; DROP TABLE card_actions; PRAGMA user_version=1');s.close();const before=readFileSync(join(f.data,'bot.sqlite'));const state=f.manager.state();assert.equal(state.database.schema,1);assert.equal(state.recoveryAvailable,false);for(const read of [()=>f.manager.approvals(),()=>f.manager.detail('N-AAAAAAAAAAAA'),()=>f.manager.browse('tasks'),()=>f.manager.memories()])assert.throws(read,/数据库版本不兼容/);assert.throws(()=>f.manager.cancel('N-AAAAAAAAAAAA',1,'id'),/数据库版本不兼容/);assert.deepEqual(readFileSync(join(f.data,'bot.sqlite')),before);});

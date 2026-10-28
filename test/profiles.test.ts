@@ -7,6 +7,7 @@ import { Profiles } from '../src/profiles.js';
 import { Engine } from '../src/engine.js';
 import { normalizeEvent } from '../src/feishu.js';
 import { Tasks } from '../src/tasks.js';
+import { userModel } from '../src/model-preferences.js';
 import type { ProfileIdentity } from '../src/ui-contract.js';
 
 const identity: ProfileIdentity = { channel: 'feishu', appId: 'app', userId: 'alice' };
@@ -80,6 +81,28 @@ test('private self-service is durable and duplicate commands do not repeat profi
   f.e.accept(message('new', '/new')); assert.equal(f.profiles.get().name, '小七');
   f.e.accept(message('clear', '/profile clear 1')); assert.equal(f.profiles.get().name, '');
   assert.equal(f.calls(), 0); assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM tasks').get()?.n, 0);
+});
+
+test('model commands are private and new tasks capture the user selection', t => {
+  const f=engine(t);
+  f.e.accept(message('choose','/model model-one'));
+  assert.equal(userModel(f.store,identity),'model-one');
+  f.e.accept(message('first','do a task'));
+  const first=f.store.get('app:first')!.taskId!;
+  f.e.accept(message('change','/model model-two'));
+  f.e.accept(message('second','another task'));
+  const second=f.store.get('app:second')!.taskId!;
+  assert.equal(new Tasks(f.store).model(first),'model-one');
+  assert.equal(new Tasks(f.store).model(second),'model-two');
+  f.e.accept(message('group','/model attack','alice','group'));
+  f.e.accept(message('quote','/model attack','alice','p2p',{parent_id:'other'}));
+  f.e.accept(message('bob','/model model-bob','bob'));
+  assert.equal(userModel(f.store,identity),'model-two');
+  assert.equal(userModel(f.store,{...identity,userId:'bob'}),'model-bob');
+  f.e.accept(message('reset','/model default'));
+  assert.equal(userModel(f.store,identity),'');
+  f.e.accept(message('invalid','/model bad/path'));
+  assert.equal(userModel(f.store,identity),'');
 });
 
 test('group, unknown chat type, quotes and rich text cannot reveal or edit a private profile', t => {

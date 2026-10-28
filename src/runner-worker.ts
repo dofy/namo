@@ -99,6 +99,8 @@ async function main(): Promise<void> {
         } catch { storageFailed = true; abort.abort('storage_failed'); }
       }, 200);
       const raw = await runtimeFor(effectiveConfig, selection).run({ taskId: task.id, runId,
+        model: tasks.model(task.id),
+        onModel: model => write(() => tasks.freezeDefaultModel(task.id, model)),
         cwd: task.cwd, prompt: runnerJob(store, runId)!.prompt, images:loadRunImages(store,config.dataDir,runId),
         threadId: tasks.thread(task), signal: abort.signal,
         onProcess: pid => write(() => { store.db.prepare('UPDATE runner_jobs SET runtimePid=? WHERE runId=?').run(pid, runId); runnerEvent(store, runId, 'runtime_started'); }),

@@ -15,6 +15,9 @@ import { randomUUID } from 'node:crypto';
 import { Recovery, RecoveryError } from './recovery.js';
 import { Cards, type CardEvent } from './cards.js';
 import { Profiles, ProfileError } from './profiles.js';
+import { userModel, setUserModel, ModelPreferenceError } from './model-preferences.js';
+import { listCodexModels } from './codex-connection.js';
+import { agentCodexConfig } from './agent-registry.js';
 import { EvidenceRecorder, readEvidence } from './evidence.js';
 import { runnerJob } from './runner-store.js';
 import { evidenceBrief, taskStateLabel, taskStatus } from './presentation.js';
@@ -71,6 +74,7 @@ export class Engine {
   private autoMemories?: AutoMemories;
   private memoryRunning?: Promise<void>;
   private memoryAbort?: AbortController;
+  private models: {id:string;name:string;isDefault:boolean}[] = [];
   constructor(readonly store: Store, private runtime: Runtime, private sender: Sender,
     private config: Pick<Config, 'dataDir' | 'concurrency' | 'github'> & { file?:string; codex?: Config['codex']; agents?: Config['agents']; feishu?: Partial<Config['feishu']> },
     private redact: (s: string) => string = s => s,
@@ -131,7 +135,7 @@ export class Engine {
     const memoryReply=memoryCommand(this.store,m,knownUsers,this.tasks.binding(m)?.project??this.config.codex?.defaultProject??null,this.redact,memoryProjects(this.contextConfig(),m));
     if(memoryReply!==undefined){if(this.store.claim(m.key))this.store.finish(m.key,memoryReply);return true;}
     const command = m.text.trim().split(/\s/)[0];
-    if (['/deliver','/profile','/issues','/issue','/resolve','/status', '/whoami', '/cancel', '/reset', '/new', '/session', '/tasks', '/task', '/help', '/project', '/unsupported', '/too-long'].includes(command)) {
+    if (['/deliver','/profile','/model','/issues','/issue','/resolve','/status', '/whoami', '/cancel', '/reset', '/new', '/session', '/tasks', '/task', '/help', '/project', '/unsupported', '/too-long'].includes(command)) {
       if (!this.store.claim(m.key)) return true;
       let reply: string;
       if(command === '/deliver') {
@@ -141,6 +145,7 @@ export class Engine {
         catch(e){reply=e instanceof ArtifactError?e.code:'文件交付请求被拒绝，请核对任务、项目和相对路径。';}
       }
       else if (command === '/profile') reply = this.profileCommand(m);
+      else if (command === '/model') reply = this.modelCommand(m);
       else if (['/issues','/issue','/resolve'].includes(command)) {
         const recovery=new Recovery(this.store), actor={id:m.senderId,chatKey:m.chatKey};
         const parts=m.text.trim().split(/\s+/);
@@ -191,11 +196,26 @@ export class Engine {
         reply = cancelled ? `已请求停止 ${cancelled} 条本人任务。已发生的操作不会自动撤销。` : '当前没有可取消的本人任务；可用 /tasks 核对任务编号。';
         if (cancelled < rows.length) reply += '\n部分运行已结束或失联，没有再发出停止请求；请查看任务状态，失联运行需在本机核对。';
       }
-      if(command==='/help') reply+=' 任务等待补充时，引用问题回复或 /resume WAIT-编号 回答 恢复原任务；等待不代表批准外部操作，新工作线支持此能力。私聊 /profile 查看或修改本人称呼、语言、时区。异常处理：/issues 列表，/issue 编号 查看核对指引；本机 namo ui 管理配置与任务。';
+      if(command==='/help') reply+=' 任务等待补充时，引用问题回复或 /resume WAIT-编号 回答 恢复原任务；等待不代表批准外部操作，新工作线支持此能力。私聊 /profile 查看或修改本人称呼、语言、时区；/model 查看或设置默认模型。异常处理：/issues 列表，/issue 编号 查看核对指引；本机 namo ui 管理配置与任务。';
       this.store.finish(m.key, reply);
       return true;
     }
     return false;
+  }
+  private modelCommand(m: Incoming): string {
+    const f = this.config.feishu;
+    if (m.envelope?.chatType !== 'p2p' || m.envelope.type !== 'text' || m.envelope.parentId || m.envelope.rootId || m.envelope.materials.length)
+      return '请在机器人私聊中单独发送 /model 文字命令。';
+    if (!f?.appId || !f.domain || !(f.access ? admitted(f as Config['feishu'],m.senderId,m.chatId,m.envelope.tenantKey) : f.allowedUserIds?.includes(m.senderId)))
+      return '当前身份未获准设置模型。';
+    const identity = { channel: f.domain, appId: f.appId, userId: m.senderId };
+    const parts = m.text.trim().split(/\s+/);
+    if (parts.length > 2) return '用法：/model 查看；/model 模型ID 设置；/model default 恢复默认。';
+    try {
+      if (parts.length === 2) setUserModel(this.store, identity, parts[1] === 'default' ? '' : parts[1]);
+      const catalog = this.models.length ? `\n可选模型：\n${this.models.map(model=>`${model.id}${model.isDefault?'（推荐）':''}`).join('\n')}` : '\n模型列表暂不可用，可手动输入 Codex 模型 ID。';
+      return `个人默认模型：${userModel(this.store, identity) || '跟随服务默认'}${catalog}\n用 /model 模型ID 设置，/model default 恢复服务默认。新任务生效；已接受的任务保持原选择。模型是否可用以实际运行结果为准。`;
+    } catch (error) { if (error instanceof ModelPreferenceError) return error.message; throw error; }
   }
   private profileCommand(m: Incoming): string {
     // Unknown/legacy chat types fail closed, and group replies never include a profile.
@@ -259,6 +279,7 @@ export class Engine {
     catch (e) { if (e instanceof RuntimeError) return '当前项目已从配置移除，请用 /project 选择其他项目'; throw e; }
   }
   start(): void {
+    if (this.runtime.persistent && this.config.codex) void listCodexModels(this.config.codex).then(models=>{this.models=models;}).catch(()=>{});
     this.approvals?.start();
     this.log('recovered', this.store.recover(this.runtime.persistent));
     this.tasks.recover(this.runtime.persistent);
@@ -372,6 +393,8 @@ export class Engine {
       }
       const result = await this.runtime.run({
         taskId: task.id, runId: run,
+        model: this.tasks.model(task.id),
+        onModel: model => this.tasks.freezeDefaultModel(task.id, model),
         threadId: this.tasks.thread(task), cwd, signal,
         prompt, images,
         ...(this.config.file?{onReview:(args:unknown)=>readReview(this.store,this.config.file!,task,args,signal)}:{}),
@@ -439,7 +462,13 @@ export class Engine {
         this.tasks.amend(ref, m); this.reply(m, `补充已保存到 ${ref.id}。${ref.state === 'running' ? '正在尝试追加给执行器；提交结果会另行提示，不表示此前操作已撤销。' : '将在开工时一并处理。'}`); return;
       }
       const delivery=/^\/run\s+--deliver\s+(\S+)\s+--\s+\S/.exec(m.text);
-      this.store.transaction(()=>{const task=this.tasks.create(m,project,ref,this.selectedAgent(m,ref));if(delivery)this.artifacts.intent(m,task,delivery[1]);});
+      this.store.transaction(()=>{
+        const selection = this.selectedAgent(m,ref), f = this.config.feishu;
+        const preference = f?.appId && f.domain ? userModel(this.store, {channel:f.domain,appId:f.appId,userId:m.senderId}) : '';
+        const configured = this.config.codex && selection ? agentCodexConfig({...this.config,codex:this.config.codex},selection).model : this.config.codex?.model;
+        const task=this.tasks.create(m,project,ref,selection,preference || configured || null);
+        if(delivery)this.artifacts.intent(m,task,delivery[1]);
+      });
       if (this.config.feishu?.progressUpdates !== false) {
         this.store.addOutput(m.key, 'progress', '正在处理，完成后会在这里回复。');
         this.store.db.prepare("UPDATE outbox SET state='deferred' WHERE inboxKey=? AND kind='progress' AND state='pending'").run(m.key);

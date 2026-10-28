@@ -20,6 +20,8 @@ import { Memories, MemoryError, MEMORY_LIMITS, type MemoryAuthority, type Memory
 import { MEMORY_EXTRACTION_MAX_ATTEMPTS } from './auto-memory.js';
 import { MigrationMemory, MigrationMemoryError, migrationMemoryStatus } from './migration-memory.js';
 import { Profiles, ProfileError } from './profiles.js';
+import { userModel, setUserModel, ModelPreferenceError } from './model-preferences.js';
+import { listCodexModels } from './codex-connection.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
 import { Browse, BrowseError } from './browse.js';
 import { parseGitHubAccessConfig, publicGitHubAccess } from './github-access.js';
@@ -242,9 +244,22 @@ export class Management {
     if(typeof f.appId!=='string'||!f.appId||!['feishu','lark'].includes(f.domain??'feishu')||!Array.isArray(f.allowedUserIds)||f.allowedUserIds.some((id:unknown)=>typeof id!=='string'||!id))return unavailable(tr("management.completeAppSetupUserPairingFirst"));
     try{return this.read(s=>{
       if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)return unavailable(tr("management.databaseSchemaUnsupported"));
-      return this.sanitize({available:true,configRevision:revision,entries:[...new Set<string>([...f.allowedUserIds,...(f.access?s.db.prepare("SELECT DISTINCT senderId FROM inbox WHERE chatKey LIKE ? AND json_extract(envelope,'$.tenantKey')=? LIMIT 1000").all(`${f.appId}:%`,f.access.tenantKey).map(r=>String(r.senderId)):[])])].map(userId=>new Profiles(s,{channel:f.domain??'feishu',appId:f.appId,userId}).get())});
+      return this.sanitize({available:true,configRevision:revision,entries:[...new Set<string>([...f.allowedUserIds,...(f.access?s.db.prepare("SELECT DISTINCT senderId FROM inbox WHERE chatKey LIKE ? AND json_extract(envelope,'$.tenantKey')=? LIMIT 1000").all(`${f.appId}:%`,f.access.tenantKey).map(r=>String(r.senderId)):[])])].map(userId=>{const identity={channel:f.domain??'feishu',appId:f.appId,userId};return {...new Profiles(s,identity).get(),defaultModel:userModel(s,identity)};})});
     })??unavailable(tr("management.noServiceDatabaseCompleteSetupFirst"));}
     catch(e){if(e instanceof ProfileError)return unavailable(e.message);throw e;}
+  }
+  saveUserModel(configRevision:string,userId:string,expected:unknown,model:unknown):string {
+    const release=acquireLock(join(this.dataDir,'config-edit.lock'));
+    try {
+    const {raw,revision}=this.source(),f=raw.feishu??{};
+    if(configRevision!==revision)throw new ManagementError(tr("management.appConfigurationChangedRefreshSelectUserAgain"));
+    if(typeof userId!=='string'||!this.profiles().entries.some(p=>p.userId===userId))throw new ManagementError(tr("management.profilesUsersPairedAppCanManaged"));
+    const identity={channel:f.domain??'feishu',appId:f.appId,userId};
+    try { return this.write(s=>s.transaction(()=>{
+      if(typeof expected!=='string'||userModel(s,identity)!==expected)throw new ManagementError('模型设置已变化，请刷新后重试。');
+      return setUserModel(s,identity,model);
+    })); } catch(e) {if(e instanceof ModelPreferenceError)throw new ManagementError(e.message,400);throw e;}
+    } finally {release();}
   }
   saveProfile(configRevision:string,userId:string,version:number,patch:unknown):UserProfile {
     const release=acquireLock(join(this.dataDir,'config-edit.lock'));
@@ -257,6 +272,9 @@ export class Management {
       if(JSON.stringify(patch)!==redact(JSON.stringify(patch)??''))throw new ManagementError(tr("management.profilesCannotContainCredentialsRemoveThemTry"));
       return this.write(s=>new Profiles(s,{channel:f.domain??'feishu',appId:f.appId,userId}).update(version,patch,{source:'local-owner'}));
     }catch(e){if(e instanceof ProfileError)throw new ManagementError(e.message);throw e;}finally{release();}
+  }
+  async models(): Promise<{id:string;name:string;isDefault:boolean}[]> {
+    try {return await listCodexModels(loadConfig(this.file).codex);} catch {throw new ManagementError('模型列表暂不可用，请检查 Codex 登录和服务配置。',503);}
   }
   async saveGitHub(revision:string,patch:any):Promise<any> {
     if (patch?.github?.source!=='gh') return this.save(revision,patch);
