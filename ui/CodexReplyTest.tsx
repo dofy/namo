@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { AlertDialog, Button, Callout, Flex, Text } from '@radix-ui/themes';
 import type { Diagnostic } from '../src/ui-contract';
 import { api, message } from './api';
-import { Notice } from './components';
+import { EditorCloseButton, Notice } from './components';
 import { t as tr } from './i18n';
 
 export function CodexReplyTest({ disabled, onBusyChange, onResult }: {
@@ -25,9 +25,9 @@ export function CodexReplyTest({ disabled, onBusyChange, onResult }: {
     setOpen(next);
     if (next) { setChecks(null); setError(''); }
   }}>
-    <AlertDialog.Trigger><Button disabled={disabled} variant="soft">{tr('operations.liveTest')}</Button></AlertDialog.Trigger>
+    <AlertDialog.Trigger><Button type="button" disabled={disabled} variant="soft">{tr('operations.liveTest')}</Button></AlertDialog.Trigger>
     <AlertDialog.Content maxWidth="480px" onEscapeKeyDown={event => { if (pending.current) event.preventDefault(); }}>
-      <AlertDialog.Title>{tr('operations.liveTest')}</AlertDialog.Title>
+      <div className="editor-dialog-header"><AlertDialog.Title>{tr('operations.liveTest')}</AlertDialog.Title><EditorCloseButton busy={busy} onClose={()=>setOpen(false)}/></div>
       <AlertDialog.Description size="2">{tr('operations.liveTestHelp')}</AlertDialog.Description>
       {busy && <Text as="p" size="2" mt="4" role="status" aria-live="polite">{tr('operations.liveTestRunning')}</Text>}
       {error && <Notice error>{error}</Notice>}
@@ -44,8 +44,8 @@ export function CodexReplyTest({ disabled, onBusyChange, onResult }: {
         </details>
       </>}
       <Flex gap="3" justify="end" mt="5">
-        <AlertDialog.Cancel><Button variant="soft" color="gray" disabled={busy}>{tr(checks || error ? 'common.close' : 'components.back')}</Button></AlertDialog.Cancel>
-        {!passed && <Button disabled={disabled || busy} loading={busy} onClick={() => void run()}>{tr('operations.liveTest')}</Button>}
+        <AlertDialog.Cancel><Button type="button" variant="soft" color="gray" disabled={busy}>{tr(checks || error ? 'common.close' : 'components.back')}</Button></AlertDialog.Cancel>
+        {!passed && <Button type="button" disabled={disabled || busy} loading={busy} onClick={() => void run()}>{tr('operations.liveTest')}</Button>}
       </Flex>
     </AlertDialog.Content>
   </AlertDialog.Root>;

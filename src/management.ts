@@ -35,9 +35,9 @@ import { discoverLocalGh, type LocalGhConfig } from './github-local.js';
 export class ManagementError extends Error { constructor(message:string,readonly status=409){super(message);} }
 export interface ManagementDeps {
   status: typeof serviceStatus; action: typeof serviceAction; wait: typeof waitForService; diagnose: typeof doctor;
-  localGh: typeof discoverLocalGh; codexMcpConfig?:string;
+  localGh: typeof discoverLocalGh; codexMcpConfig?:string; mcpReader:typeof remoteRead;
 }
-const defaults:ManagementDeps={status:serviceStatus,action:serviceAction,wait:waitForService,diagnose:doctor,localGh:discoverLocalGh};
+const defaults:ManagementDeps={status:serviceStatus,action:serviceAction,wait:waitForService,diagnose:doctor,localGh:discoverLocalGh,mcpReader:remoteRead};
 export class Management {
   readonly dataDir: string;
   private deps:ManagementDeps;
@@ -303,10 +303,11 @@ export class Management {
   async testMcp(revision:unknown,id:unknown):Promise<{toolCount:number}> {
     if(typeof revision!=='string'||typeof id!=='string'||this.source().revision!==revision)throw new ManagementError('mcp_config_changed');
     const connection=loadConfig(this.file).mcpConnections?.find(c=>c.id===id);
-    if(!connection?.enabled)throw new ManagementError('mcp_connection_not_enabled',400);
+    if(!connection)throw new ManagementError('mcp_connection_not_found',400);
     try {
       const signal=AbortSignal.timeout(30000),credential=await resolveMcpCredential(this.dataDir,connection.token,connection.url,signal,undefined,connection.oauthScope);
-      const result=await remoteRead({...connection,token:credential.token},{operation:'list'},signal);
+      // Admin diagnostics may list tools before the connection is enabled for tasks.
+      const result=await this.deps.mcpReader({...connection,token:credential.token},{operation:'list'},signal);
       if(this.source().revision!==revision)throw new ManagementError('mcp_config_changed');
       return {toolCount:Array.isArray(result)?result.length:0};
     } catch(error) {if(error instanceof ManagementError)throw error;throw new ManagementError('mcp_connection_failed',400);}

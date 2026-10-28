@@ -44,12 +44,12 @@ export function ConfirmButton({ children, title, description, action = tr("compo
   return <AlertDialog.Root open={open} onOpenChange={next => { if (!busy) { setOpen(next); setError(''); } }}>
     <AlertDialog.Trigger><Button type="button" className={className} variant={variant} color={danger ? 'red' : undefined} disabled={disabled}>{children}</Button></AlertDialog.Trigger>
     <AlertDialog.Content maxWidth="460px" onEscapeKeyDown={event => { if (busy) event.preventDefault(); }}>
-      <AlertDialog.Title>{title}</AlertDialog.Title>
+      <div className="editor-dialog-header"><AlertDialog.Title>{title}</AlertDialog.Title><EditorCloseButton busy={busy} onClose={()=>setOpen(false)}/></div>
       <AlertDialog.Description size="2">{description}</AlertDialog.Description>
       {error && <Notice error>{error}</Notice>}
       <Flex gap="3" justify="end" mt="5">
-        <AlertDialog.Cancel><Button variant="soft" color="gray" disabled={busy}>{tr("components.back")}</Button></AlertDialog.Cancel>
-        <Button color={danger ? 'red' : undefined} loading={busy} onClick={async () => {
+        <AlertDialog.Cancel><Button type="button" variant="soft" color="gray" disabled={busy}>{tr("components.back")}</Button></AlertDialog.Cancel>
+        <Button type="button" color={danger ? 'red' : undefined} loading={busy} onClick={async () => {
           if (busy) return;
           setBusy(true); setError('');
           try { await onConfirm(); setOpen(false); } catch (e) { setError(message(e)); } finally { setBusy(false); }
@@ -59,8 +59,6 @@ export function ConfirmButton({ children, title, description, action = tr("compo
   </AlertDialog.Root>;
 }
 
-export function EditorCloseButton({dirty,busy,onClose}:{dirty:boolean;busy:boolean;onClose:()=>void|Promise<void>}) {
-  const label=<><Icon name="close" />{tr('common.close')}</>;
-  return dirty?<ConfirmButton className="editor-close" disabled={busy} title={tr('editor.discardTitle')} description={tr('editor.discardHelp')} action={tr('editor.discard')} onConfirm={async()=>{await onClose();}}>{label}</ConfirmButton>
-    :<Button type="button" className="editor-close" variant="soft" color="gray" disabled={busy} onClick={()=>{void onClose();}}>{label}</Button>;
+export function EditorCloseButton({busy,onClose}:{busy:boolean;onClose:()=>void}) {
+  return <Button type="button" className="editor-close" variant="soft" color="gray" disabled={busy} onClick={onClose}><Icon name="close" />{tr('common.close')}</Button>;
 }

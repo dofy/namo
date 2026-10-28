@@ -1,6 +1,6 @@
 import { t as tr, setLocale, useLocale, useLanguagePreference, type MessageKey } from './i18n';
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
-import { Button, Heading, Link, Popover, Text } from '@radix-ui/themes';
+import { Button, Flex, Heading, Link, Popover, Text } from '@radix-ui/themes';
 import { uiRoutes, type ManagementState, type UiPage } from '../src/ui-contract';
 import { api, ApiError, message } from './api';
 import { Choice, Notice } from './components';
@@ -104,7 +104,7 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
         <div className="sidebar-links">
           <Popover.Root open={versionOpen} onOpenChange={setVersionOpen}><Popover.Trigger><Button className="version-button" variant="ghost" color="gray" size="1" aria-label={tr("app.versionLabel", __NAMO_VERSION__)}>v{__NAMO_VERSION__}<Icon name="info" size={13} /></Button></Popover.Trigger>
             <Popover.Content className="version-popover" size="2" aria-label={tr("app.versionInformation")}>
-              <Heading as="h2" size="3">{tr("app.versionInformation")}</Heading>
+              <Flex justify="between" align="center" gap="3"><Heading as="h2" size="3">{tr("app.versionInformation")}</Heading><Popover.Close><Button type="button" variant="soft" color="gray" size="1"><Icon name="close"/>{tr("common.close")}</Button></Popover.Close></Flex>
               <dl><dt>{tr("app.workbenchVersion")}</dt><dd>v{__NAMO_VERSION__}</dd>
                 <dt>{tr("app.runningServiceRelease")}</dt><dd>{state?.service.running && state.service.release?.running ? state.service.release.running.slice(0,12) : tr("app.notReported")}</dd>
                 {state?.service.release?.installed && state.service.release.installed !== state.service.release.running && <><dt>{tr("app.installedServiceRelease")}</dt><dd>{state.service.release.installed.slice(0,12)}</dd></>}

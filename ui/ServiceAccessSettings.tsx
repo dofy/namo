@@ -5,7 +5,7 @@ import { Button, Flex, Heading, Text, TextField } from '@radix-ui/themes';
 import type { ConfigView } from '../src/ui-contract';
 import type { ProjectAccess } from '../src/access-contract';
 import { AudienceFields, emptyAudience, IdentityInput } from './AudienceFields';
-import { Choice, Field, Notice } from './components';
+import { Choice, ConfirmButton, Field, Notice } from './components';
 import { api, message } from './api';
 import { t as tr } from './i18n';
 
@@ -17,7 +17,7 @@ function ServiceAccessEditor({config,refresh,expired,onStateChange,cancelControl
   const conflict=dirty&&revision!==config.revision;
   const reset=(c:ConfigView)=>{setDraft(draftFrom(c));setRevision(c.revision);setDirty(false);setError('');};
   useEffect(()=>{if(observedRevision.current!==config.revision){if(!dirty&&!busy)reset(config);observedRevision.current=config.revision;}},[config,dirty,busy]);
-  useEffect(()=>{if(!dirty)return;const warn=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn);},[dirty]);
+
   const edit=(patch:Partial<typeof draft>)=>{setDraft(d=>({...d,...patch}));setDirty(true);setNotice('');};
   const project=(name:string,value:ProjectAccess)=>edit({projects:{...draft.projects,[name]:value}});
   return <section className="form-section">
@@ -42,7 +42,7 @@ function ServiceAccessEditor({config,refresh,expired,onStateChange,cancelControl
           <Field label={tr("serviceAccess.projectFilePermissions")} htmlFor={`permission-${name}`}><Choice id={`permission-${name}`} value={value.permission} onChange={permission=>project(name,{...value,permission:permission as ProjectAccess['permission']})} options={[{value:'read-only',label:tr("common.read")},{value:'workspace-write',label:tr("common.allowProjectFileChanges")}]}/></Field>
         </details>;})}
       </fieldset>
-      <Flex gap="3" mt="4" wrap="wrap" className="settings-editor-footer">{cancelControl}<Button type="submit" loading={busy} disabled={!dirty||expired||conflict}>{tr("serviceAccess.saveAccessSettings")}</Button><Button type="button" variant="soft" disabled={busy} onClick={async()=>{try{reset((await api.state()).config);}catch(e){setError(message(e));}}}>{tr("common.reload")}</Button></Flex>
+      <Flex gap="3" mt="4" wrap="wrap" className="settings-editor-footer">{cancelControl}<Button type="submit" loading={busy} disabled={!dirty||expired||conflict}>{tr("serviceAccess.saveAccessSettings")}</Button><ConfirmButton disabled={busy||expired} title={tr("editor.discardTitle")} description={tr("editor.discardHelp")} action={tr("common.reload")} onConfirm={async()=>{setBusy(true);try{reset((await api.state()).config);}finally{setBusy(false);}}}>{tr("common.reload")}</ConfirmButton></Flex>
     </form>
   </section>;
 }

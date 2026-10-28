@@ -129,3 +129,18 @@ test('remote tool changes after approval never reach the remote dispatch',async 
  const {mcpApprovalCommand}=await import('../src/mcp-write-approval.js');f.store.enqueue({key:'approval',messageId:'approval',chatKey:f.task.chatKey,chatId:'chat',senderId:'alice',text:`/mcp-approve ${id} --confirm`});mcpApprovalCommand(f.store,f.store.get('approval')!);
  await assert.rejects(waiting,/mcp_tool_changed/);assert.equal(dispatched,false);
 });
+
+
+test('admin can test a disabled connection without enabling task access or invoking tools',async t=>{
+ const f=fixture(t);f.edit(c=>{c.mcpConnections[0].enabled=false;});
+ let calls=0;
+ const manager=new Management(f.file,{mcpReader:async(connection,request)=>{
+  calls++;assert.equal(connection.enabled,false);assert.deepEqual(request,{operation:'list'});return [{name:'lookup'}];
+ }});t.after(()=>manager.close());
+ const before=readFileSync(f.file,'utf8'),revision=manager.config().revision;
+ assert.deepEqual(await manager.testMcp(revision,'linear'),{toolCount:1});assert.equal(calls,1);
+ assert.equal(readFileSync(f.file,'utf8'),before);
+ assert.deepEqual(await mcpRead(f.store,f.file,f.task,{operation:'connections'},new AbortController().signal),{connections:[]});
+ await assert.rejects(manager.testMcp(revision,'missing'),/mcp_connection_not_found/);
+ await assert.rejects(manager.testMcp('stale','linear'),/mcp_config_changed/);assert.equal(calls,1);
+});

@@ -43,11 +43,7 @@ function GitHubEditor({ config, profiles, refresh, expired, onStateChange, cance
       observedRevision.current = config.revision;
     }
   }, [config, dirty, busy]);
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
-    window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+
 
   async function handleFailure(failure: unknown) {
     setError(message(failure));

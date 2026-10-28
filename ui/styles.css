@@ -104,8 +104,6 @@ summary { cursor: pointer; font-size: 13px; color: #47657c; }
 .diagnostics p { margin: 3px 0; }
 .steps { padding-left: 23px; font-size: 14px; color: #4d5e6d; }
 .steps li { padding: 7px 0; }
-.dialog-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-.dialog-title h1 { overflow-wrap: anywhere; }
 .detail-summary { display: flex; align-items: center; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
 .detail-block { white-space: pre-wrap; overflow-wrap: anywhere; background: #f6f8fa; border-radius: 7px; padding: 16px; font-size: 13px; line-height: 1.7; max-height: 45vh; overflow: auto; margin: 10px 0; }
 .result { margin: 18px 0; }
@@ -338,3 +336,5 @@ summary { cursor: pointer; font-size: 13px; color: #47657c; }
 .settings-editor form { flex:1; overflow:hidden; }
 .settings-editor .settings-editor-body { flex:1; min-height:0; max-height:none; }
 .settings-editor .settings-editor-footer { flex-shrink:0; position:static; }
+
+.details-dialog {max-height:90dvh;overflow-y:auto}

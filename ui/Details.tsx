@@ -4,10 +4,11 @@ import { useEffect, useState } from 'react';
 import { Button, Dialog, Heading, Spinner, Text, TextArea } from '@radix-ui/themes';
 import type { Issue, TaskDetail } from '../src/ui-contract';
 import { api, message } from './api';
-import { ConfirmButton, Field, Notice, StatusBadge } from './components';
+import { ConfirmButton, EditorCloseButton, Field, Notice, StatusBadge } from './components';
 import type { DetailTarget } from './pages/TasksPage';
 import { Evidence } from './Evidence';
 import { TaskContextDetails } from './TaskContextDetails';
+import {useEditorExit} from './useEditorExit';
 import { DateTime } from './browse-components';
 
 export function Details({ target, close, changed, notify, restoreFocus }: {
@@ -16,7 +17,9 @@ export function Details({ target, close, changed, notify, restoreFocus }: {
 }) {
   const locale = useLocale();
   const [data, setData] = useState<{ type: 'task'; value: TaskDetail } | { type: 'issue'; value: Issue }>();
-  const [error, setError] = useState(''), [note, setNote] = useState('');
+  const [error, setError] = useState(''), [note, setNote] = useState(''), [busy,setBusy]=useState(false);
+  const exit=useEditorExit({open:!!target,dirty:target?.type==='issue'&&note.length>0,busy,onClose:close});
+  const perform=async(action:()=>Promise<void>)=>{setBusy(true);try{await action();}finally{setBusy(false);}};
   useEffect(() => setNote(''), [target]);
   useEffect(() => {
     setData(undefined); setError('');
@@ -32,10 +35,11 @@ export function Details({ target, close, changed, notify, restoreFocus }: {
     void load(); return () => controller.abort();
   }, [target, locale]);
   const completed = async (text: string) => { close(); notify(text); await changed(); };
-  return <Dialog.Root open={!!target} onOpenChange={open => { if (!open) close(); }}>
-    <Dialog.Content maxWidth="760px" onCloseAutoFocus={event => { event.preventDefault(); restoreFocus(); }}>
-      <div className="dialog-title"><Dialog.Title>{data?.type === 'task' ? data.value.title || target?.id : `${target?.type === 'issue' ? tr("taskDetails.review") : ''}${target?.id ?? ''}`}</Dialog.Title><Dialog.Close><Button variant="soft" color="gray" aria-label={tr("taskDetails.closeDetails")}><Icon name="close" />{tr("common.close")}</Button></Dialog.Close></div>
+  return <Dialog.Root open={!!target} onOpenChange={open => { if (!open) exit.requestClose(); }}>
+    <Dialog.Content maxWidth="760px" className="details-dialog" onEscapeKeyDown={event=>{if(exit.blocked)event.preventDefault();}} onPointerDownOutside={event=>{if(exit.blocked)event.preventDefault();}} onCloseAutoFocus={event => { event.preventDefault(); restoreFocus(); }}>
+      <div className="editor-dialog-header"><Dialog.Title>{data?.type === 'task' ? data.value.title || target?.id : `${target?.type === 'issue' ? tr("taskDetails.review") : ''}${target?.id ?? ''}`}</Dialog.Title><EditorCloseButton busy={exit.blocked} onClose={exit.requestClose}/></div>
       <Dialog.Description size="2" color="gray">{target?.type === 'issue' ? tr("taskDetails.reviewExecutionDeliveryWithoutRunningTaskAgain") : tr("taskDetails.viewResultsInputVersionsDeliveryRecords")}</Dialog.Description>
+      {exit.confirmation}
       {error && <Notice error>{error}</Notice>}
       {!data && !error && <div className="loading"><Spinner />  {tr("taskDetails.loadingDetails")}</div>}
       {data?.type === 'task' && <>
@@ -68,8 +72,8 @@ export function Details({ target, close, changed, notify, restoreFocus }: {
         </section>)}
         <details><summary>{tr("taskDetails.inputExecutionDeliveryRecords")}</summary><pre className="detail-block">{JSON.stringify({ messages: data.value.messages, runs: data.value.runs, runners: data.value.runners, delivery: data.value.delivery }, null, 2)}</pre></details>
         {['queued', 'running', 'waiting'].includes(data.value.execution) && <div className="actions">
-          <ConfirmButton danger title={tr("taskDetails.confirmStopTask")} description={tr("taskDetails.stoppingCannotUndoCompletedActionsRequestSaved")} action={tr("taskDetails.confirmStop")}
-            onConfirm={async () => { await api.cancel(data.value); await completed(tr("taskDetails.stopRequestSaved")); }}><Icon name="stop" />{tr("taskDetails.stopTask")}</ConfirmButton>
+          <ConfirmButton danger disabled={busy} title={tr("taskDetails.confirmStopTask")} description={tr("taskDetails.stoppingCannotUndoCompletedActionsRequestSaved")} action={tr("taskDetails.confirmStop")}
+            onConfirm={() => perform(async () => { await api.cancel(data.value); await completed(tr("taskDetails.stopRequestSaved")); })}><Icon name="stop" />{tr("taskDetails.stopTask")}</ConfirmButton>
         </div>}
       </>}
       {data?.type === 'issue' && <>
@@ -77,12 +81,12 @@ export function Details({ target, close, changed, notify, restoreFocus }: {
         <Notice>{data.value.guidance}</Notice>
         {data.value.content && <div className="detail-block">{data.value.content}</div>}
         {!!data.value.actions.length && <>
-          <Field label={tr("taskDetails.reviewNotes")} htmlFor="recovery-note"><TextArea id="recovery-note" rows={3} maxLength={1000} value={note} onChange={event => setNote(event.target.value)} placeholder={tr("taskDetails.exampleResultVisibleFeishuGitWasChecked")} /></Field>
+          <Field label={tr("taskDetails.reviewNotes")} htmlFor="recovery-note"><TextArea disabled={busy} id="recovery-note" rows={3} maxLength={1000} value={note} onChange={event => setNote(event.target.value)} placeholder={tr("taskDetails.exampleResultVisibleFeishuGitWasChecked")} /></Field>
           <div className="actions">{data.value.actions.map(action => {
             const label = { received: tr("taskDetails.confirmReceived"), retry: tr("taskDetails.resendResult"), dismiss: tr("taskDetails.dismissDelivery"), reviewed: tr("taskDetails.markReviewed") }[action];
-            return <ConfirmButton key={action} title={`${label}？`} disabled={!note.trim()}
+            return <ConfirmButton key={action} title={`${label}？`} disabled={busy||!note.trim()}
               description={action === 'retry' ? tr("taskDetails.savedResultResentMayCreateDuplicateYou") : tr("taskDetails.recordReviewWithoutChangingExecutionOutcomeCalling")} action={label}
-              onConfirm={async () => { await api.resolve(data.value, action, note); await completed(tr("taskDetails.reviewRecordedModelWasNotCalledAgain")); }}><Icon name={action === 'retry' ? 'refresh' : action === 'dismiss' ? 'close' : 'check'} />{label}</ConfirmButton>;
+              onConfirm={() => perform(async () => { await api.resolve(data.value, action, note); await completed(tr("taskDetails.reviewRecordedModelWasNotCalledAgain")); })}><Icon name={action === 'retry' ? 'refresh' : action === 'dismiss' ? 'close' : 'check'} />{label}</ConfirmButton>;
           })}</div>
           {!note.trim() && <Text as="p" size="1" color="gray">{tr("taskDetails.addReviewNotesChooseAction")}</Text>}
         </>}
@@ -90,6 +94,7 @@ export function Details({ target, close, changed, notify, restoreFocus }: {
           {data.value.history.map((entry, index) => <div key={index}><Text as="p" size="2">{entry.note}</Text><Text size="1" color="gray">{entry.action} · {new Date(entry.createdAt).toLocaleString(getLocale())}</Text></div>)}
         </section>}
       </>}
+      <div className="settings-editor-footer actions"><Button type="button" variant="soft" color="gray" disabled={exit.blocked} onClick={exit.requestClose}>{tr(note.length?'mcp.cancelEdit':'common.close')}</Button></div>
     </Dialog.Content>
   </Dialog.Root>;
 }
