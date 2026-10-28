@@ -11,9 +11,13 @@ export function memoryCommand(store:Store,m:Incoming,allowedUsers:string[],proje
   const authority:MemoryAuthority={kind:'verified-user',authenticated:true,ownerId:m.senderId,chatKey:m.chatKey,chatType:'p2p',project,allowedProjects,source:{kind:'message',ref:m.key}};
   const memory=new Memories(store,redact);
   try{
-    if(command==='/memories')return memory.search({...authority,allowedProjects},{query:args.join(' ')}).map(row=>`${row.id} · v${row.version} · ${row.scope.kind}\n${row.text}`).join('\n\n')||'没有当前范围内可用的记忆。';
+    if(command==='/memories'){
+      const literal=(text:string)=>text.replace(/[\\`*_{}\[\]()#~!>|+-]/g,'\\$&');
+      const rows=memory.search({...authority,allowedProjects},{query:args.join(' ')});
+      return rows.length ? `**当前范围内的记忆**\n${rows.map(row=>`\`${row.id}\` · v${row.version} · ${row.scope.kind}\n${literal(row.text)}`).join('\n\n')}` : '没有当前范围内可用的记忆。';
+    }
     if(command==='/remember'){
-      const [scope,...body]=args;if(!['owner','project','chat'].includes(scope)||!body.length)return '用法：/remember owner|project|chat 明确要记住的内容';
+      const [scope,...body]=args;if(!['owner','project','chat'].includes(scope)||!body.length)return '用法：`/remember owner|project|chat 明确要记住的内容`';
       const saved=memory.save({kind:scope==='project'?'project_knowledge':'preference',scope:{kind:scope as 'owner'|'project'|'chat',ownerId:m.senderId,project:scope==='owner'?null:project,chatKey:scope==='chat'?m.chatKey:null},text:body.join(' ')},authority);
       return `已保存 ${saved.id} · v${saved.version}，后续运行会按范围使用。`;
     }
@@ -30,7 +34,7 @@ export function memoryCommand(store:Store,m:Incoming,allowedUsers:string[],proje
       return `已保存交接 ${saved.id} · v${saved.version}。在本聊天和同一项目的新会话中可用，默认 30 天后失效。`;
     }
     const id=args[0],version=Number(args[1]);
-    if(!id||!Number.isSafeInteger(version))return '请提供记忆编号和版本；先用 /memories 查看。';
+    if(!id||!Number.isSafeInteger(version))return '请提供记忆编号和版本；先用 `/memories` 查看。';
     const updated=command==='/memory-correct'?memory.correct(id,version,{text:args.slice(2).join(' ')},authority):command==='/memory-disable'?memory.disable(id,version,authority):memory.delete(id,version,authority);
     return `已更新 ${updated.id} · v${updated.version}；后续检索与运行按新状态处理。`;
   }catch(error){if(error instanceof MemoryError)return `记忆操作未完成：${error.message}`;throw error;}

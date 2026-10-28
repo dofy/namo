@@ -15,9 +15,10 @@ import { randomUUID } from 'node:crypto';
 import { Recovery, RecoveryError } from './recovery.js';
 import { Cards, type CardEvent } from './cards.js';
 import { Profiles, ProfileError } from './profiles.js';
-import { userModel, setUserModel, ModelPreferenceError } from './model-preferences.js';
+import { userModel, setUserModel, formatModelReply, ModelPreferenceError } from './model-preferences.js';
 import { listCodexModels } from './codex-connection.js';
 import { ModelCatalog } from './model-catalog.js';
+import { formatControlDisplay } from './control-display.js';
 import { resolveCodexBinary } from './codex-installation.js';
 import { agentCodexConfig } from './agent-registry.js';
 import { EvidenceRecorder, readEvidence } from './evidence.js';
@@ -157,7 +158,10 @@ export class Engine {
         const recovery=new Recovery(this.store), actor={id:m.senderId,chatKey:m.chatKey};
         const parts=m.text.trim().split(/\s+/);
         try {
-          if(command==='/issues') reply=recovery.list(actor).map(x=>`${x.subject} · ${x.state} · /issue ${x.subject}`).join('\n')||'暂无待核对异常。';
+          if(command==='/issues') {
+            const issues=recovery.list(actor);
+            reply=issues.length ? `**待核对异常**\n${issues.map(x=>`${x.subject} · ${x.state}\n\`/issue ${x.subject}\``).join('\n\n')}` : '暂无待核对异常。';
+          }
           else if(command==='/issue') {
             const x=recovery.inspect(parts[1]?.toUpperCase()??'',actor);
             const task=x.taskId?this.tasks.get(x.taskId):undefined;
@@ -170,29 +174,41 @@ export class Engine {
         } catch(e) {if(!(e instanceof RecoveryError))throw e;reply=e.message;}
       }
       else if (command === '/whoami') reply = `用户 open_id：${m.senderId}\n会话 chat_id：${m.chatId}`;
-      else if (command === '/tasks') reply = this.tasks.list(m).map(t => `${taskStateLabel(t.state)}${t.project ? ` · ${t.project}` : ''}\n/task ${t.id}`).join('\n\n') || '尚无任务记录。';
+      else if (command === '/tasks') reply = this.tasks.list(m).map(t => `${taskStateLabel(t.state)}${t.project ? ` · ${t.project}` : ''}\n\`/task ${t.id}\``).join('\n\n') || '尚无任务记录。';
       else if (command === '/task') { const id = m.text.trim().split(/\s+/)[1]; const t = id ? this.tasks.owned(id, m) : this.tasks.latest(m); reply = t && this.taskAccessible(t) ? taskStatus(this.store, t) : '未找到可访问的任务。用 /tasks 查看任务编号。'; }
       else if (command === '/session') {
         const wid = m.text.trim().split(/\s+/)[1];
         if (wid && this.store.hasPending(m.chatKey, m.key,m.senderId,scopeOf(m))) reply = '仍有未完成请求，暂不能切换工作线。';
         else if (wid) reply = this.tasks.selectStream(m, wid) ? `已选择工作线 ${wid.toUpperCase()}；下一项任务续接其上下文。` : '未找到可访问的工作线。';
-        else reply = `当前工作线：${this.tasks.binding(m)?.id ?? '尚未创建'}\n${this.tasks.streams(m).map(w => `${w.id} · ${w.project ?? '隔离目录'}`).join('\n')}\n切换：/session W-编号；新开：/new`;
+        else reply = `**当前工作线**\n${this.tasks.binding(m)?.id ?? '尚未创建'}\n\n**可用工作线**\n${this.tasks.streams(m).map(w => `${w.id} · ${w.project ?? '隔离目录'}`).join('\n') || '暂无'}\n\n切换：\`/session W-编号\`\n新开：\`/new\``;
       }
       else if (command === '/status') {
         const pending = this.tasks.pending(m);
-        reply = `服务可用\n当前项目：${this.tasks.binding(m)?.project ?? this.store.project(this.projectScope(m)) ?? this.config.codex?.defaultProject ?? '隔离工作区'}\n正在处理 ${pending.filter(t => t.state === 'running').length} 项，排队 ${pending.filter(t => t.state === 'queued').length} 项，等待补充 ${pending.filter(t => t.state === 'waiting').length} 项。\n用 /tasks 查看本人的任务。`;
+        reply = `**服务可用**\n当前项目：${this.tasks.binding(m)?.project ?? this.store.project(this.projectScope(m)) ?? this.config.codex?.defaultProject ?? '隔离工作区'}\n\n**任务状态**\n正在处理 ${pending.filter(t => t.state === 'running').length} 项 · 排队 ${pending.filter(t => t.state === 'queued').length} 项 · 等待补充 ${pending.filter(t => t.state === 'waiting').length} 项\n\n用 \`/tasks\` 查看本人的任务。`;
       }
       else if (command === '/project') {
         const name = m.text.trim().split(/\s+/)[1];
         const projects = Object.fromEntries(Object.entries(this.config.codex?.projects??{}).filter(([name])=>!this.config.feishu?.access || projectAllowed(this.config.codex!,this.config.feishu as Config['feishu'],m,name)));
-        if (!name) reply = `当前目录：${this.workspaceLabel(m)}\n可选项目：\n${Object.entries(projects).map(([n, p]) => `${n} → ${p}`).join('\n') || '尚未配置'}\n切换：/project 项目名（开始新上下文）`;
+        if (!name) reply = `**当前目录**\n${this.workspaceLabel(m).replace(/[\\`*_{}\[\]()#~!>|+-]/g,'\\$&')}\n\n**可选项目**\n${Object.entries(projects).map(([n, p]) => `\`${n}\` → ${p.replace(/[\\`*_{}\[\]()#~!>|+-]/g,'\\$&')}`).join('\n') || '尚未配置'}\n\n切换：\`/project 项目名\`（开始新上下文）`;
         else if (!Object.hasOwn(projects, name)) reply = '未配置该项目。用 /project 查看可选项目；新增目录需修改本地配置。';
         else if (this.store.hasPending(m.chatKey, m.key,m.senderId,scopeOf(m))) reply = '本会话仍有未完成的请求，暂不能切换项目。请等待完成，或 /cancel 后再切换。';
         else { this.store.setProject(this.projectScope(m), name); this.store.clearThread(m.chatKey); this.tasks.reset(m); reply = `已切换到 ${name}：${projects[name]}。下一条消息开始新的 Codex 上下文。`; }
       }
       else if (command === '/unsupported') reply = '当前版本只支持文字和富文本。图片、文件、语音等内容尚未接入，请先发文字说明。';
       else if (command === '/too-long') reply = '这条消息超过 16000 字符，尚未交给模型。请拆成较短的消息。';
-      else if (command === '/help') reply = '支持文字和富文本；独立附件 / 转发只保存描述、等待说明。/material 内容 暂存材料；/run 要求 开工并关联材料；/tasks 列表；/task N-编号 详情；/amend N-编号 补充要求；/cancel [N-编号] 取消本人任务；/session [W-编号] 查看或续接工作线；/new 或 /reset 新上下文；/project 选择项目；/status 查看状态。文本附件与合并转发会有界读取；/deliver N-编号 相对路径 交付已完成任务的文件。尚无后台派工或定时功能。';
+      else if (command === '/help') reply = [
+        '**任务**',
+        '`/tasks` 查看任务列表\n`/task N-编号` 查看详情\n`/amend N-编号 补充要求` 追加要求\n`/cancel [N-编号]` 停止本人任务\n`/resume WAIT-编号 回答` 继续等待中的任务',
+        '**会话与项目**',
+        '`/session [W-编号]` 查看或切换工作线\n`/new` 或 `/reset` 开始新工作线\n`/project` 查看或切换项目\n`/status` 查看服务与任务状态',
+        '**材料与文件**',
+        '`/material 内容` 暂存材料\n`/run 要求` 处理暂存材料\n`/deliver N-编号 相对路径` 交付任务文件',
+        '**个人设置与记忆 · 私聊**',
+        '`/model` 查看或设置默认模型\n`/profile` 查看或修改个人档案\n`/memories` 查看记忆\n`/remember owner|project|chat 内容` 保存记忆\n`/memory-correct 编号 版本 内容` 修改记忆\n`/memory-disable 编号 版本` 停用记忆\n`/forget 编号 版本` 删除记忆\n`/handoff N-编号` 保存任务交接',
+        '**异常与受控推送**',
+        '`/issues` 查看待核对异常\n`/issue 编号` 查看异常详情和处理方式\n`/push-request N-编号 remote refs/heads/分支` 申请受控推送\n`/push-status AP-编号` 查看审批状态\n`/push-approve AP-编号 --confirm` 确认并执行推送\n`/push-reject AP-编号` 拒绝推送',
+        '也可引用等待中的问题直接回复。文本附件与合并转发会有界读取；等待补充不代表批准外部操作。本机运行 `namo ui` 管理配置与任务。'
+      ].join('\n\n');
       else if (command === '/reset' || command === '/new') {
         if (this.tasks.pending(m).some(t => t.scopeKey===scopeOf(m)&&['running','waiting'].includes(t.state))) reply = '本会话仍有执行或等待补充的任务。请先完成或 /cancel，再 /reset。';
         else { this.store.clearThread(m.chatKey); this.tasks.reset(m); reply = '已开始新的工作线。下一条任务使用新上下文；历史任务和代码仍保留。'; }
@@ -203,7 +219,6 @@ export class Engine {
         reply = cancelled ? `已请求停止 ${cancelled} 条本人任务。已发生的操作不会自动撤销。` : '当前没有可取消的本人任务；可用 /tasks 核对任务编号。';
         if (cancelled < rows.length) reply += '\n部分运行已结束或失联，没有再发出停止请求；请查看任务状态，失联运行需在本机核对。';
       }
-      if(command==='/help') reply+=' 任务等待补充时，引用问题回复或 /resume WAIT-编号 回答 恢复原任务；等待不代表批准外部操作，新工作线支持此能力。私聊 /profile 查看或修改本人称呼、语言、时区；/model 查看或设置默认模型。异常处理：/issues 列表，/issue 编号 查看核对指引；本机 namo ui 管理配置与任务。';
       this.store.finish(m.key, reply);
       return true;
     }
@@ -217,13 +232,11 @@ export class Engine {
       return '当前身份未获准设置模型。';
     const identity = { channel: f.domain, appId: f.appId, userId: m.senderId };
     const parts = m.text.trim().split(/\s+/);
-    if (parts.length > 2) return '用法：/model 查看；/model 模型ID 设置；/model default 恢复默认。';
+    if (parts.length > 2) return '**模型命令**\n`/model` 查看\n`/model 模型ID` 设置\n`/model default` 恢复默认';
     try {
       if (parts.length === 2) setUserModel(this.store, identity, parts[1] === 'default' ? '' : parts[1]);
       void this.modelCatalog?.refresh();
-      const models = this.modelCatalog?.models ?? [];
-      const catalog = models.length ? `\n可选模型：\n${models.map(model=>`${model.id}${model.isDefault?'（推荐）':''}`).join('\n')}` : '\n模型列表暂不可用，可手动输入 Codex 模型 ID。';
-      return `个人默认模型：${userModel(this.store, identity) || '跟随服务默认'}${catalog}\n用 /model 模型ID 设置，/model default 恢复服务默认。新任务生效；已接受的任务保持原选择。模型是否可用以实际运行结果为准。`;
+      return formatModelReply(userModel(this.store, identity), this.modelCatalog?.models ?? []);
     } catch (error) { if (error instanceof ModelPreferenceError) return error.message; throw error; }
   }
   private profileCommand(m: Incoming): string {
@@ -240,11 +253,12 @@ export class Engine {
           profiles.update(Number(parts[2]), { name: '', language: '', timezone: '' }, { source: 'self', sourceRef: m.key });
         } else if (parts[1] === 'set' && parts.length >= 5 && /^\d+$/.test(parts[2])) {
           profiles.update(Number(parts[2]), { [parts[3]]: parts.slice(4).join(' ') === '-' ? '' : parts.slice(4).join(' ') }, { source: 'self', sourceRef: m.key });
-        } else return '用法：先 /profile 查看版本，再 /profile set 版本 name 称呼；language 语言；timezone 时区。值用 - 清空单项，/profile clear 版本 清空全部。';
+        } else return '**档案命令**\n先用 `/profile` 查看版本。\n\n修改：`/profile set 版本 name 称呼`\n字段支持 `name`、`language`、`timezone`；值用 `-` 清空单项。\n\n清空全部：`/profile clear 版本`';
       }
       const p = profiles.get();
-      return `${parts.length > 1 ? '档案已保存' : '本人档案'} · 版本 ${p.version}\n称呼：${p.name || '未设置'}\n语言：${p.language || '未设置'}\n时区：${p.timezone || '未设置'}\n`
-        + `修改示例（每次保存后使用新版本）：\n/profile set ${p.version} name 小七\n/profile set ${p.version} language zh-CN\n/profile set ${p.version} timezone Asia/Shanghai\n/profile clear ${p.version}\n`
+      const literal=(text:string)=>text.replace(/[\\`*_{}\[\]()#~!>|+-]/g,'\\$&');
+      return `**${parts.length > 1 ? '档案已保存' : '本人档案'}** · 版本 ${p.version}\n称呼：${literal(p.name || '未设置')}\n语言：${literal(p.language || '未设置')}\n时区：${literal(p.timezone || '未设置')}\n\n`
+        + `**修改示例**（每次保存后使用新版本）\n\`/profile set ${p.version} name 小七\`\n\`/profile set ${p.version} language zh-CN\`\n\`/profile set ${p.version} timezone Asia/Shanghai\`\n\`/profile clear ${p.version}\`\n\n`
         + '只向本人私聊及本机管理入口展示，不改变配对或权限；在助手设置中明确开启档案使用后，后续本人私聊任务可采用这些偏好。清空不删除历史聊天和备份。';
     } catch (e) { if (!(e instanceof ProfileError)) throw e; return e.message; }
   }
@@ -551,8 +565,10 @@ export class Engine {
       const route = output.route ? JSON.parse(output.route) as DeliveryRoute : undefined;
       const plainOnly = output.payload && JSON.parse(output.payload).textOnly;
       const previous=output.part?this.store.db.prepare('SELECT content FROM outbox WHERE inboxKey=? AND kind=? AND part<? ORDER BY part').all(output.inboxKey,output.kind,output.part).map(row=>String(row.content)).join(''):'';
-      const post = !card && !plainOnly && this.sender.sendPost && hasMarkdown(previous+output.content) ? richPost(output.content, openFence(previous)??false) : undefined;
-      try { platformId = card ? await this.sender.sendCard!(output.chatId, card, output.uuid, route) : post ? await this.sender.sendPost!(output.chatId, post, output.uuid, route) : await this.sender.send(output.chatId, output.content, output.uuid, route); }
+      const display=output.kind==='result' && output.part===0 && !previous
+        ? formatControlDisplay(this.store.get(output.inboxKey)?.text ?? '',output.content) : output.content;
+      const post = !card && !plainOnly && this.sender.sendPost && hasMarkdown(previous+display) ? richPost(display, openFence(previous)??false) : undefined;
+      try { platformId = card ? await this.sender.sendCard!(output.chatId, card, output.uuid, route) : post ? await this.sender.sendPost!(output.chatId, post, output.uuid, route) : await this.sender.send(output.chatId, display, output.uuid, route); }
       catch (e) {
         const error = e instanceof SendError ? e : new SendError(true, 'transport_error');
         if((card||post)&&!error.unknown&&['feishu_230001','feishu_230099'].includes(error.code)) {

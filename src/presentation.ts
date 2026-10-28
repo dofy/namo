@@ -34,10 +34,11 @@ export function taskStatus(store: Store, task: Task): string {
   if (task.state === 'running' && job?.state === 'completed') state = '执行已结束，正在整理回复';
   if (task.state === 'running' && job?.state === 'failed') state = job.error === 'cancelled' ? '已停止，正在整理回复' : '执行未完成，正在整理回复';
   if (job?.state === 'lost') state = '执行状态待核对';
-  const lines = [state];
+  const literal=(text:string)=>text.replace(/[\\`*_{}\[\]()#~!>|+-]/g,'\\$&');
+  const lines = [`**${state}**`];
   if (task.state === 'waiting') {
     const waiting = new Waits(store).current(task.id);
-    if (waiting) lines.push(waiting.question, linkedExternalWait(store,waiting.id)?'外部检查由系统核对，条件满足后继续；不能用人工回复代替检查结果。':`恢复：/resume ${waiting.id} 你的回答`, `停止：/cancel ${task.id}`);
+    if (waiting) lines.push(literal(waiting.question), linkedExternalWait(store,waiting.id)?'外部检查由系统核对，条件满足后继续；不能用人工回复代替检查结果。':`恢复：\`/resume ${waiting.id} 你的回答\``, `停止：\`/cancel ${task.id}\``);
   }
   if (task.project) lines.push(`项目：${task.project}`);
   if (store.get(task.inboxKey)?.cancelRequested && ['queued','running'].includes(task.state) && !['completed','failed','lost','reviewed'].includes(String(job?.state)))
@@ -55,9 +56,9 @@ export function taskStatus(store: Store, task: Task): string {
   const revisions = store.db.prepare("SELECT COUNT(*) n FROM task_messages WHERE taskId=? AND role='revision' AND dispatch NOT IN ('accepted','applied')").get(task.id);
   if (Number(revisions?.n)) lines.push(`有 ${revisions!.n} 条补充要求尚未确认应用，请核对最终结果。`);
   const report = readEvidence(store, task.id).at(-1);
-  if (report) { const evidence = evidenceSummary(report).trim(); if (evidence) lines.push('', evidence); }
+  if (report) { const evidence = evidenceSummary(report).trim(); if (evidence) lines.push('', literal(evidence)); }
   lines.push('', `任务编号：${task.id}`);
   if (['queued','running'].includes(task.state) && (!job || ['starting','running'].includes(String(job.state))))
-    lines.push(`补充：/amend ${task.id} 新要求`, `停止：/cancel ${task.id}`);
+    lines.push(`补充：\`/amend ${task.id} 新要求\``, `停止：\`/cancel ${task.id}\``);
   return lines.join('\n');
 }

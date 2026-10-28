@@ -113,3 +113,17 @@ test('another paired user cannot trigger an already approved record', async t =>
   assert.equal(f.service.approvals.get(request.id)?.state, 'approved');
   assert.throws(() => command(f.bare, ['rev-parse', 'refs/heads/main']));
 });
+
+test('approval receipt displays key fields and exact confirmation without altering stored JSON', async t => {
+  const {formatControlDisplay}=await import('../src/control-display.js');
+  const f=fixture(t),raw=await f.send('readable',`/push-request ${f.task.id} origin refs/heads/main`);
+  const record=JSON.parse(raw),display=formatControlDisplay('/push-request',raw);
+  assert.match(display,/受控推送 · 等待确认/);
+  assert.ok(display.includes(record.id));assert.ok(display.includes(record.headSha));
+  assert.ok(display.includes(`/push-approve ${record.id} --confirm`));
+  assert.ok(display.includes(`/push-reject ${record.id}`));
+  assert.match(display,/仅约束受控推送入口/);
+  assert.equal(formatControlDisplay('ordinary task',raw),raw);
+  assert.equal(formatControlDisplay('/push-request','not json'),'not json');
+  assert.equal(JSON.parse(raw).state,'pending');
+});

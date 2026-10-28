@@ -135,3 +135,31 @@ test('profile command receipt failure rolls back inbox acceptance and profile mu
   assert.throws(() => f.e.accept(message('write', '/profile set 0 name rollback')), /receipt_failed/);
   assert.equal(f.profiles.get().version, 0); assert.equal(f.store.get('app:write'), undefined);
 });
+
+test('model list formats copyable IDs and indicates the current and recommended model', async t => {
+  const f=fixture(t), posts: any[]=[], texts: string[]=[];
+  const e=new Engine(f.store,{async run(){throw Error('unexpected inference');}},
+    {async send(_chat,text,id){texts.push(text);return id;},async sendPost(_chat,post,id){posts.push(post);return id;}},
+    {dataDir:f.dir,concurrency:1,feishu});
+  t.after(()=>e.stop());
+  (e as any).modelCatalog={models:[{id:'gpt-6.1-sol',isDefault:true},{id:'gpt-6.1-terra',isDefault:false}],start:()=>{},refresh:async()=>{},stop:async()=>{}};
+  e.start();
+  e.accept(message('select-pretty','/model gpt-6.1-terra'));
+  for(let i=0;i<50&&!posts.length;i++)await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(posts.length,1); assert.deepEqual(texts,[]);
+  const markdown=posts[0].zh_cn.content[0][0].text;
+  assert.match(markdown,/\*\*个人默认模型\*\*\n`gpt-6\.1-terra`/);
+  assert.match(markdown,/- `gpt-6\.1-sol` · 推荐/);
+  assert.match(markdown,/- `gpt-6\.1-terra` · 当前/);
+  assert.match(markdown,/`\/model gpt-6\.1-sol`/);
+  assert.match(markdown,/`\/model default`/);
+  assert.equal(userModel(f.store,identity),'gpt-6.1-terra');
+});
+
+test('help groups available commands with copyable examples', t => {
+  const f=engine(t);f.e.accept(message('help-readable','/help'));
+  const help=f.reply('help-readable');
+  for(const heading of ['**任务**','**会话与项目**','**材料与文件**','**个人设置与记忆 · 私聊**','**异常与受控推送**']) assert.ok(help.includes(heading));
+  for(const command of ['/model','/resume WAIT-编号 回答','/push-approve AP-编号 --confirm','/memory-correct 编号 版本 内容']) assert.ok(help.includes(`\`${command}\``));
+  assert.equal(f.calls(),0);
+});

@@ -395,7 +395,7 @@ test('automatic memory removal rejects other owners, groups, revoked projects an
 test('explicit private memory commands preserve ownership, version conflicts and deletion',t=>{
  const root=mkdtempSync(join(tmpdir(),'namo-memory-command-')),store=new Store(join(root,'db'));t.after(()=>{store.close();rmSync(root,{recursive:true,force:true});});
  const run=(text:string)=>memoryCommand(store,message(text),['owner'],'project',x=>x)!;
- assert.match(run('/remember owner concise answers'),/已保存/);const list=run('/memories');assert.match(list,/concise answers/);const id=list.split(' ')[0];
+ assert.match(run('/remember owner concise answers'),/已保存/);const list=run('/memories');assert.match(list,/concise answers/);const id=list.match(/`(M-[A-F0-9]{16})`/)?.[1];assert.ok(id);
  assert.match(run(`/memory-correct ${id} 1 precise answers`),/v2/);assert.match(run(`/forget ${id} 1`),/未完成/);assert.match(run(`/forget ${id} 2`),/v3/);assert.doesNotMatch(run('/memories'),/precise answers/);
  const group=message('/remember owner injected');group.envelope!.chatType='group';assert.match(memoryCommand(store,group,['owner'],'project',x=>x)!,/只接受/);
  const quote=message('/remember owner injected');quote.envelope!.parentId='quoted';assert.match(memoryCommand(store,quote,['owner'],'project',x=>x)!,/引用/);
