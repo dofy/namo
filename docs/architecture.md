@@ -98,6 +98,8 @@ pnpm run smoke:codex
 
 `pnpm pack` 生成本地验收包，不发布 npm；检查包中只有运行资源和文档，没有配置、数据、日志或认证。构建不切换已运行服务。文档修改检查本地链接及进度事实，不新增镜像实现的测试。
 
+工作台更新日志在前端构建时自动从 Git 生成：以主线 `package.json` 的版本变化为边界，纳入合并进来的 `feat`、`fix`、`perf`、`style` 提交说明。新版本更新 `package.json` 后正常构建即可，不修改源码或 Git 索引；只包含已提交内容，显示提交说明原文，并过滤疑似敏感信息。已整理的历史版本保留中英文说明。没有完整仓库历史（包括浅克隆）的构建回退到随代码保存的历史记录，并在较新版本提示无法生成详情；分发包运行时不需要 Git。CI 获取完整历史以生成日志。
+
 [CI](../.github/workflows/ci.yml) 在 main 推送与 PR 上运行 Node.js 24 的 Linux / macOS 构建和现有测试，再用 `node scripts/check-package.mjs` 核对包的运行文件、UI 资源及排除项；同一命令可本地复验。真实 Codex / 飞书验收保留在本机，不放入 CI。
 
 图标统一来自 Lucide；字体现有许可证见 [assets/fonts](../assets/fonts/README.md)，Logo 使用 [namo-logo.png](../assets/namo-logo.png)。UI 文案使用稳定英文 message ID，两套语言占位符保持一致。

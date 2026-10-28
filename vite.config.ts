@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
+import { generateChangelog } from './scripts/changelog.ts';
 
 const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
@@ -8,7 +9,7 @@ export default defineConfig({
   root: fileURLToPath(new URL('./ui', import.meta.url)),
   publicDir: false,
   envPrefix: 'NAMO_UI_PUBLIC_',
-  define: { __NAMO_VERSION__: JSON.stringify(version) },
+  define: { __NAMO_VERSION__: JSON.stringify(version), __NAMO_CHANGELOG__: JSON.stringify(generateChangelog(fileURLToPath(new URL('.', import.meta.url)),version)) },
   build: {
     outDir: '../dist/ui',
     emptyOutDir: true,
