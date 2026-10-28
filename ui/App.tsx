@@ -14,6 +14,7 @@ import { MemoryProfilesPage } from './pages/MemoryProfilesPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { AssistantPage } from './pages/AssistantPage';
 import { ChangelogPage } from './pages/ChangelogPage';
+import { ModelCatalogProvider } from './components/ModelSelect';
 import { Icon, type IconName } from './Icon';
 
 type NavigationPage = Exclude<UiPage, 'profiles'>;
@@ -123,19 +124,19 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
         }}><Icon name="refresh" />{tr("common.refreshStatus")}</Button>
       </header>
       {notice && <Notice error={notice.error}>{notice.text}</Notice>}
-      {state && <>
+      {state && <ModelCatalogProvider revision={state.config.revision}>
         {view === 'assistant' && (state.assistant ? <AssistantPage settings={state.assistant} editable={!expired && state.recoveryAvailable} save={api.assistantSave} reset={api.assistantReset} preview={api.assistantPreview} refresh={refresh} /> : <Notice>{tr("app.initializeServiceDatabaseFirst")}</Notice>)}
         <section hidden={view !== 'memory'} aria-label={tr("nav.memoryProfiles")}>
           <MemoryProfilesPage active={view === 'memory'} tab={memoryTab} onTabChange={tab => go(tab === 'profiles' ? `${uiRoutes.memory}?tab=profiles` : uiRoutes.memory)}
             profiles={state.profiles ?? { available: false, configRevision: state.config.revision, entries: [], reason: tr("app.workbenchNotSupportProfilesYetCloseRun") }}
-            expired={expired} recoveryAvailable={state.recoveryAvailable} refresh={refresh} />
+            config={state.config} expired={expired} recoveryAvailable={state.recoveryAvailable} refresh={refresh} />
         </section>
         {view === 'dashboard' && <section aria-label={tr("app.dashboardContent")}><DashboardPage state={state} navigate={go} onOpen={onOpen} enabled={!expired} /></section>}
         {(view === 'tasks' || view === 'sessions') && <section aria-label={view === 'tasks' ? tr("app.taskContent") : tr("app.sessionContent")}><TasksPage key={view} kind={view} state={state} onOpen={onOpen} navigate={go} search={search} enabled={!expired} /></section>}
         <section hidden={view !== 'settings'} aria-label={tr("app.projectsPermissionsContent")}><SettingsPage config={state.config} recoveryAvailable={state.recoveryAvailable && !expired} refresh={refresh} notify={notify} /></section>
         <section hidden={view !== 'connections'} aria-label={tr("app.agentFeishuContent")}><ConnectionsPage state={state} refresh={refresh} expired={expired} /></section>
         {view === 'changelog' && <ChangelogPage />}
-      </>}
+      </ModelCatalogProvider>}
     </main>
     <Details target={target} close={() => setTarget(null)} changed={refresh} notify={notify} restoreFocus={() => opener.current?.focus()} />
   </div>;

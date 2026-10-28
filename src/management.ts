@@ -10,6 +10,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { loadConfig, parseConfig } from './config.js';
+import { resolveAgent } from './agent-registry.js';
 import { ConfigEditor, digest, readJson } from './paths.js';
 import { Store, SCHEMA_VERSION } from './store.js';
 import { Tasks } from './tasks.js';
@@ -96,7 +97,11 @@ export class Management {
     let mcpConnections:ReturnType<typeof publicMcpConnections>;try{mcpConnections=publicMcpConnections(parseMcpConnections(raw.mcpConnections));}catch{mcpConnections=[];}
     const service=this.status();let applied:string|undefined;
     try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid)applied=h.configRevision;}catch{/* Not yet instrumented. */}
-    return {revision,valid,github,mcpConnections,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
+    let activeModelDefault:{model:string;profile:string}|undefined;
+    if(valid&&service.running&&applied===revision){
+      try {const agent=resolveAgent(parseConfig(raw,this.file));activeModelDefault={model:agent.model??'',profile:agent.id};}catch{/* Unavailable profiles must not be presented as active. */}
+    }
+    return {revision,valid,github,mcpConnections,activeModelDefault,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
       values:{projectAccess:c.projectAccess??{},projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.allowLocalCommits??false,
         concurrency:raw.concurrency??2,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
         reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??200,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},

@@ -37,6 +37,8 @@ export interface ConfigView {
   mcpConnections: McpConnectionView[];
   valid: boolean;
   application: 'stopped' | 'unknown' | 'applied' | 'pending';
+  /** Present only when the running receiver's configuration matches this projection. */
+  activeModelDefault?: { model: string; profile: string };
   values: ConfigValues;
   file: string;
   feishu: { appId: string; domain: string; secretConfigured: boolean; pairedUsers: number; restrictedChats: number; access?:OrganizationAccess|null; allowedUserIds?:string[]; allowedChatIds?:string[] };

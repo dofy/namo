@@ -22,6 +22,25 @@ function fixture(t:any,deps:any={}){
  t.after(()=>rmSync(dir,{recursive:true,force:true}));return {dir,data,project,file,raw,manager};
 }
 
+test('model defaults are confirmed only for the matching running configuration', t=>{
+ let running=true;
+ const f=fixture(t,{status:()=>({running,pid:process.pid})});
+ const write=(model:string,agents?:unknown)=>writeFileSync(f.file,JSON.stringify({...f.raw,codex:{...f.raw.codex,model},...(agents?{agents}:{})}));
+ const apply=()=>writeFileSync(join(f.data,'health.json'),JSON.stringify({pid:process.pid,configRevision:digest(readFileSync(f.file,'utf8'))}));
+ write('service-model');apply();
+ assert.deepEqual(f.manager.config().activeModelDefault,{model:'service-model',profile:'codex'});
+ write('pending-model');
+ assert.equal(f.manager.config().application,'pending');
+ assert.equal(f.manager.config().activeModelDefault,undefined);
+ apply();assert.equal(f.manager.config().activeModelDefault.model,'pending-model');
+ write('');apply();assert.deepEqual(f.manager.config().activeModelDefault,{model:'',profile:'codex'});
+ write('base-model',{defaultProfile:'special',profiles:{special:{adapter:'codex',model:'profile-model'}}});apply();
+ assert.deepEqual(f.manager.config().activeModelDefault,{model:'profile-model',profile:'special'});
+ writeFileSync(join(f.data,'health.json'),JSON.stringify({pid:process.pid+1,configRevision:digest(readFileSync(f.file,'utf8'))}));
+ assert.equal(f.manager.config().application,'unknown');assert.equal(f.manager.config().activeModelDefault,undefined);
+ apply();running=false;assert.equal(f.manager.config().application,'stopped');assert.equal(f.manager.config().activeModelDefault,undefined);
+});
+
 test('local GitHub connection probes before saving, binds one paired owner and never accepts browser-supplied executable paths',async t=>{
  const local={executable:'/usr/bin/gh',configDir:'/tmp/gh-fixture',login:'owner',userId:42};let probes=0;
  const f=fixture(t,{localGh:async()=>{probes++;return local;}}),initial=f.manager.config();

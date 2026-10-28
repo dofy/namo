@@ -1,5 +1,14 @@
 # Release notes
 
+## 0.3.2 — 2026-10-28
+
+- Service and personal model settings share an accessible dropdown with explicit
+  inheritance and manual model ID entry. Service settings are labelled as defaults
+  for the whole service; personal overrides take priority for new tasks.
+- Personal settings show the effective model and its source separately from unsaved
+  changes. Unapplied or unavailable service configuration is not reported as active.
+  Codex defaults are resolved when a task starts, not inferred from recommendations.
+
 ## 0.3.1 — 2026-10-28
 
 - Fix MCP requests on Node 24 by using the same Undici implementation for fetch

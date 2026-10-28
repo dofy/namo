@@ -7,6 +7,7 @@ import { api, message } from '../api';
 import { Choice, ConfirmButton, Field, Notice } from '../components';
 import { PageSection } from '../components/PageSection';
 import { SettingToggle } from '../components/SettingToggle';
+import { ModelSelect } from '../components/ModelSelect';
 import { CodexUpdatePanel } from '../components/CodexUpdatePanel';
 
 type MessageOption = 'requireMention' | 'cards' | 'reactions' | 'progressUpdates';
@@ -98,7 +99,8 @@ export function SettingsPage({ config, recoveryAvailable, refresh, notify }: {
         </details>
       </PageSection>
       <PageSection icon="play" title={tr("settings.executionSettings")} description={tr("design.execution")}><div className="form-grid">
-        <Field label={tr("settings.modelBlankCodexDefault")} htmlFor="model"><TextField.Root id="model" autoComplete="off" value={draft.model} onChange={e => edit('model', e.target.value)} /></Field>
+        <div><ModelSelect id="model" label={tr('model.serviceDefault')} value={draft.model} onChange={value=>edit('model',value)} disabled={saving} inheritLabel={tr('model.codexDefault')} resetKey={revision} />
+          <Text as="p" size="1" color="gray">{tr('model.serviceHelp')}</Text></div>
         <Field label={tr("settings.codexCommandFullPath")} htmlFor="bin"><TextField.Root id="bin" required value={draft.bin} onChange={e => edit('bin', e.target.value)} /></Field>
         <Field label={tr("settings.maximumConcurrentTasks")} htmlFor="concurrency"><TextField.Root id="concurrency" type="number" min="1" max="8" required value={draft.concurrency} onChange={e => edit('concurrency', e.target.value)} /></Field>
         <Field label={tr("settings.executionTimeoutSeconds")} htmlFor="timeout"><TextField.Root id="timeout" type="number" min="1" max="7200" required value={draft.timeoutSeconds} onChange={e => edit('timeoutSeconds', e.target.value)} /></Field>

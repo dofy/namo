@@ -504,3 +504,12 @@ html { scroll-padding-bottom:180px; }
   .period-stats { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .period-stats div { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 }
+
+/* Model settings use the same selector and a compact, explicit source summary. */
+.model-select { min-width: 0; }
+.model-status { margin-bottom: 18px; padding: 14px 16px; background: var(--gray-a2); border-radius: 8px; }
+.model-status dl { margin: 0 0 8px; display: grid; gap: 8px; }
+.model-status dl > div { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.model-status dt { min-width: 7em; color: var(--gray-11); font-size: 13px; }
+.model-status dd { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.model-status p { margin: 0; }
