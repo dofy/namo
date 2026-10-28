@@ -32,6 +32,6 @@ export function authorizationRevision(c: Config): string {
     users: c.feishu.allowedUserIds, chats: c.feishu.allowedChatIds,
     projects: c.codex.projects, projectAccess: c.codex.projectAccess,
     sandbox: c.codex.sandbox, network: c.codex.networkAccess, commits: c.codex.allowLocalCommits,
-    read: c.codex.readPaths, deny: c.codex.denyPaths, github,
+    read: c.codex.readPaths, deny: c.codex.denyPaths, github, mcpConnections:c.mcpConnections,
   }));
 }

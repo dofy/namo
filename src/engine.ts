@@ -40,6 +40,7 @@ import type { MaterialReadAdapter } from './materials.js';
 import { richPost, openFence, hasMarkdown } from './richtext.js';
 import { Feedback, recordActivity } from './feedback.js';
 import { admitted, projectAllowed, executionPolicy } from './access.js';
+import { assertMcpDelivery, mcpRead } from './mcp-connections.js';
 import { assertReviewDelivery, readReview } from './github-review.js';
 import { recordProgress } from './public-progress.js';
 
@@ -82,7 +83,7 @@ export class Engine {
   private modelCatalog?: ModelCatalog;
   private versions = new RuntimeVersions();
   constructor(readonly store: Store, private runtime: Runtime, private sender: Sender,
-    private config: Pick<Config, 'dataDir' | 'concurrency' | 'github'> & { file?:string; codex?: Config['codex']; agents?: Config['agents']; feishu?: Partial<Config['feishu']> },
+    private config: Pick<Config, 'dataDir' | 'concurrency' | 'github' | 'mcpConnections'> & { file?:string; codex?: Config['codex']; agents?: Config['agents']; feishu?: Partial<Config['feishu']> },
     private redact: (s: string) => string = s => s,
     private log: Log = () => {},
     private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); this.feedback = new Feedback(store, sender,task=>this.taskAccessible(task)); this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined,id=>{const task=this.tasks.get(id);return !!task&&this.taskAccessible(task);});
@@ -435,6 +436,7 @@ export class Engine {
         onModel: model => this.tasks.freezeDefaultModel(task.id, model),
         threadId: this.tasks.thread(task), cwd, signal,
         prompt, images,
+        ...(this.config.file&&this.config.mcpConnections?.length?{onMcp:(args:unknown)=>mcpRead(this.store,this.config.file!,task,args,signal)}:{}),
         ...(this.config.file?{onReview:(args:unknown)=>readReview(this.store,this.config.file!,task,args,signal)}:{}),
         onActivity: phase => recordActivity(this.store, run, phase),
         onProgress: event => recordProgress(this.store, run, event, this.redact),
@@ -445,7 +447,7 @@ export class Engine {
         onWait: request => requestWait(this.store, task.id, run, { ...request, question: this.redact(request.question), choices: request.choices?.map(value => this.redact(value)) }),
       });
       await this.active.get(m.chatKey)?.steering;
-      if (this.config.file) assertReviewDelivery(this.store,loadConfig(this.config.file),task);
+      if (this.config.file) { assertReviewDelivery(this.store,loadConfig(this.config.file),task); assertMcpDelivery(this.store,loadConfig(this.config.file),task); }
       if (signal.aborted && !this.runtime.persistent) throw new RuntimeError('cancelled');
       this.store.transaction(() => {
         evidence?.finish(true);
@@ -525,7 +527,7 @@ export class Engine {
     try {
       const c=loadConfig(this.config.file), m=this.store.get(task.inboxKey)!;
       if ((this.config.feishu?.access || c.feishu.access) && (!admitted(c.feishu,m.senderId,m.chatId,m.envelope?.tenantKey) || task.project && !projectAllowed(c.codex,c.feishu,m,task.project))) return false;
-      assertReviewDelivery(this.store,c,task); return true;
+      assertReviewDelivery(this.store,c,task); assertMcpDelivery(this.store,c,task); return true;
     } catch { return false; }
   }
   private reply(m: Incoming, text: string): void { this.store.claim(m.key); this.store.finish(m.key, text); }
@@ -566,7 +568,7 @@ export class Engine {
         if (task) try {
           const current=loadConfig(this.config.file), message=this.store.get(task.inboxKey)!;
           if ((this.config.feishu?.access || current.feishu.access) && (authorizationRevision(current)!==authorizationRevision(this.config as Config) || !admitted(current.feishu,message.senderId,message.chatId,message.envelope?.tenantKey) || task.project && !projectAllowed(current.codex,current.feishu,message,task.project))) throw new Error('access_changed');
-          assertReviewDelivery(this.store,current,task);
+          assertReviewDelivery(this.store,current,task); assertMcpDelivery(this.store,current,task);
         } catch {
           this.store.deliveryFailed(output.id,false,'access_changed');
           this.log('reply_withheld',{outboxId:output.id,code:'access_changed'}); continue;

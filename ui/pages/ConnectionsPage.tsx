@@ -8,6 +8,7 @@ import { api, message } from '../api';
 import { Notice } from '../components';
 import { CodexReplyTest } from '../CodexReplyTest';
 import { ServiceAccessSettings } from '../ServiceAccessSettings';
+import { McpSettings } from '../McpSettings';
 import { GitHubSettings } from '../GitHubSettings';
 
 const quote = (value: string) => "'" + value.split("'").join("'\"'\"'") + "'";
@@ -47,6 +48,7 @@ export function ConnectionsPage({ state, refresh, expired }: {
       <Text as="p" size="2" color="gray">{tr("connections.setupCannotConnectWhileAnotherReceiverActive")}</Text>
     </div>}
     <ServiceAccessSettings config={config} refresh={refresh} expired={expired} />
+    <McpSettings config={config} refresh={refresh} expired={expired} />
     <GitHubSettings config={config} profiles={profiles} refresh={refresh} expired={expired} />
     <OperationsPanel state={state} expired={expired}/>
   </>;

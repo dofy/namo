@@ -23,7 +23,7 @@ export function detectAgents(codexBin = 'codex'): AgentInfo[] {
   });
 }
 export function runtimeFor(config: Config, profile?: string | AgentSelection): Runtime {
-  return new CodexRuntime(agentCodexConfig(config, typeof profile === 'string' ? selectAgent(config, profile) : profile));
+  return new CodexRuntime({...agentCodexConfig(config, typeof profile === 'string' ? selectAgent(config, profile) : profile), managedMcp:!!config.mcpConnections?.length});
 }
 export async function probeAgent(source: Config, profileId?: string): Promise<Check[]> {
   let c: Config;

@@ -16,6 +16,7 @@ export interface RunRequest {
   onWait?: (request: WaitRequest) => string;
   onReview?: (arguments_: unknown) => Promise<unknown>;
   onGitHub?: (arguments_: unknown) => Promise<unknown>;
+  onMcp?: (arguments_: unknown) => Promise<unknown>;
   onEvidence?: (item: EvidenceItem) => void;
   onActivity?: (phase: ActivityPhase) => void;
   onProgress?: (event: PublicProgressEvent) => void;

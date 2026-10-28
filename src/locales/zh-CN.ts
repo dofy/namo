@@ -1,6 +1,43 @@
 import type { MessageKey } from './en.js';
 
 export const chinese = {
+  "mcp.oauthFailed": "无法开始 Linear 授权，请检查网络后重试。",
+
+  "mcp.oauthConfigured": "已通过 Linear 授权；留空则保留",
+
+  "mcp.oauthReturn": "授权完成后返回此页面，点击重新载入。",
+
+  "mcp.oauthContinue": "前往 Linear 授权",
+
+  "mcp.oauth": "使用 Linear 登录授权",
+
+  "mcp.invalid": "请检查连接 ID、密钥、授权范围和项目名称。",
+
+  "mcp.notEnabled": "请先启用连接并保存密钥。",
+
+  "mcp.testFailed": "连接失败，请检查 Linear 密钥和网络后重试。",
+
+  "mcp.test": "测试连接",
+  "mcp.testOk": "连接成功，可用工具 {0} 个。",
+
+  "mcp.title": "MCP 连接",
+  "mcp.intro": "连接已授权的外部服务。目前提供 Linear 只读试点。",
+  "mcp.accessNote": "连接可以读取 Linear 账号有权访问的内容。仅在群成员都可查看这些内容时授权群聊。配置 MCP 连接期间，Codex 插件和应用将被禁用；如仍启用了未纳管的 MCP 服务，任务将无法启动。",
+  "mcp.conflict": "配置已在其他位置变更，请重新加载后保存。",
+  "mcp.saved": "已保存。应用配置后启用新连接；撤销授权立即生效。",
+  "mcp.newConnection": "新连接",
+  "mcp.remove": "移除",
+  "mcp.id": "连接 ID（小写字母开头，可包含数字、横线或下划线）",
+  "mcp.enabled": "启用只读连接",
+  "mcp.token": "Linear API 密钥",
+  "mcp.configured": "已配置；留空则保留",
+  "mcp.tokenPlaceholder": "粘贴只读 Linear API 密钥",
+  "mcp.clearToken": "清除已保存的密钥",
+  "mcp.tokenHelp": "可使用 Linear 登录授权，或输入仅有 Read 权限的 Linear API 密钥。凭据保存在本机。",
+  "mcp.projects": "限定 Namo 项目名称；留空表示允许所有已授权项目",
+  "mcp.addLinear": "添加 Linear 连接",
+  "mcp.save": "保存 MCP 设置",
+
   "changelog.title": "更新日志",
   "changelog.description": "查看 Namo 的功能变化。",
   "changelog.view": "查看更新日志",
@@ -155,7 +192,7 @@ export const chinese = {
   "app.installedServiceRelease": "已安装的服务发布",
   "app.localAccess": "只在本机访问",
   "app.localWorkbench": "本地工作台",
-  "app.manageCodexFeishuGithubConnections": "管理 Codex、飞书和 GitHub 连接。",
+  "app.manageCodexFeishuGithubConnections": "管理 Codex、飞书、MCP 和 GitHub 连接。",
   "app.manageMemoriesConversationsNamesLanguagesTimeZones": "管理对话中积累的记忆，以及称呼、语言和时区。",
   "app.namoFoxLogo": "Namo 狐狸标识",
   "app.notAuthorized": "尚未授权",

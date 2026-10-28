@@ -30,8 +30,11 @@ export interface ConfigValues {
   progressIntervalMs?: number;
   progressHeartbeatMs?: number;
 }
+export interface McpConnectionView { id:string; type:'linear'; enabled:boolean; audience:Audience; projects:string[]; credentialConfigured:boolean; credentialSource?:'oauth' }
+export interface McpConnectionPatch { id:string; type:'linear'; enabled:boolean; audience:Audience; projects:string[]; newToken?:string; clearToken?:boolean }
 export interface ConfigView {
   revision: string;
+  mcpConnections: McpConnectionView[];
   valid: boolean;
   application: 'stopped' | 'unknown' | 'applied' | 'pending';
   values: ConfigValues;

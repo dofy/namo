@@ -18,6 +18,7 @@ import { requestWait } from './external-wait-bridge.js';
 import { loadRunImages } from './image-inputs.js';
 import { executionPolicy } from './access.js';
 import { readReview, assertReviewDelivery } from './github-review.js';
+import { mcpRead, assertMcpDelivery } from './mcp-connections.js';
 import { githubApi } from './github-api.js';
 
 process.umask(0o077);
@@ -64,7 +65,7 @@ async function main(): Promise<void> {
       if (resolve(database) !== join(config.dataDir, 'bot.sqlite') || revision !== runnerJob(store, runId)!.configRevision
         || task.policyHash !== selectedPolicyHash(effectiveConfig, selection) || realpathSync(task.cwd) !== task.cwd
         || (task.project && config.codex.projects?.[task.project] !== task.cwd)) throw new RuntimeError('task_configuration_changed');
-      const redact = makeRedactor([config.feishu.appSecret,config.github?.token??'']);
+      const redact = makeRedactor([config.feishu.appSecret,config.github?.token??'',...(config.mcpConnections??[]).map(c=>c.token)]);
       if (store.get(task.inboxKey)?.cancelRequested || abort.signal.aborted) throw new RuntimeError('cancelled');
       write(() => { evidence = new EvidenceRecorder(store, runId, task.cwd, selectedConfig.denyPaths, redact); });
       const steer = (): void => {
@@ -98,6 +99,7 @@ async function main(): Promise<void> {
           steer();
         } catch { storageFailed = true; abort.abort('storage_failed'); }
       }, 200);
+      assertMcpDelivery(store,current,task);
       const raw = await runtimeFor(effectiveConfig, selection).run({ taskId: task.id, runId,
         model: tasks.model(task.id),
         onModel: model => write(() => tasks.freezeDefaultModel(task.id, model)),
@@ -112,6 +114,14 @@ async function main(): Promise<void> {
           const thread = store.thread(tasks.sessionKey(task))!;
           store.saveRun(task.inboxKey, thread, turn); tasks.saveRun(runId, thread, turn); runnerEvent(store, runId, 'turn_bound');
         }),
+        ...(config.mcpConnections?.length?{onMcp:async(args:unknown)=>{
+          const response=await mcpRead(store,file,task,args,abort.signal,undefined,config);
+          if(args&&typeof args==='object'&&(args as Record<string,unknown>).operation==='call') {
+            const failed=!!(response as {data?:{isError?:boolean}})?.data?.isError;
+            write(()=>runnerEvent(store,runId,failed?'mcp_linear_call_failed':'mcp_linear_call_completed'));
+          }
+          return response;
+        }}:{}),
         onReview: args => readReview(store,file,task,args,abort.signal),
         ...(config.github?.mode==='simple'?{onGitHub:(args:unknown)=>githubApi(store,file,task,args,abort.signal)}:{}),
         onReady: next => { controls = next; steer(); },
@@ -127,6 +137,7 @@ async function main(): Promise<void> {
         }),
       });
       assertReviewDelivery(store,loadConfig(file),task);
+      assertMcpDelivery(store,loadConfig(file),task);
       result = { ...raw, text: redact(raw.text), ...(raw.waiting ? { waiting: { ...raw.waiting, question: redact(raw.waiting.question), choices: raw.waiting.choices?.map(redact) } } : {}) };
     } catch (e) {
       error = abort.signal.reason === 'worker_stopped' ? 'interrupted'

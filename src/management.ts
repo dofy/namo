@@ -25,6 +25,8 @@ import { listCodexModels } from './codex-connection.js';
 import { CodexUpdates } from './codex-updates.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
 import { Browse, BrowseError } from './browse.js';
+import { isOAuthReference, resolveLinearCredential } from './mcp-oauth.js';
+import { parseMcpConnections, publicMcpConnections, linearRead } from './mcp-connections.js';
 import { parseGitHubAccessConfig, publicGitHubAccess } from './github-access.js';
 import { FeishuTransport } from './feishu.js';
 import { discoverLocalGh, type LocalGhConfig } from './github-local.js';
@@ -60,7 +62,7 @@ export class Management {
   private redactor():(text:string)=>string {
     const {raw}=this.source(),f=raw.feishu??{};let token=typeof raw.github?.token==='string'?raw.github.token:'';
     try {token=parseGitHubAccessConfig(raw.github,process.env)?.token??'';}catch{const key=raw.github?.tokenEnv;if(typeof key==='string'&&/^NAMO_GITHUB_[A-Z][A-Z0-9_]*$/.test(key))token=process.env[key]??token;}
-    return makeRedactor([typeof f.appSecret==='string'?f.appSecret:'',process.env[f.appSecretEnv??'FEISHU_APP_SECRET']??'',token]);
+    return makeRedactor([typeof f.appSecret==='string'?f.appSecret:'',process.env[f.appSecretEnv??'FEISHU_APP_SECRET']??'',token,...(Array.isArray(raw.mcpConnections)?raw.mcpConnections.map((v:any)=>typeof v?.token==='string'?v.token:''):[])]);
   }
   private read<T>(fn:(s:Store)=>T):T|undefined {
     const path=join(this.dataDir,'bot.sqlite');if(!existsSync(path))return;
@@ -89,9 +91,10 @@ export class Management {
     const {raw,revision}=this.source(),c=raw.codex??{},f=raw.feishu??{};
     let valid=true;try{parseConfig(raw,this.file);}catch{valid=false;}
     let github=publicGitHubAccess();try {github=publicGitHubAccess(parseGitHubAccessConfig(raw.github,process.env));}catch{/* Keep an invalid credential out of the projection. */}
+    let mcpConnections:ReturnType<typeof publicMcpConnections>;try{mcpConnections=publicMcpConnections(parseMcpConnections(raw.mcpConnections));}catch{mcpConnections=[];}
     const service=this.status();let applied:string|undefined;
     try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid)applied=h.configRevision;}catch{/* Not yet instrumented. */}
-    return {revision,valid,github,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
+    return {revision,valid,github,mcpConnections,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
       values:{projectAccess:c.projectAccess??{},projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.allowLocalCommits??false,
         concurrency:raw.concurrency??2,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
         reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??200,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},
@@ -290,6 +293,24 @@ export class Management {
     try { return input ? await this.codexUpdater.updates.action(input.action,input.enabled) : await this.codexUpdater.updates.status(); }
     catch(error) { throw new ManagementError(error instanceof Error && /^update_[a-z_]+$/.test(error.message)?error.message:'update_failed'); }
   }
+  async testMcp(revision:unknown,id:unknown):Promise<{toolCount:number}> {
+    if(typeof revision!=='string'||typeof id!=='string'||this.source().revision!==revision)throw new ManagementError('mcp_config_changed');
+    const connection=loadConfig(this.file).mcpConnections?.find(c=>c.id===id);
+    if(!connection?.enabled||!connection.token)throw new ManagementError('mcp_connection_not_enabled',400);
+    try {
+      const signal=AbortSignal.timeout(30000),credential=await resolveLinearCredential(this.dataDir,connection.token,signal);
+      const result=await linearRead({...connection,token:credential.token},{operation:'list'},signal);
+      if(this.source().revision!==revision)throw new ManagementError('mcp_config_changed');
+      return {toolCount:Array.isArray(result)?result.length:0};
+    } catch(error) {if(error instanceof ManagementError)throw error;throw new ManagementError('mcp_connection_failed',400);}
+  }
+  saveMcpOAuth(revision:string,id:string,reference:string):void {
+    if(!isOAuthReference(reference))throw new ManagementError('mcp_oauth_invalid',400);
+    const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError('mcp_config_changed');
+    const connections=parseMcpConnections(raw.mcpConnections);
+    if(!connections.some(c=>c.id===id))throw new ManagementError('mcp_config_changed');
+    this.save(revision,{mcpConnections:connections.map(({token:_token,...value})=>({...value,...(value.id===id?{newToken:reference}:{})}))},undefined,true);
+  }
   async saveGitHub(revision:string,patch:any):Promise<any> {
     if (patch?.github?.source!=='gh') return this.save(revision,patch);
     const {raw,revision:current}=this.source();
@@ -303,15 +324,15 @@ export class Management {
     catch {throw new ManagementError(tr("management.localGithubLoginUnavailableRunGhAuth"),400);}
     return this.save(revision,patch,local);
   }
-  save(revision:string,patch:any,localGh?:LocalGhConfig):any {
+  save(revision:string,patch:any,localGh?:LocalGhConfig,internalOAuth=false):any {
     const release=acquireLock(join(this.dataDir,'config-edit.lock'));
     try {
       const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError(tr("management.configurationChangedAnotherPageProgramRefreshTry"));
       if(!patch||typeof patch!=='object'||Array.isArray(patch))throw new ManagementError(tr("management.invalidConfigurationContent"));
-      const allowed=['serviceAccess','projectAccess','projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken'];
+      const allowed=['serviceAccess','projectAccess','projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'];
       if(Object.keys(patch).some(k=>!allowed.includes(k)))throw new ManagementError(tr("management.configurationIncludesFieldsCannotEdited"));
       const next=structuredClone(raw);next.codex??={};next.feishu??={};
-      for(const key of allowed.filter(k=>!['serviceAccess','concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
+      for(const key of allowed.filter(k=>!['serviceAccess','concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
       if(patch.serviceAccess!==undefined) {
         const a=patch.serviceAccess;
         if (!a || typeof a!=='object' || Array.isArray(a) || Object.keys(a).some(k=>!['access','allowedUserIds','allowedChatIds'].includes(k))) throw new ManagementError(tr("management.invalidOrganizationAccessSettings"),400);
@@ -338,6 +359,18 @@ export class Management {
         } else if (patch.github.source==='token') {
           delete next.github.localGh;delete next.github.source;
         }
+      }
+      if(patch.mcpConnections!==undefined){
+        if(!Array.isArray(patch.mcpConnections)||patch.mcpConnections.length>20)throw new ManagementError('mcp_invalid_config',400);
+        const previous=parseMcpConnections(raw.mcpConnections);
+        next.mcpConnections=patch.mcpConnections.map((entry:any)=>{
+          if(!entry||typeof entry!=='object'||Array.isArray(entry)||Object.keys(entry).some(k=>!['id','type','enabled','audience','projects','newToken','clearToken'].includes(k))
+            ||entry.newToken!==undefined&&typeof entry.newToken!=='string'||entry.clearToken!==undefined&&typeof entry.clearToken!=='boolean'
+            ||entry.clearToken&&entry.newToken||!internalOAuth&&typeof entry.newToken==='string'&&isOAuthReference(entry.newToken))throw new ManagementError('mcp_invalid_config',400);
+          const prior=previous.find(v=>v.id===entry.id);
+          return {id:entry.id,type:entry.type,enabled:entry.enabled,audience:entry.audience,projects:entry.projects,
+            token:entry.clearToken?'':entry.newToken||prior?.token||''};
+        });
       }
       if(patch.clearGithubToken!==undefined&&typeof patch.clearGithubToken!=='boolean')throw new ManagementError(tr("management.invalidGithubConfiguration"),400);
       if(patch.newGithubToken!==undefined&&(typeof patch.newGithubToken!=='string'||patch.newGithubToken.length>4096))throw new ManagementError(tr("management.invalidGithubCredentialFormat"),400);

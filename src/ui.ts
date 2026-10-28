@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { Management, ManagementError } from './management.js';
 import { RecoveryError } from './recovery.js';
 import { uiRoutes } from './ui-contract.js';
+import { LinearOAuthFlow } from './mcp-oauth-flow.js';
 import { BrowseError } from './browse.js';
 
 const assetRoot = new URL('../ui/', import.meta.url);
@@ -23,6 +24,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
   catch { throw new ManagementError(tr("ui.workbenchAssetsMissingSourceDevelopmentRunPnpm")); }
   let bootstrap=randomBytes(32).toString('hex');const bootstrapUntil=Date.now()+300000;
   let session='';let sessionUntil=0,attempts=0,busy=false,origin='',cookieName='';
+  const oauth=new LinearOAuthFlow(manager,()=>origin);
   async function body(req:IncomingMessage):Promise<any>{
     if(req.headers['content-type']!=='application/json')throw new ManagementError(tr("ui.requestMustUseJson"));
     let data='';for await(const chunk of req){data+=chunk;if(Buffer.byteLength(data)>65536)throw new ManagementError(tr("ui.requestTooLarge"));}
@@ -32,9 +34,18 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
     const send=(status:number,value:unknown,type='application/json')=>{res.writeHead(status,{'Content-Type':`${type}; charset=utf-8`});res.end(type==='application/json'?JSON.stringify(value):value as string);};
     const styleNonce=randomBytes(18).toString('base64');
     headers(res,styleNonce);
-    if(req.headers.host!==origin.slice('http://'.length)||req.headers['sec-fetch-site']==='cross-site')return send(403,{error:tr("ui.invalidRequestOrigin")});
+    if(req.headers.host!==origin.slice('http://'.length))return send(403,{error:tr("ui.invalidRequestOrigin")});
     let path:string;
     try{path=new URL(req.url??'/',origin).pathname;}catch{return send(400,{error:tr("ui.invalidRequestPath")});}
+    if(req.method==='GET'&&path==='/api/mcp-oauth/callback'){
+      let ok=false;try{ok=await oauth.finish(new URL(req.url??'/',origin).searchParams);}catch{/* Invalid or expired callback; never expose raw OAuth errors. */}
+      res.writeHead(303,{'Location':ok?'/oauth-complete?status=success':'/oauth-complete?status=failed'});return res.end();
+    }
+    if(req.method==='GET'&&path==='/oauth-complete'){
+      const ok=new URL(req.url??'/',origin).searchParams.get('status')==='success';
+      return send(200,ok?'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Linear 授权完成</title><p>授权完成。请返回 Namo 管理界面并重新载入连接设置。</p></html>':'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Linear 授权未完成</title><p>授权未完成。请返回 Namo 管理界面重新操作。</p></html>','text/html');
+    }
+    if(req.headers['sec-fetch-site']==='cross-site')return send(403,{error:tr("ui.invalidRequestOrigin")});
     if(req.method==='GET'&&Object.values(uiRoutes).some(route=>route===path)) {
       try{return send(200,readFileSync(new URL('index.html',assetRoot),'utf8').replace('__NAMO_STYLE_NONCE__',styleNonce),'text/html');}
       catch{return send(503,{error:tr("ui.workbenchBuildingRefreshShortly")});}
@@ -87,6 +98,8 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/assistant')return send(200,manager.assistant(input.action,input.version,input.values));
         if(path==='/api/memories')return send(200,manager.memory(input.action,input.ownerId,input.input));
         if(path==='/api/organization')return send(200,await manager.organization());
+        if(path==='/api/mcp-oauth-start'){try{return send(200,await oauth.begin(input.revision,input.id));}catch{return send(400,{error:'mcp_oauth_failed'});}}
+        if(path==='/api/mcp-test')return send(200,await manager.testMcp(input.revision,input.id));
         if(path==='/api/config')return send(200,await manager.saveGitHub(input.revision,input.patch));
         if(path==='/api/apply')return send(200,await manager.apply(input.revision,input.confirmed===true));
         if(path==='/api/diagnose')return send(200,await manager.diagnose(input.live===true,input.confirmed===true));
@@ -105,7 +118,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
   const address=server.address();if(!address||typeof address==='string')throw new Error('ui_listen_failed');
   origin=`http://127.0.0.1:${address.port}`;cookieName=`namo_ui_${address.port}`;
-  return {url:origin,entryUrl:`${origin}/#${bootstrap}`,close:async()=>{session='';bootstrap='';server.closeAllConnections();await manager.close();await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
+  return {url:origin,entryUrl:`${origin}/#${bootstrap}`,close:async()=>{session='';bootstrap='';oauth.clear();server.closeAllConnections();await manager.close();await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
 }
 function headers(res:ServerResponse,styleNonce:string):void{
   res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Content-Type-Options','nosniff');

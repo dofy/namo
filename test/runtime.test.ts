@@ -10,7 +10,7 @@ import type { PublicProgressEvent } from '../src/public-progress.js';
 const FAKE = `#!/usr/bin/env node
 import { createInterface } from 'node:readline';
 const write = m => process.stdout.write(JSON.stringify(m)+'\\n');
-let waitAfterLate=false,apiRegistered=false,threadModel;
+let waitAfterLate=false,apiRegistered=false,mcpRegistered=false,threadModel;
 createInterface({input:process.stdin}).on('line', line=>{
  const m=JSON.parse(line);
  if(m.id===99&&!m.method){
@@ -24,7 +24,7 @@ createInterface({input:process.stdin}).on('line', line=>{
  if(m.method==='skills/list')return write({id:m.id,result:{data:[{cwd:m.params.cwds[0],skills:[],errors:[]}]}});
  if(m.method==='model/list')return write({id:m.id,result:{data:[{model:'default-model',isDefault:true}],nextCursor:null}});
  if(m.method==='thread/start' && new Set((m.params.dynamicTools??[]).map(t=>Object.hasOwn(t,'type')?'canonical':'legacy')).size>1)return write({id:m.id,error:{code:-32600,message:'mixed dynamic tool formats'}});
- if(m.method==='thread/start')apiRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='github_api');
+ if(m.method==='thread/start'){apiRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='github_api');mcpRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='mcp_read');}
  if(m.method==='thread/start'||m.method==='thread/resume'){threadModel=m.params.model;return write({id:m.id,result:{thread:{id:m.params.threadId||'thread-one'}}});}
  if(m.method==='turn/interrupt'&&waitAfterLate){
   write({id:m.id,result:{}});
@@ -45,6 +45,11 @@ createInterface({input:process.stdin}).on('line', line=>{
   if(prompt==='check-configured' && (threadModel!=='configured-model'||m.params.model!=='configured-model'))return write({id:m.id,error:{code:-32602,message:'configured default mismatch'}});
   if(prompt==='image-input' && (m.params.input.length!==2 || m.params.input[1].type!=='localImage' || !m.params.input[1].path.endsWith('/accepted.png')))
    return write({id:m.id,error:{code:-32602,message:'image input missing'}});
+  if(prompt==='mcp'||prompt==='mcp-invalid'){
+   if(!mcpRegistered)return write({id:m.id,error:{code:-32602,message:'MCP not registered'}});
+   write({id:99,method:'item/tool/call',params:{namespace:null,tool:'mcp_read',threadId:'thread-one',turnId:prompt==='mcp-invalid'?'foreign-turn':'turn-one',callId:'mcp-call',arguments:{connection:'linear',operation:'list'}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
+  }
   if(prompt==='github-api'||prompt==='github-api-invalid'){
    if(!apiRegistered)return write({id:m.id,error:{code:-32602,message:'github API not registered'}});
    write({id:99,method:'item/tool/call',params:{namespace:null,tool:'github_api',threadId:'thread-one',turnId:prompt==='github-api-invalid'?'foreign-turn':'turn-one',callId:'api-call',arguments:{requestId:'owner-write',method:'POST',endpoint:'/repos/org/repo/issues',body:{title:'requested'}}}});
@@ -275,4 +280,12 @@ test('an explicit active or unknown tool status in a terminal snapshot never bec
  assert.equal((await run('github-api',async args=>{calls++;assert.equal((args as any).method,'POST');return {state:'completed'};})).text,'review received');
  await run('github-api-invalid',async()=>{calls++;throw Error('must not run');});assert.equal(calls,1);
  const failure=await run('github-api',async()=>{throw Error('PRIVATE_CREDENTIAL');});assert.match(failure.text,/github_api_unavailable/);assert.doesNotMatch(failure.text,/PRIVATE_CREDENTIAL/);
+ });
+
+ test('MCP tool is registered on new threads and rejects foreign turns and unsafe errors',async t=>{
+ const {dir,runtime}=fixture(t);let calls=0;
+ const run=(prompt:string,onMcp:(args:unknown)=>Promise<unknown>)=>runtime.run({cwd:dir,prompt,signal:new AbortController().signal,onThread(){},onTurn(){},onMcp});
+ assert.equal((await run('mcp',async args=>{calls++;assert.equal((args as any).connection,'linear');return {data:[]};})).text,'review received');
+ await run('mcp-invalid',async()=>{calls++;throw Error('must not run');});assert.equal(calls,1);
+ const failure=await run('mcp',async()=>{throw Error('PRIVATE_CREDENTIAL');});assert.match(failure.text,/mcp_connection_failed/);assert.doesNotMatch(failure.text,/PRIVATE_CREDENTIAL/);
  });

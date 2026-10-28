@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { configFile } from './paths.js';
 import { parseGitHubAccessConfig, type GitHubAccessConfig } from './github-access.js';
+import { parseMcpConnections, type McpConnection } from './mcp-connections.js';
 import { parseOrganization, parseAudience, type OrganizationAccess, type ProjectAccess } from './access.js';
 
 export interface Config {
@@ -21,7 +22,7 @@ export interface Config {
     bin: string; home: string; model?: string; timeoutMs: number;
     sandbox: 'read-only' | 'workspace-write';
     projects?: Record<string, string>; defaultProject?: string;
-    projectAccess?: Record<string, ProjectAccess>; accessScope?: string;
+    projectAccess?: Record<string, ProjectAccess>; accessScope?: string; managedMcp?: boolean;
     networkAccess?: boolean; explicitDenyPaths?:string[]; readPaths?: string[]; denyPaths?: string[]; allowLocalCommits?: boolean;
   };
   gitApprovals?: {
@@ -30,6 +31,7 @@ export interface Config {
   };
   concurrency: number;
   github?: GitHubAccessConfig;
+  mcpConnections?: McpConnection[];
   agent?: 'codex';
   agents?: AgentRegistryConfig;
 }
@@ -54,6 +56,7 @@ export function parseConfig(d: any, absolute: string): Config {
   if(github?.mode==='simple' && !pairedUserIds.includes(github.ownerUserId!))throw new Error('github_owner_not_paired');
   const access = parseOrganization(f.access);
   if(!access && github?.allowedUserIds.some(id=>!pairedUserIds.includes(id)))throw new Error('github_access_user_not_paired');
+  const mcpConnections = parseMcpConnections(d.mcpConnections);
   const g = d.gitApprovals ?? {};
   if (!g || typeof g !== 'object' || Array.isArray(g)) throw new Error('gitApprovals must be an object');
   if (d.agent !== undefined && d.agent !== 'codex') throw new Error(tr("config.codexOnly"));
@@ -85,6 +88,7 @@ export function parseConfig(d: any, absolute: string): Config {
     if (!statSync(dir).isDirectory() || dir === '/' || dir === homedir()) throw new Error(tr("config.projectMustExistingSpecificDirectoryNotRoot"));
     projects[name] = dir;
   }
+  for (const connection of mcpConnections) if (connection.projects.some(name => !Object.hasOwn(projects,name))) throw new Error('mcp_unknown_project');
   if (c.defaultProject !== undefined && (typeof c.defaultProject !== 'string' || !Object.hasOwn(projects, c.defaultProject))) throw new Error(tr("config.codexDefaultprojectMustReferenceConfiguredProject"));
   if (Object.keys(projects).length && !c.defaultProject) throw new Error(tr("config.setCodexDefaultprojectProjectsConfigured"));
   const projectAccess: Record<string, ProjectAccess> = {};
@@ -108,7 +112,7 @@ export function parseConfig(d: any, absolute: string): Config {
     remoteNames.add(value.name); gitRemotes.push({ name: value.name, url: value.url, transport: value.transport, credentialHelpers: value.credentialHelpers ? [...new Set(value.credentialHelpers as string[])] : undefined });
   }
   return {
-    file: absolute, dataDir, concurrency, agent: 'codex', github,
+    file: absolute, dataDir, concurrency, agent: 'codex', github, mcpConnections,
     agents: parseAgentRegistry(d.agents, dirname(absolute)),
     feishu: {
       appId: f.appId ?? '',

@@ -1,5 +1,42 @@
 // Stable message IDs. Copy edits must not rename keys. Keep placeholders aligned with zh-CN.
 export const english = {
+  "mcp.oauthFailed": "Could not start Linear authorization. Check the network and try again.",
+
+  "mcp.oauthConfigured": "Authorized with Linear; leave blank to keep",
+
+  "mcp.oauthReturn": "After authorizing, return here and reload.",
+
+  "mcp.oauthContinue": "Continue to Linear authorization",
+
+  "mcp.oauth": "Sign in with Linear",
+
+  "mcp.invalid": "Check the connection ID, key, audience and project names.",
+
+  "mcp.notEnabled": "Enable the connection and save a key first.",
+
+  "mcp.testFailed": "Connection failed. Check the Linear key and network, then try again.",
+
+  "mcp.test": "Test connection",
+  "mcp.testOk": "Connected. {0} tools available.",
+
+  "mcp.title": "MCP connections",
+  "mcp.intro": "Connect approved external services. Linear is available as a read-only pilot.",
+  "mcp.accessNote": "The connection can read everything its Linear account can access. Grant a group only when its members may see that content. When connections are configured, Codex plugins and apps are disabled, and enabled unmanaged MCP servers prevent tasks from starting.",
+  "mcp.conflict": "Settings changed elsewhere. Reload before saving.",
+  "mcp.saved": "Saved. Apply the configuration to enable new connections; revocations take effect immediately.",
+  "mcp.newConnection": "New connection",
+  "mcp.remove": "Remove",
+  "mcp.id": "Connection ID (starts with a lowercase letter; lowercase letters, numbers, hyphen or underscore)",
+  "mcp.enabled": "Enable read-only connection",
+  "mcp.token": "Linear API key",
+  "mcp.configured": "Configured; leave blank to keep",
+  "mcp.tokenPlaceholder": "Paste a read-only Linear API key",
+  "mcp.clearToken": "Remove saved key",
+  "mcp.tokenHelp": "Sign in with Linear or provide a Linear API key with Read permission only. Credentials stay on this host.",
+  "mcp.projects": "Restrict to Namo project names; empty allows all authorized projects",
+  "mcp.addLinear": "Add Linear connection",
+  "mcp.save": "Save MCP settings",
+
   "changelog.title": "Changelog",
   "changelog.description": "See what has changed in Namo.",
   "changelog.view": "View changelog",
@@ -154,7 +191,7 @@ export const english = {
   "app.installedServiceRelease": "Installed service release",
   "app.localAccess": "Local access only",
   "app.localWorkbench": "Local workbench",
-  "app.manageCodexFeishuGithubConnections": "Manage Codex, Feishu and GitHub connections.",
+  "app.manageCodexFeishuGithubConnections": "Manage Codex, Feishu, MCP and GitHub connections.",
   "app.manageMemoriesConversationsNamesLanguagesTimeZones": "Manage memories from conversations, names, languages, and time zones.",
   "app.namoFoxLogo": "Namo fox logo",
   "app.notAuthorized": "Not authorized",

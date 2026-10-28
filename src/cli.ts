@@ -72,7 +72,7 @@ async function main(): Promise<void> {
     process.once('SIGINT', () => void close()); process.once('SIGTERM', () => void close()); return;
   }
   const configRevision = digest(readFileSync(file,'utf8'));
-  const config = loadConfig(file); redact = makeRedactor([config.feishu.appSecret,config.github?.token??'']);
+  const config = loadConfig(file); redact = makeRedactor([config.feishu.appSecret,config.github?.token??'',...(config.mcpConnections??[]).map(c=>c.token)]);
   if (configRevision !== digest(readFileSync(file,'utf8'))) throw new Error(tr('cli.configurationChangingPleaseRetry'));
   if (command === 'login') { await loginAgent(config,requestedProfile); return; }
   if (command === 'service') { console.log(JSON.stringify(await serviceAction(positional[1],config),null,2)); return; }

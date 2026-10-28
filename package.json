@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.76.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "smol-toml": "1.9.1"
   },
   "devDependencies": {
@@ -34,10 +35,22 @@
     "vite": "8.3.5"
   },
   "description": "A local-first AI work companion connecting Feishu and Lark to Codex.",
-  "repository": { "type": "git", "url": "git+https://github.com/dofy/namo.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dofy/namo.git"
+  },
   "homepage": "https://github.com/dofy/namo#readme",
-  "bugs": { "url": "https://github.com/dofy/namo/issues" },
-  "keywords": ["ai-agent", "codex", "feishu", "lark", "local-first", "typescript"],
+  "bugs": {
+    "url": "https://github.com/dofy/namo/issues"
+  },
+  "keywords": [
+    "ai-agent",
+    "codex",
+    "feishu",
+    "lark",
+    "local-first",
+    "typescript"
+  ],
   "packageManager": "pnpm@12.15.0",
   "bin": {
     "namo": "bin/namo.js"

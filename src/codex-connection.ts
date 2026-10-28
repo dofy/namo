@@ -54,6 +54,7 @@ export class Rpc {
       '-c', `permissions.feishu-bot.filesystem=${filesystem}`,
       '-c', `permissions.feishu-bot.network.enabled=${policy?.networkAccess === true}`,
       ...skillSettingsOverride(skills?.settings ?? []),
+      ...(policy?.managedMcp ? ['-c','features.plugins=false','-c','features.apps=false','-c','mcp_servers={}'] : []),
       ...(extraction ? ['-c','features.shell_tool=false','-c','features.plugins=false','-c','features.apps=false','-c','features.hooks=false',
         '-c','mcp_servers={}','-c','web_search="disabled"'] : [])], {
       env: { ...codexEnvironment(home), npm_config_script_shell: '/bin/sh',
@@ -167,6 +168,16 @@ export async function listCodexModels(config: Config['codex']): Promise<{id:stri
   } finally { await rpc.close(); }
 }
 
+async function verifyManagedMcp(rpc: Rpc, config: Config['codex'], cwd: string): Promise<void> {
+  if (config.managedMcp) {
+    const effective = await rpc.request('config/read', { includeLayers: false, cwd }, 10000);
+    if (effective.config?.features?.plugins !== false || effective.config?.features?.apps !== false) throw new RuntimeError('mcp_unmanaged_plugins');
+    const servers = effective.config?.mcp_servers;
+    if (servers && (typeof servers !== 'object' || Array.isArray(servers) || Object.values(servers).some((server:any) => !server || server.enabled !== false)))
+      throw new RuntimeError('mcp_unmanaged_servers');
+  }
+}
+
 /** Discover without inference, then pin only enabled skill directories for this runtime. */
 export async function connectCodex(config: Config['codex'], cwd: string): Promise<Rpc> {
   mkdirSync(config.home, { recursive: true, mode: 0o700 });
@@ -174,9 +185,10 @@ export async function connectCodex(config: Config['codex'], cwd: string): Promis
   try {
     const settings = readSkillSettings(config.home);
     rpc = await initializedRpc(config, { settings, directories: [] });
+    await verifyManagedMcp(rpc,config,cwd);
     // Remote plugin skills are materialized from the installed catalog on demand.
     // Listing it does not install plugins or import personal MCP configuration.
-    try { await rpc.request('plugin/list', { cwds: [cwd], forceRefetch: false }, 5000); }
+    try { if (!config.managedMcp) await rpc.request('plugin/list', { cwds: [cwd], forceRefetch: false }, 5000); }
     catch (error) {
       // A remote catalog outage must not prevent local skills or ordinary tasks.
       // No cached directory is granted unless skills/list actually reports it.
@@ -186,7 +198,9 @@ export async function connectCodex(config: Config['codex'], cwd: string): Promis
     const directories = skillReadDirectories(catalog, settings, config);
     if (!directories.length) return rpc;
     await rpc.close(); rpc = undefined;
-    return await initializedRpc(config, { settings, directories });
+    rpc = await initializedRpc(config, { settings, directories });
+    await verifyManagedMcp(rpc,config,cwd);
+    return rpc;
   } catch (error) {
     await rpc?.close();
     if (error instanceof SkillAccessError) throw new RuntimeError(error.code);
