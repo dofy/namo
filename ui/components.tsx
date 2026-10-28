@@ -2,6 +2,7 @@ import { t as tr } from './i18n';
 import { useState, type ReactNode } from 'react';
 import { AlertDialog, Badge, Button, Callout, Flex, Select, Text } from '@radix-ui/themes';
 import { message } from './api';
+import { Icon } from './Icon';
 
 const labels = (): Record<string, string> => ({
   queued: tr("common.queued"), running: tr("status.running"), waiting: tr("common.waitingInput"), succeeded: tr("status.completed"), failed: tr("common.failed"), cancelled: tr("common.cancelled"),
@@ -35,13 +36,13 @@ export function Choice({ id, value, onChange, options, disabled }: {
     <Select.Content position="popper">{options.map(option => <Select.Item key={option.value} value={encode(option.value)}>{option.label}</Select.Item>)}</Select.Content>
   </Select.Root>;
 }
-export function ConfirmButton({ children, title, description, action = tr("components.confirm"), onConfirm, disabled = false, danger = false, variant = 'soft' }: {
+export function ConfirmButton({ children, title, description, action = tr("components.confirm"), onConfirm, disabled = false, danger = false, variant = 'soft', className }: {
   children: ReactNode; title: string; description: string; action?: string; onConfirm: () => Promise<void>;
-  disabled?: boolean; danger?: boolean; variant?: 'solid' | 'soft' | 'outline';
+  disabled?: boolean; danger?: boolean; variant?: 'solid' | 'soft' | 'outline'; className?:string;
 }) {
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   return <AlertDialog.Root open={open} onOpenChange={next => { if (!busy) { setOpen(next); setError(''); } }}>
-    <AlertDialog.Trigger><Button type="button" variant={variant} color={danger ? 'red' : undefined} disabled={disabled}>{children}</Button></AlertDialog.Trigger>
+    <AlertDialog.Trigger><Button type="button" className={className} variant={variant} color={danger ? 'red' : undefined} disabled={disabled}>{children}</Button></AlertDialog.Trigger>
     <AlertDialog.Content maxWidth="460px" onEscapeKeyDown={event => { if (busy) event.preventDefault(); }}>
       <AlertDialog.Title>{title}</AlertDialog.Title>
       <AlertDialog.Description size="2">{description}</AlertDialog.Description>
@@ -56,4 +57,10 @@ export function ConfirmButton({ children, title, description, action = tr("compo
       </Flex>
     </AlertDialog.Content>
   </AlertDialog.Root>;
+}
+
+export function EditorCloseButton({dirty,busy,onClose}:{dirty:boolean;busy:boolean;onClose:()=>void|Promise<void>}) {
+  const label=<><Icon name="close" />{tr('common.close')}</>;
+  return dirty?<ConfirmButton className="editor-close" disabled={busy} title={tr('editor.discardTitle')} description={tr('editor.discardHelp')} action={tr('editor.discard')} onConfirm={async()=>{await onClose();}}>{label}</ConfirmButton>
+    :<Button type="button" className="editor-close" variant="soft" color="gray" disabled={busy} onClick={()=>{void onClose();}}>{label}</Button>;
 }
