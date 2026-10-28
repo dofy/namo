@@ -311,3 +311,20 @@ summary { cursor: pointer; font-size: 13px; color: #47657c; }
 
 .mcp-scopes { margin-block: 18px; }
 .mcp-scopes code { overflow-wrap: anywhere; }
+
+.mcp-connection-row { display:flex; justify-content:space-between; align-items:center; gap:20px; padding-block:20px; border-bottom:1px solid #dce3e9; }
+.mcp-connection-row > div:first-child { min-width:0; }
+.mcp-connection-row p { margin:8px 0 0; }
+.mcp-url { overflow-wrap:anywhere; }
+.settings-editor { padding-bottom:0; }
+.settings-editor form { display:flex; flex-direction:column; min-height:0; }
+.settings-editor-body { overflow-y:auto; max-height:calc(85dvh - 190px); padding-right:8px; padding-bottom:20px; }
+.settings-editor-footer { position:sticky; bottom:0; border-top:1px solid var(--gray-5); background:var(--color-panel-solid); padding-block:16px; z-index:1; margin-top:12px; }
+@media(max-width:700px) { .mcp-connection-row { align-items:flex-start; flex-direction:column; gap:12px; } .settings-editor-body { max-height:calc(90dvh - 230px); } }
+
+.settings-panel-editor { max-height:90dvh; overflow-y:auto; }
+.settings-panel-editor > .form-section { margin-top:20px; padding-top:0; border-top:0; }
+.settings-panel-editor .settings-editor-footer { margin-bottom:-8px; padding-bottom:16px; }
+.save-bar, .profile-save { position:sticky; bottom:0; z-index:2; background:var(--color-background); }
+
+.settings-editor-body > fieldset > p { margin-block:10px; }

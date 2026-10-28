@@ -1,88 +1,71 @@
+import {useEffect,useState} from 'react';
+import {Badge,Button,Checkbox,Dialog,Flex,Heading,Link,Text,TextField} from '@radix-ui/themes';
+import type {ConfigView,McpConnectionPatch} from '../src/ui-contract';
+import {AudienceFields,emptyAudience,IdentityInput} from './AudienceFields';
+import {ConfirmButton,Field,Notice} from './components';
 import {McpScopes} from './McpScopes';
-import { useEffect, useState } from 'react';
-import { Badge, Button, Checkbox, Flex, Heading, Link, Text, TextField } from '@radix-ui/themes';
-import type { ConfigView, McpConnectionPatch } from '../src/ui-contract';
-import { AudienceFields, emptyAudience, IdentityInput } from './AudienceFields';
-import { Field, Notice } from './components';
-import { api, message } from './api';
-import { t as tr } from './i18n';
+import {api,message} from './api';
+import {t as tr} from './i18n';
 
-const mcpMessage=(error:unknown)=>{const value=message(error);return value==='mcp_oauth_invalid_scope'?tr('mcp.scopeInvalid'):value==='mcp_oauth_scope'?tr('mcp.scopeGrantedMismatch'):value==='codex_mcp_duplicate'?tr('mcp.importDuplicate'):value==='codex_mcp_config_changed'?tr('mcp.importChanged'):value==='codex_mcp_config_invalid'?tr('mcp.importInvalid'):value==='codex_mcp_selection_unsupported'?tr('mcp.importUnsupported'):value==='mcp_credential_target_changed'?tr('mcp.targetChanged'):value==='mcp_connection_failed'?tr('mcp.testFailed'):value==='mcp_config_changed'?tr('mcp.conflict'):value==='mcp_connection_not_enabled'?tr('mcp.notEnabled'):value==='mcp_invalid_config'?tr('mcp.invalid'):value==='mcp_oauth_failed'?tr('mcp.oauthFailed'):value;};
-
-type Draft=McpConnectionPatch & {credentialConfigured:boolean;credentialSource?:'oauth'};
-const drafts=(c:ConfigView):Draft[] => (c.mcpConnections??[]).map(v=>({...v,newToken:''}));
+type Draft=McpConnectionPatch;
+type Editor={originalId:string;revision:string;draft:Draft};
+const patch=(v:ConfigView['mcpConnections'][number]):Draft=>({id:v.id,type:v.type,url:v.url,enabled:v.enabled,audience:v.audience,projects:v.projects,...(v.oauthScope?{oauthScope:v.oauthScope}:{})});
+const errorMessage=(error:unknown)=>{const code=message(error);const keys={mcp_oauth_invalid_scope:'mcp.scopeInvalid',mcp_oauth_scope:'mcp.scopeGrantedMismatch',mcp_config_changed:'mcp.conflict',mcp_credential_target_changed:'mcp.targetChanged',mcp_oauth_failed:'mcp.oauthFailed',mcp_connection_failed:'mcp.testFailed',mcp_invalid_config:'mcp.invalid',codex_mcp_duplicate:'mcp.importDuplicate',codex_mcp_config_changed:'mcp.importChanged'} as const;return code in keys?tr(keys[code as keyof typeof keys]):code;};
 export function McpSettings({config,refresh,expired}:{config:ConfigView;refresh:()=>Promise<unknown>;expired:boolean}) {
-  const [items,setItems]=useState(()=>drafts(config)),[revision,setRevision]=useState(config.revision),[dirty,setDirty]=useState(false);
-  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
-  const [catalog,setCatalog]=useState<Awaited<ReturnType<typeof api.codexMcp>>|null>(null),[selected,setSelected]=useState<string[]>([]);
-  const [authLink,setAuthLink]=useState<{id:string;url:string}|null>(null),[waitingForAuth,setWaitingForAuth]=useState(false);
-  const conflict=dirty&&revision!==config.revision;
-  const reset=(c:ConfigView)=>{setItems(drafts(c));setRevision(c.revision);setDirty(false);setAuthLink(null);setWaitingForAuth(false);};
-  useEffect(()=>{if(!dirty&&!busy&&revision!==config.revision)reset(config);},[config,dirty,busy,revision]);
-  useEffect(()=>{if(!dirty)return;const warn=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn);},[dirty]);
-  useEffect(()=>{
-    if(!waitingForAuth||dirty)return;
-    let active=true,checking=false;
-    const check=()=>{if(!active||checking||document.visibilityState!=='visible')return;checking=true;
-      void api.state().then(async latest=>{if(active&&latest.config.revision!==revision){reset(latest.config);setNotice(tr('mcp.settingsUpdated'));await refresh();}})
-        .catch(()=>{/* A later focus or manual reload can retry. */}).finally(()=>{checking=false;});};
-    window.addEventListener('focus',check);document.addEventListener('visibilitychange',check);
-    return()=>{active=false;window.removeEventListener('focus',check);document.removeEventListener('visibilitychange',check);};
-  },[waitingForAuth,dirty,revision,refresh]);
-  const update=(index:number,patch:Partial<Draft>)=>{setItems(values=>values.map((item,i)=>i===index?{...item,...patch}:item));setDirty(true);setNotice('');};
-  const authorize=async(item:Draft)=>{
-    let popup:Window|null=null;
-    try{popup=window.open('about:blank','_blank');if(popup){popup.opener=null;try{popup.document.title=tr('mcp.opening');popup.document.body.textContent=tr('mcp.opening');}catch{/* Navigation can continue without a loading message. */}}}catch{/* Use the fallback link if opening is blocked. */}
-    setBusy(true);setError('');setNotice('');setAuthLink(null);
-    try{
-      const result=await api.startMcpOAuth(revision,item.id),url=new URL(result.url);
-      if(url.protocol!=='https:'||url.username||url.password||new URL(result.issuer).protocol!=='https:')throw new Error('mcp_oauth_failed');
-      let opened=false;
-      if(popup&&!popup.closed)try{popup.location.replace(url.href);opened=true;}catch{/* The user can open the link below. */}
-      if(!opened){popup?.close();setAuthLink({id:item.id,url:url.href});}
-      setWaitingForAuth(true);setNotice(item.credentialConfigured?tr('mcp.waitingExisting'):tr('mcp.waitingNew'));
-    }catch(e){popup?.close();setError(mcpMessage(e));}finally{setBusy(false);}
-  };
-  return <section className="form-section"><Heading as="h2" size="5">{tr('mcp.title')}</Heading>
-    <Text as="p" size="2" color="gray">{tr('mcp.intro')}</Text>
-    <Text as="p" size="2" color="gray">{tr('mcp.accessNote')}</Text>
-    {error&&<Notice error>{error}</Notice>}{notice&&<Notice>{notice}</Notice>}{conflict&&<Notice>{tr('mcp.conflict')}</Notice>}
-    <form onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');try{
-      if(items.some(item=>!/^[a-z][a-z0-9_-]{0,47}$/.test(item.id)))throw new Error(tr('mcp.invalidId'));
-      const patch=items.map(({credentialConfigured:_,credentialSource:_source,...item})=>item);
-      const saved=await api.saveMcp(revision,patch);reset(saved);setNotice(tr('mcp.saved'));await refresh();
-    }catch(e){setError(mcpMessage(e));}finally{setBusy(false);}}}>
-      <fieldset disabled={busy||expired}>
-        {items.map((item,index)=><div className="guide" key={index}>
-          <Flex justify="between" align="center" gap="3" wrap="wrap"><Flex align="center" gap="2" wrap="wrap">
-            <Heading as="h3" size="3">{tr('mcp.remote')} · {item.id||'—'}</Heading>
-            <Badge color={item.credentialConfigured?'green':'gray'}>{item.credentialConfigured?tr('mcp.authorizationSaved'):tr('mcp.optionalAuth')}</Badge>
-            <Badge color={item.enabled?'blue':'gray'}>{item.enabled?tr('mcp.connectionEnabled'):tr('mcp.connectionDisabled')}</Badge>
-          </Flex><Flex gap="2" wrap="wrap">
-            <Button type="button" variant="soft" disabled={dirty||!item.id} onClick={()=>void authorize(item)}>{item.credentialConfigured?tr('mcp.reauthorize'):tr('mcp.oauth')}</Button>
-            <Button type="button" variant="soft" disabled={dirty||!item.enabled} onClick={async()=>{setBusy(true);setError('');setNotice('');try{const result=await api.testMcp(revision,item.id);setNotice(tr('mcp.testOk',result.toolCount));}catch(e){setError(mcpMessage(e));}finally{setBusy(false);}}}>{tr('mcp.test')}</Button>
-          </Flex></Flex>
-          <Text as="p" size="2" color="gray">{tr('mcp.remoteSummary')}</Text>
-          <Text as="p" size="2" color="gray">{item.audience.organization?tr('mcp.audienceOrganization'):tr('mcp.audienceCounts',item.audience.userIds.length,item.audience.chatIds.length)} {item.projects.length?tr('mcp.projectCount',item.projects.length):tr('mcp.allProjects')}</Text>
-          {authLink?.id===item.id&&<Text as="p" size="2"><Link href={authLink.url} target="_blank" rel="noopener noreferrer">{tr('mcp.popupBlocked')}</Link></Text>}
-          <details open={!item.credentialConfigured}>
-            <summary>{tr('mcp.advancedSettings')}</summary>
-            <Field label={tr('mcp.id')} htmlFor={`mcp-id-${index}`}><TextField.Root id={`mcp-id-${index}`} value={item.id} disabled={item.credentialConfigured} onChange={e=>update(index,{id:e.target.value})}/></Field>
-            <Field label={tr('mcp.remoteUrl')} htmlFor={`mcp-url-${index}`}><TextField.Root id={`mcp-url-${index}`} value={item.url??''} placeholder="https://example.com/mcp" onChange={e=>update(index,{url:e.target.value})}/></Field>
-            <McpScopes url={item.url??''} revision={revision} value={item.oauthScope??''} onChange={oauthScope=>update(index,{oauthScope})}/>
-            <Text as="label" size="2"><Flex gap="2" align="center"><Checkbox checked={item.enabled} onCheckedChange={v=>update(index,{enabled:v===true})}/>{tr('mcp.remoteEnabled')}</Flex></Text>
-            <Field label={tr('mcp.remoteAuth')} htmlFor={`mcp-token-${index}`}><TextField.Root id={`mcp-token-${index}`} type="password" autoComplete="new-password" value={item.newToken??''} onChange={e=>update(index,{newToken:e.target.value,clearToken:false})} placeholder={item.credentialConfigured?(item.credentialSource==='oauth'?tr('mcp.oauthConfigured'):tr('mcp.configured')):tr('mcp.remoteTokenPlaceholder')}/></Field>
-            {item.credentialConfigured&&<Text as="label" size="2"><Flex gap="2" align="center"><Checkbox checked={item.clearToken??false} onCheckedChange={v=>update(index,{clearToken:v===true,newToken:'',...(v===true?{enabled:false}:{})})}/>{tr('mcp.clearAuthorization')}</Flex></Text>}
-            <Text as="p" size="1" color="gray">{tr('mcp.remoteAuthHelp')}</Text>
-            <AudienceFields id={`mcp-${index}`} value={item.audience} onChange={audience=>update(index,{audience})}/>
-            <Field label={tr('mcp.projects')} htmlFor={`mcp-projects-${index}`}><IdentityInput id={`mcp-projects-${index}`} value={item.projects} onChange={projects=>update(index,{projects})}/></Field>
-            <Button type="button" variant="soft" color="red" onClick={()=>{setItems(v=>v.filter((_,i)=>i!==index));setDirty(true);}}>{tr('mcp.remove')}</Button>
-          </details>
-        </div>)}
-        <Flex gap="3" wrap="wrap"><Button type="button" variant="soft" onClick={()=>{setItems(v=>[...v,{id:'',type:'remote',url:'',enabled:false,audience:emptyAudience(),projects:[],credentialConfigured:false,newToken:''}]);setDirty(true);}}>{tr('mcp.addRemote')}</Button><Button type="button" variant="soft" disabled={dirty||conflict} onClick={async()=>{setBusy(true);setError('');try{setCatalog(await api.codexMcp());setSelected([]);}catch(e){setError(mcpMessage(e));}finally{setBusy(false);}}}>{tr('mcp.import')}</Button></Flex>
-        {catalog&&<div className="guide"><Heading as="h3" size="3">{tr('mcp.import')}</Heading><Text as="p" size="2" color="gray">{tr('mcp.importIntro')}</Text>{catalog.entries.length===0&&<Text as="p">{tr('mcp.importNone')}</Text>}{catalog.entries.map(entry=><Text as="label" size="2" key={entry.id}><Flex gap="2" align="center" wrap="wrap"><Checkbox disabled={!entry.importable} checked={selected.includes(entry.id)} onCheckedChange={v=>setSelected(old=>v===true?[...old,entry.id]:old.filter(id=>id!==entry.id))}/><strong>{entry.id}</strong><Text color="gray">{entry.host??entry.transport} · {entry.importable?(entry.requiresOwnAuth?tr('mcp.importAuth'):'HTTPS'):(entry.reason==='local_process'?tr('mcp.reasonLocal'):entry.reason==='invalid_url'?tr('mcp.reasonUrl'):entry.reason==='url_parameters'?tr('mcp.reasonParams'):tr('mcp.reasonOther'))}</Text></Flex></Text>)}<Button type="button" disabled={!selected.length} onClick={async()=>{setBusy(true);setError('');try{const saved=await api.importCodexMcp(revision,catalog.revision,selected);reset(saved);setCatalog(null);setNotice(tr('mcp.imported'));await refresh();}catch(e){setError(mcpMessage(e));}finally{setBusy(false);}}}>{tr('mcp.importSelected')}</Button></div>}
-      </fieldset>
-      <Flex gap="3" mt="4"><Button type="submit" loading={busy} disabled={!dirty||expired||conflict}>{tr('mcp.save')}</Button><Button type="button" variant="soft" disabled={busy} onClick={async()=>{try{reset((await api.state()).config);setError('');}catch(e){setError(mcpMessage(e));}}}>{tr('common.reload')}</Button></Flex>
-    </form>
-  </section>;
+ const [editor,setEditor]=useState<Editor|null>(null),[busy,setBusy]=useState(false),[waiting,setWaiting]=useState(false);
+ const [error,setError]=useState(''),[notice,setNotice]=useState(''),[authLink,setAuthLink]=useState('');
+ const [catalog,setCatalog]=useState<Awaited<ReturnType<typeof api.codexMcp>>|null>(null),[selected,setSelected]=useState<string[]>([]);
+ const prior=config.mcpConnections.find(c=>c.id===editor?.originalId),draft=editor?.draft;
+ const dirty=!!editor&&JSON.stringify(draft)!==JSON.stringify(prior?patch(prior):{});
+ const conflict=!!editor&&editor.revision!==config.revision;
+ const credentialChange=!!prior?.credentialConfigured&&!draft?.clearToken&&!draft?.newToken&&(prior.url!==draft?.url||prior.credentialSource==='oauth'&&(prior.oauthScope??'')!==(draft?.oauthScope??''));
+ const update=(value:Partial<Draft>)=>{setEditor(old=>old?{...old,draft:{...old.draft,...value}}:old);setError('');};
+ const open=(id?:string)=>{setError('');setNotice('');setAuthLink('');setWaiting(false);const value=config.mcpConnections.find(c=>c.id===id);setEditor({originalId:id??'',revision:config.revision,draft:value?patch(value):{id:'',type:'remote',url:'',enabled:false,audience:emptyAudience(),projects:[]}});};
+ const close=async()=>{if(busy)return;if(waiting&&editor)await api.cancelMcpOAuth(editor.originalId);setEditor(null);setWaiting(false);setAuthLink('');setError('');};
+ useEffect(()=>{if(!editor||!dirty)return;const warn=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn);},[editor,dirty]);
+ useEffect(()=>{
+  if(!waiting||!editor)return;let active=true,checking=false;
+  const check=async()=>{if(checking||document.visibilityState!=='visible')return;checking=true;try{const latest=(await api.state()).config;if(active&&latest.revision!==editor.revision){setWaiting(false);setEditor(null);setNotice(tr('mcp.settingsUpdated'));await refresh();}}catch{/* Manual refresh remains available. */}finally{checking=false;}};
+  const timer=setInterval(()=>void check(),2000);window.addEventListener('focus',check);
+  return()=>{active=false;clearInterval(timer);window.removeEventListener('focus',check);};
+ },[waiting,editor,refresh]);
+ const validate=()=>{if(!draft||!/^[a-z][a-z0-9_-]{0,47}$/.test(draft.id))throw new Error(tr('mcp.invalidId'));};
+ const save=async()=>{if(!editor||!draft)return;setBusy(true);setError('');try{validate();const values=config.mcpConnections.filter(c=>c.id!==editor.originalId).map(patch);await api.saveMcp(editor.revision,[...values,draft]);setEditor(null);setNotice(tr('mcp.saved'));await refresh();}catch(e){setError(errorMessage(e));}finally{setBusy(false);}};
+ const authorize=async()=>{
+  if(!editor||!draft)return;let popup:Window|null=null;
+  try{validate();popup=window.open('about:blank','_blank');if(popup){popup.opener=null;popup.document.body.textContent=tr('mcp.opening');}}catch(e){setError(errorMessage(e));return;}
+  setBusy(true);setError('');setAuthLink('');
+  try{const {newToken:_token,clearToken:_clear,...definition}=draft;const result=await api.startMcpOAuth(editor.revision,editor.originalId,definition),url=new URL(result.url);
+   if(url.protocol!=='https:'||url.username||url.password)throw new Error('mcp_oauth_failed');
+   let opened=false;if(popup&&!popup.closed)try{popup.location.replace(url.href);opened=true;}catch{/* Use fallback. */}
+   if(!opened){popup?.close();setAuthLink(url.href);}setWaiting(true);
+  }catch(e){popup?.close();setError(errorMessage(e));}finally{setBusy(false);}
+ };
+ return <section className="form-section"><Flex justify="between" align="center" gap="3" wrap="wrap"><Heading as="h2" size="5">{tr('mcp.title')}</Heading><Flex gap="2" wrap="wrap"><Button type="button" disabled={expired||busy} onClick={()=>open()}>{tr('mcp.addRemote')}</Button><Button type="button" variant="soft" disabled={expired||busy} onClick={async()=>{setBusy(true);setError('');try{setCatalog(await api.codexMcp());setSelected([]);}catch(e){setError(errorMessage(e));}finally{setBusy(false);}}}>{tr('mcp.import')}</Button></Flex></Flex>
+  <Text as="p" size="2" color="gray">{tr('mcp.intro')}</Text>{notice&&<Notice>{notice}</Notice>}{!editor&&error&&<Notice error>{error}</Notice>}
+  {config.mcpConnections.map(item=><div className="mcp-connection-row" key={item.id}><div><Flex gap="2" align="center" wrap="wrap"><Heading as="h3" size="3">{item.id}</Heading><Badge color={item.credentialConfigured?'green':'gray'}>{item.credentialConfigured?tr('mcp.authorizationSaved'):tr('mcp.optionalAuth')}</Badge><Badge color={item.enabled?'blue':'gray'}>{item.enabled?tr('mcp.connectionEnabled'):tr('mcp.connectionDisabled')}</Badge></Flex><Text as="p" size="2" color="gray" className="mcp-url">{item.url}</Text><Text as="p" size="1" color="gray">{item.audience.organization?tr('mcp.audienceOrganization'):tr('mcp.audienceCounts',item.audience.userIds.length,item.audience.chatIds.length)} {item.projects.length?tr('mcp.projectCount',item.projects.length):tr('mcp.allProjects')}</Text></div><Flex gap="2" wrap="wrap"><Button type="button" variant="soft" disabled={expired||busy} onClick={()=>open(item.id)}>{tr('mcp.edit')}</Button><Button type="button" variant="soft" disabled={expired||busy||!item.enabled} onClick={async()=>{setBusy(true);setError('');try{const r=await api.testMcp(config.revision,item.id);setNotice(tr('mcp.testOk',r.toolCount));}catch(e){setError(errorMessage(e));}finally{setBusy(false);}}}>{tr('mcp.test')}</Button></Flex></div>)}
+  <Dialog.Root open={!!editor} onOpenChange={value=>{if(!value&&!busy&&!dirty&&!waiting)void close();}}><Dialog.Content maxWidth="760px" className="settings-editor" onEscapeKeyDown={e=>{if(busy||dirty||waiting)e.preventDefault();}} onPointerDownOutside={e=>{if(busy||dirty||waiting)e.preventDefault();}}>
+   <Dialog.Title>{editor?.originalId?tr('mcp.editConnection',editor.originalId):tr('mcp.addRemote')}</Dialog.Title><Dialog.Description size="2" color="gray">{tr('mcp.editorHelp')}</Dialog.Description>
+   {editor&&draft&&<form onSubmit={e=>{e.preventDefault();void save();}}><div className="settings-editor-body">
+    {error&&<Notice error>{error}</Notice>}{conflict&&<Notice error>{tr('mcp.conflict')}</Notice>}{credentialChange&&<Notice>{tr('mcp.reauthRequired')}</Notice>}
+    {waiting&&<Notice>{tr('mcp.waitingExisting')}{authLink&&<Text as="p"><Link href={authLink} target="_blank" rel="noopener noreferrer">{tr('mcp.popupBlocked')}</Link></Text>}</Notice>}
+    <fieldset disabled={busy||waiting||expired||conflict}>
+     <Field label={tr('mcp.id')} htmlFor="mcp-editor-id"><TextField.Root id="mcp-editor-id" value={draft.id} disabled={!!editor.originalId} onChange={e=>update({id:e.target.value})}/></Field>
+     <Field label={tr('mcp.remoteUrl')} htmlFor="mcp-editor-url"><TextField.Root id="mcp-editor-url" value={draft.url} placeholder="https://example.com/mcp" onChange={e=>update({url:e.target.value})}/></Field>
+     <Text as="label" size="2"><Flex gap="2" align="center"><Checkbox checked={draft.enabled} onCheckedChange={v=>update({enabled:v===true})}/>{tr('mcp.remoteEnabled')}</Flex></Text>
+     <McpScopes url={draft.url} revision={editor.revision} value={draft.oauthScope??''} onChange={oauthScope=>update({oauthScope})}/>
+     <Heading as="h3" size="3" mt="5">{tr('mcp.accessTitle')}</Heading><Text as="p" size="1" color="gray">{tr('mcp.accessNote')}</Text>
+     <AudienceFields id="mcp-editor" value={draft.audience} onChange={audience=>update({audience})}/>
+     <Field label={tr('mcp.projects')} htmlFor="mcp-editor-projects"><IdentityInput id="mcp-editor-projects" value={draft.projects} onChange={projects=>update({projects})}/></Field>
+     <details><summary>{tr('mcp.credentialAdvanced')}</summary><Field label={tr('mcp.remoteAuth')} htmlFor="mcp-editor-token"><TextField.Root id="mcp-editor-token" type="password" autoComplete="new-password" value={draft.newToken??''} onChange={e=>update({newToken:e.target.value,clearToken:false})} placeholder={prior?.credentialConfigured?tr('mcp.configured'):tr('mcp.remoteTokenPlaceholder')}/></Field>{prior?.credentialConfigured&&<Text as="label" size="2"><Flex gap="2" align="center"><Checkbox checked={draft.clearToken??false} onCheckedChange={v=>update({clearToken:v===true,newToken:'',...(v===true?{enabled:false}:{})})}/>{tr('mcp.clearAuthorization')}</Flex></Text>}</details>
+    </fieldset>
+   </div><Flex gap="3" justify="end" align="center" wrap="wrap" className="settings-editor-footer">
+    {editor.originalId&&<ConfirmButton danger disabled={busy||waiting||expired||conflict} title={tr('mcp.remove')} description={tr('mcp.removeHelp')} onConfirm={async()=>{await api.saveMcp(editor.revision,config.mcpConnections.filter(v=>v.id!==editor.originalId).map(patch));setEditor(null);await refresh();}}>{tr('mcp.remove')}</ConfirmButton>}
+    <Button type="button" variant="soft" color="gray" disabled={busy} onClick={()=>{void close().catch(e=>setError(errorMessage(e)));}}>{tr('mcp.cancelEdit')}</Button>
+    {waiting&&<Button type="button" variant="soft" disabled={busy} onClick={async()=>{setBusy(true);try{await api.cancelMcpOAuth(editor.originalId);setWaiting(false);setAuthLink('');}catch(e){setError(errorMessage(e));}finally{setBusy(false);}}}>{tr('mcp.retryAuthorization')}</Button>}
+    {!waiting&&<><Button type="submit" variant="soft" disabled={!dirty||busy||expired||conflict||credentialChange}>{tr('mcp.save')}</Button><Button type="button" disabled={busy||expired||conflict||!!draft.newToken||!!draft.clearToken} loading={busy} onClick={()=>void authorize()}>{dirty?tr('mcp.saveAuthorize'):prior?.credentialConfigured?tr('mcp.reauthorize'):tr('mcp.oauth')}</Button></>}
+   </Flex></form>}
+  </Dialog.Content></Dialog.Root>
+  <Dialog.Root open={!!catalog} onOpenChange={value=>{if(!value&&!busy)setCatalog(null);}}><Dialog.Content maxWidth="680px"><Dialog.Title>{tr('mcp.import')}</Dialog.Title><Dialog.Description size="2">{tr('mcp.importIntro')}</Dialog.Description>{catalog&&<><Flex direction="column" gap="3" my="4">{catalog.entries.map(entry=><Text as="label" size="2" key={entry.id}><Flex gap="2" align="center" wrap="wrap"><Checkbox disabled={busy||!entry.importable} checked={selected.includes(entry.id)} onCheckedChange={v=>setSelected(old=>v===true?[...old,entry.id]:old.filter(id=>id!==entry.id))}/><strong>{entry.id}</strong><Text color="gray">{entry.host??entry.transport} · {entry.importable?tr('mcp.importAuth'):tr('mcp.importUnavailable')}</Text></Flex></Text>)}</Flex>{error&&<Notice error>{error}</Notice>}<Flex gap="3" justify="end"><Button type="button" variant="soft" disabled={busy} onClick={()=>setCatalog(null)}>{tr('common.close')}</Button><Button type="button" disabled={busy||!selected.length} loading={busy} onClick={async()=>{setBusy(true);setError('');try{await api.importCodexMcp(config.revision,catalog.revision,selected);setCatalog(null);setNotice(tr('mcp.imported'));await refresh();}catch(e){setError(errorMessage(e));}finally{setBusy(false);}}}>{tr('mcp.importSelected')}</Button></Flex></>}</Dialog.Content></Dialog.Root>
+ </section>;
 }

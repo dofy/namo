@@ -102,7 +102,8 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/assistant')return send(200,manager.assistant(input.action,input.version,input.values));
         if(path==='/api/memories')return send(200,manager.memory(input.action,input.ownerId,input.input));
         if(path==='/api/organization')return send(200,await manager.organization());
-        if(path==='/api/mcp-oauth-start'){try{return send(200,await oauth.begin(input.revision,input.id));}catch(error){const code=error instanceof Error&&/^mcp_[a-z_]+$/.test(error.message)?error.message:'mcp_oauth_failed';return send(400,{error:code});}}
+        if(path==='/api/mcp-oauth-start'){try{return send(200,await oauth.begin(input.revision,input.id,input.draft));}catch(error){const code=error instanceof Error&&/^mcp_[a-z_]+$/.test(error.message)?error.message:'mcp_oauth_failed';return send(400,{error:code});}}
+        if(path==='/api/mcp-oauth-cancel'){oauth.cancel(input.id);return send(200,{ok:true});}
         if(path==='/api/codex-mcp-import')return send(200,manager.importCodexMcp(input.revision,input.sourceRevision,input.ids));
         if(path==='/api/mcp-oauth-scopes')return send(200,await manager.mcpOAuthScopes(input.revision,input.url));
         if(path==='/api/mcp-test')return send(200,await manager.testMcp(input.revision,input.id));

@@ -1,5 +1,7 @@
+import {SettingsPanelDialog} from './SettingsPanelDialog';
+import type {ReactNode} from 'react';
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Button, Checkbox, Flex, Heading, Text, TextField } from '@radix-ui/themes';
+import { Badge, Button, Checkbox, Flex, Text, TextField } from '@radix-ui/themes';
 import type { ConfigView, GitHubConfigPatch, ProfileState } from '../src/ui-contract';
 import { api, ApiError, message } from './api';
 import { Choice, ConfirmButton, Field, Notice } from './components';
@@ -13,7 +15,8 @@ const fromConfig = (config: ConfigView): Draft => ({
   token:'',clearToken:false,
 });
 
-export function GitHubSettings({ config, profiles, refresh, expired }: {
+function GitHubEditor({ config, profiles, refresh, expired, onStateChange, cancelControl }: {
+  onStateChange:(dirty:boolean,busy:boolean)=>void;cancelControl:ReactNode;
   config: ConfigView; profiles: ProfileState; refresh: () => Promise<unknown>; expired: boolean;
 }) {
   const [draft, setDraft] = useState(() => fromConfig(config)), [revision, setRevision] = useState(config.revision);
@@ -21,6 +24,7 @@ export function GitHubSettings({ config, profiles, refresh, expired }: {
   const [busy, setBusy] = useState(false), [authExpired, setAuthExpired] = useState(false), [saveConflict, setSaveConflict] = useState(false);
   const [error, setError] = useState(''), [notice, setNotice] = useState('');
   const observedRevision = useRef(config.revision);
+  useEffect(()=>{onStateChange(dirty,busy);},[dirty,busy]);
   const conflict = saveConflict || (dirty && revision !== knownRevision), locked = expired || authExpired;
   const needsMigration = draft.source!=='anonymous' && config.github?.mode!=='simple';
   const paired = (config.feishu.allowedUserIds??[]).map(userId=>({userId,name:profiles.entries.find(p=>p.userId===userId)?.name}));
@@ -72,12 +76,10 @@ export function GitHubSettings({ config, profiles, refresh, expired }: {
     finally { setBusy(false); }
   }
 
-  return <section className="form-section profiles-page" aria-labelledby="github-settings-title">
+  return <section className="form-section profiles-page">
     <Flex align="center" justify="between" gap="3" wrap="wrap">
-      <Heading as="h2" size="5" id="github-settings-title">GitHub</Heading>
       <Badge color={config.github?.credentialConfigured ? 'green' : 'gray'}>{config.github?.credentialSource==='gh'?tr("github.localLoginConfigured"):config.github?.credentialConfigured ? tr("common.credentialsConfigured") : tr("github.publicRepositories")}</Badge>
     </Flex>
-    <Text as="p" size="2" color="gray">{tr("github.groupsReadPrivateChatCanUseAll")}</Text>
     {conflict && <Notice>{tr("github.githubSettingsChangedDraftPreservedReviewReloading")}</Notice>}
     {locked && <Notice error>{tr("github.localAuthorizationExpiredReopenWorkbenchEditGithub")}</Notice>}
     {error && <Notice error>{error}</Notice>}{notice && <Notice>{notice}</Notice>}
@@ -115,8 +117,8 @@ export function GitHubSettings({ config, profiles, refresh, expired }: {
         </Flex></Text>}
         </>}
       </fieldset>
-      <Flex gap="3" mt="5" wrap="wrap" align="center">
-        <Button type="submit" loading={busy} disabled={(!dirty && !needsMigration) || locked || conflict}><Icon name="save" />{tr("github.saveGithubSettings")}</Button>
+      <Flex gap="3" mt="5" wrap="wrap" align="center" className="settings-editor-footer">
+        {cancelControl}<Button type="submit" loading={busy} disabled={(!dirty && !needsMigration) || locked || conflict}><Icon name="save" />{tr("github.saveGithubSettings")}</Button>
         <ConfirmButton title={tr("github.reloadGithubSettings")} description={tr("github.currentGithubDraftUnsavedTokenDiscarded")}
           action={tr("common.reload")} disabled={busy || locked} onConfirm={async () => {
             setBusy(true);
@@ -128,4 +130,8 @@ export function GitHubSettings({ config, profiles, refresh, expired }: {
       </Flex>
     </form>
   </section>;
+}
+
+export function GitHubSettings(props:{config:ConfigView;profiles:ProfileState;refresh:()=>Promise<unknown>;expired:boolean}) {
+ return <SettingsPanelDialog title="GitHub" summary={tr('github.groupsReadPrivateChatCanUseAll')} disabled={props.expired}>{controls=><GitHubEditor {...props} {...controls}/>}</SettingsPanelDialog>;
 }

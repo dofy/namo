@@ -1,3 +1,5 @@
+import {SettingsPanelDialog} from './SettingsPanelDialog';
+import type {ReactNode} from 'react';
 import { useEffect, useState, useRef } from 'react';
 import { Button, Flex, Heading, Text, TextField } from '@radix-ui/themes';
 import type { ConfigView } from '../src/ui-contract';
@@ -8,17 +10,17 @@ import { api, message } from './api';
 import { t as tr } from './i18n';
 
 const draftFrom=(c:ConfigView)=>({mode:c.feishu.access?'organization':'selected',tenantKey:c.feishu.access?.tenantKey??'',users:c.feishu.allowedUserIds??[],chats:c.feishu.allowedChatIds??[],projects:c.values.projectAccess??{}});
-export function ServiceAccessSettings({config,refresh,expired}:{config:ConfigView;refresh:()=>Promise<unknown>;expired:boolean}) {
+function ServiceAccessEditor({config,refresh,expired,onStateChange,cancelControl}:{config:ConfigView;refresh:()=>Promise<unknown>;expired:boolean;onStateChange:(dirty:boolean,busy:boolean)=>void;cancelControl:ReactNode}) {
   const [draft,setDraft]=useState(()=>draftFrom(config)),[revision,setRevision]=useState(config.revision),[dirty,setDirty]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const observedRevision=useRef(config.revision);
+  useEffect(()=>{onStateChange(dirty,busy);},[dirty,busy]);
   const conflict=dirty&&revision!==config.revision;
   const reset=(c:ConfigView)=>{setDraft(draftFrom(c));setRevision(c.revision);setDirty(false);setError('');};
   useEffect(()=>{if(observedRevision.current!==config.revision){if(!dirty&&!busy)reset(config);observedRevision.current=config.revision;}},[config,dirty,busy]);
   useEffect(()=>{if(!dirty)return;const warn=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn);},[dirty]);
   const edit=(patch:Partial<typeof draft>)=>{setDraft(d=>({...d,...patch}));setDirty(true);setNotice('');};
   const project=(name:string,value:ProjectAccess)=>edit({projects:{...draft.projects,[name]:value}});
-  return <section className="form-section"><Heading as="h2" size="5">{tr("serviceAccess.organizationAccessProjectPermissions")}</Heading>
-    <Text as="p" size="2" color="gray">{tr("serviceAccess.administratorsConfigureServiceConnectionsMembersNotNeed")}</Text>
+  return <section className="form-section">
     {error&&<Notice error>{error}</Notice>}{notice&&<Notice>{notice}</Notice>}{conflict&&<Notice>{tr("serviceAccess.settingsChangedDraftPreservedReloadEditing")}</Notice>}
     <form onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');try{
       const saved=await api.saveAccess(revision,{serviceAccess:{access:draft.mode==='organization'?{mode:'organization',tenantKey:draft.tenantKey.trim()}:null,allowedUserIds:draft.users,allowedChatIds:draft.chats},projectAccess:draft.projects});reset(saved);setNotice(tr("common.settingsSavedApplyConfigurationActivateOrganizationAccess"));await refresh();
@@ -40,7 +42,11 @@ export function ServiceAccessSettings({config,refresh,expired}:{config:ConfigVie
           <Field label={tr("serviceAccess.projectFilePermissions")} htmlFor={`permission-${name}`}><Choice id={`permission-${name}`} value={value.permission} onChange={permission=>project(name,{...value,permission:permission as ProjectAccess['permission']})} options={[{value:'read-only',label:tr("common.read")},{value:'workspace-write',label:tr("common.allowProjectFileChanges")}]}/></Field>
         </details>;})}
       </fieldset>
-      <Flex gap="3" mt="4"><Button type="submit" loading={busy} disabled={!dirty||expired||conflict}>{tr("serviceAccess.saveAccessSettings")}</Button><Button type="button" variant="soft" disabled={busy} onClick={async()=>{try{reset((await api.state()).config);}catch(e){setError(message(e));}}}>{tr("common.reload")}</Button></Flex>
+      <Flex gap="3" mt="4" wrap="wrap" className="settings-editor-footer">{cancelControl}<Button type="submit" loading={busy} disabled={!dirty||expired||conflict}>{tr("serviceAccess.saveAccessSettings")}</Button><Button type="button" variant="soft" disabled={busy} onClick={async()=>{try{reset((await api.state()).config);}catch(e){setError(message(e));}}}>{tr("common.reload")}</Button></Flex>
     </form>
   </section>;
+}
+
+export function ServiceAccessSettings(props:{config:ConfigView;refresh:()=>Promise<unknown>;expired:boolean}) {
+ return <SettingsPanelDialog title={tr('serviceAccess.organizationAccessProjectPermissions')} summary={tr('serviceAccess.administratorsConfigureServiceConnectionsMembersNotNeed')} disabled={props.expired}>{controls=><ServiceAccessEditor {...props} {...controls}/>}</SettingsPanelDialog>;
 }

@@ -1,6 +1,19 @@
 import type { MessageKey } from './en.js';
 
 export const chinese = {
+  "mcp.edit": "编辑",
+  "mcp.editConnection": "编辑连接 · {0}",
+  "mcp.editorHelp": "保存配置，或直接保存并登录授权。新授权成功前保留原配置和凭据。",
+  "mcp.reauthRequired": "地址或权限已更改。点击“保存并授权”完成更新，原授权会保留到新授权成功。",
+  "mcp.saveAuthorize": "保存并授权",
+  "mcp.cancelEdit": "取消编辑",
+  "mcp.accessTitle": "使用范围",
+  "mcp.credentialAdvanced": "高级：令牌与移除授权",
+  "mcp.removeHelp": "移除这个 MCP 连接及其使用授权；历史任务记录保留。",
+  "editor.discardTitle": "放弃未保存的修改？",
+  "editor.discardHelp": "关闭编辑会丢弃本次未保存的修改，已保存的配置不受影响。",
+  "editor.discard": "放弃修改",
+  "mcp.retryAuthorization": "返回修改并重试",
   "mcp.opening": "正在准备登录授权…",
 
   "mcp.authorizationSaved": "已保存授权",
@@ -39,7 +52,7 @@ export const chinese = {
   "mcp.importChanged": "Codex 配置已变更，请重新选择连接。",
   "mcp.importInvalid": "无法读取 Codex MCP 配置，请检查用户配置文件。",
   "mcp.importUnsupported": "所选连接暂不支持导入，请重新选择。",
-  "mcp.targetChanged": "连接地址或 OAuth 权限范围已变更，请先清除旧凭据或填写新凭据。",
+  "mcp.targetChanged": "连接地址或 OAuth 权限范围已变更，请点击“保存并授权”，或填写新令牌后保存。",
   "mcp.reasonLocal": "本地进程暂不支持导入",
   "mcp.reasonUrl": "只支持不含凭据的公网 HTTPS 地址",
   "mcp.reasonParams": "地址包含查询参数，请手动核对",
@@ -49,7 +62,7 @@ export const chinese = {
   "mcp.scopeSelectionHelp": "按需勾选服务公布的权限，不会自动选择全部权限。具体权限含义和最终授予范围由服务决定。",
   "mcp.scopesUnpublished": "服务未公布可选权限。可按服务默认范围授权，或在高级设置中填写服务文档提供的权限。",
   "mcp.scopeNotAdvertised": "服务未公布此权限",
-  "mcp.scopeDefaultHelp": "不勾选时使用服务要求的默认范围；已保存的 OAuth 授权如需改范围，请先移除授权再保存。",
+  "mcp.scopeDefaultHelp": "不勾选时使用服务要求的默认范围。修改范围后可直接保存并重新授权，原授权会保留到新授权成功。",
   "mcp.manualScopes": "高级：手动填写权限范围",
   "mcp.scopeInvalid": "所选权限不被服务支持，请探测可选权限后重新勾选。",
   "mcp.scopeGrantedMismatch": "服务返回的权限超出请求范围，授权未保存。",

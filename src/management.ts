@@ -2,7 +2,7 @@ import { listCodexMcp, selectCodexMcp, CodexMcpImportError } from './codex-mcp-i
 import { serviceLogs, listApprovals, changeApproval } from './management-operations.js';
 import { ApprovalError } from './approvals.js';
 import { inspectOpenClawSource, MigrationError } from './migration.js';
-import type { ApprovalAction, ApprovalList, MemoryExtractionError, MemoryExtractionJob, MemoryExtractionView } from './ui-contract.js';
+import type { McpConnectionPatch, ApprovalAction, ApprovalList, MemoryExtractionError, MemoryExtractionJob, MemoryExtractionView } from './ui-contract.js';
 import { t as tr } from './locale.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -321,12 +321,23 @@ export class Management {
       return this.save(revision,{mcpConnections:[...current.map(({token:_token,...value})=>value),...additions]});
     } catch(error){if(error instanceof ManagementError)throw error;if(error instanceof CodexMcpImportError)throw new ManagementError(error.code,400);throw error;}
   }
-  saveMcpOAuth(revision:string,id:string,reference:string):void {
+  prepareMcpOAuth(revision:string,id:string,draft?:unknown):McpConnectionPatch {
+    const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError('mcp_config_changed');
+    const connections=parseMcpConnections(raw.mcpConnections),prior=connections.find(c=>c.id===id);
+    if(draft===undefined){if(!prior)throw new ManagementError('mcp_config_changed');const {token:_token,...value}=prior;return value;}
+    if(!draft||typeof draft!=='object'||Array.isArray(draft)||Object.keys(draft).some(k=>!['id','type','url','oauthScope','enabled','audience','projects'].includes(k)))throw new ManagementError('mcp_invalid_config',400);
+    const value=draft as McpConnectionPatch;
+    if(id&&(!prior||id!==value.id)||!id&&connections.some(c=>c.id===value.id))throw new ManagementError('mcp_config_changed');
+    let parsed;try{parsed=parseMcpConnections([{...value,token:''}])[0];parseConfig({...raw,mcpConnections:[...connections.filter(c=>c.id!==id),parsed]},this.file);}catch{throw new ManagementError('mcp_invalid_config',400);}
+    const {token:_token,...safe}=parsed!;return safe;
+  }
+  saveMcpOAuth(revision:string,id:string,reference:string,draft?:McpConnectionPatch):void {
     if(!isOAuthReference(reference))throw new ManagementError('mcp_oauth_invalid',400);
     const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError('mcp_config_changed');
     const connections=parseMcpConnections(raw.mcpConnections);
-    if(!connections.some(c=>c.id===id))throw new ManagementError('mcp_config_changed');
-    this.save(revision,{mcpConnections:connections.map(({token:_token,...value})=>({...value,...(value.id===id?{newToken:reference}:{})}))},undefined,true);
+    const selected=this.prepareMcpOAuth(revision,id,draft);
+    const values=connections.filter(c=>c.id!==id).map(({token:_token,...value})=>value);
+    this.save(revision,{mcpConnections:[...values,{...selected,newToken:reference}]},undefined,true);
   }
   async saveGitHub(revision:string,patch:any):Promise<any> {
     if (patch?.github?.source!=='gh') return this.save(revision,patch);

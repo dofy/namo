@@ -5,18 +5,18 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { discoverMcpOAuthScopes, beginMcpOAuth, resolveMcpCredential, saveMcpOAuth, isOAuthReference, LEGACY_LINEAR_URL } from '../src/mcp-oauth.js';
 const resource='https://mcp.example/mcp',issuer='https://login.example',redirect='http://127.0.0.1:45678/api/mcp-oauth/callback';
-function fakeOAuth(){
+function fakeOAuth(expectedScope='read'){
  let registered=0,exchanged=0,refreshed=0;
  const fetcher:typeof fetch=async(input,init)=>{
   const url=new URL(String(input));assert.equal(init?.redirect,'error');
   if(url.href===resource)return new Response(null,{status:401,headers:{'www-authenticate':'Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource"'}});
   if(url.pathname.startsWith('/.well-known/oauth-protected-resource'))return Response.json({resource,authorization_servers:[issuer],scopes_supported:['read','write']});
   if(url.pathname.startsWith('/.well-known/'))return Response.json({issuer,authorization_endpoint:issuer+'/authorize',token_endpoint:issuer+'/token',registration_endpoint:issuer+'/register',response_types_supported:['code'],grant_types_supported:['authorization_code','refresh_token'],token_endpoint_auth_methods_supported:['none'],code_challenge_methods_supported:['S256']});
-  if(url.pathname==='/register'){registered++;const body=JSON.parse(String(init?.body));assert.equal(body.scope,'read');assert.deepEqual(body.redirect_uris,[redirect]);return Response.json({client_id:'synthetic-client',client_id_issued_at:1,token_endpoint_auth_method:'none',redirect_uris:[redirect],grant_types:['authorization_code','refresh_token'],response_types:['code']});}
+  if(url.pathname==='/register'){registered++;const body=JSON.parse(String(init?.body));assert.equal(body.scope,expectedScope);assert.deepEqual(body.redirect_uris,[redirect]);return Response.json({client_id:'synthetic-client',client_id_issued_at:1,token_endpoint_auth_method:'none',redirect_uris:[redirect],grant_types:['authorization_code','refresh_token'],response_types:['code']});}
   if(url.pathname==='/token'){
     const body=new URLSearchParams(String(init?.body));
-    if(body.get('grant_type')==='authorization_code'){exchanged++;assert.ok(body.get('code_verifier'));assert.equal(body.get('code'),'synthetic-code');return Response.json({access_token:'synthetic_access_1',token_type:'Bearer',expires_in:1,refresh_token:'synthetic_refresh_1',scope:'read'});}
-    if(body.get('grant_type')==='refresh_token'){refreshed++;await new Promise(resolve=>setTimeout(resolve,40));assert.equal(body.get('refresh_token'),'synthetic_refresh_1');return Response.json({access_token:'synthetic_access_2',token_type:'Bearer',expires_in:3600,refresh_token:'synthetic_refresh_2',scope:'read'});}
+    if(body.get('grant_type')==='authorization_code'){exchanged++;assert.ok(body.get('code_verifier'));assert.equal(body.get('code'),'synthetic-code');return Response.json({access_token:'synthetic_access_1',token_type:'Bearer',expires_in:1,refresh_token:'synthetic_refresh_1',scope:expectedScope});}
+    if(body.get('grant_type')==='refresh_token'){refreshed++;await new Promise(resolve=>setTimeout(resolve,40));assert.equal(body.get('refresh_token'),'synthetic_refresh_1');return Response.json({access_token:'synthetic_access_2',token_type:'Bearer',expires_in:3600,refresh_token:'synthetic_refresh_2',scope:expectedScope});}
   }
   throw Error('unexpected OAuth URL');
  };
@@ -129,4 +129,38 @@ test('provider authorization errors are bound to pending state, sanitized and si
  assert.equal(await flow.finish(new URLSearchParams({state:'test-state',error:'invalid_scope',error_description:'PRIVATE_ERROR'})),false);
  assert.equal(flow.failure,'mcp_oauth_invalid_scope');assert.equal(exchanged,false);
  assert.equal(await flow.finish(new URLSearchParams({state:'test-state',code:'code'})),false);
+});
+
+test('reauthorization commits a changed scope and credential atomically only after success',async t=>{
+ const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js'),{McpOAuthFlow}=await import('../src/mcp-oauth-flow.js');
+ const {dir}=storeFixture(t,'namo-oauth-draft-'),file=join(dir,'config.json');
+ const fake=fakeOAuth(),initial=await beginMcpOAuth(resource,redirect,'read',fake.fetcher),oldRef=saveMcpOAuth(dir,await initial.finish('synthetic-code'));
+ writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',enabled:true,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:[],token:oldRef}]}));
+ const before=(await import('node:fs')).readFileSync(file,'utf8'),manager=new Management(file),revision=manager.config().revision;
+ const draft={id:'demo',type:'remote',url:resource,oauthScope:'read write',enabled:true,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:[]};
+ const flow=new McpOAuthFlow(manager,()=> 'http://127.0.0.1:45678',(url,cb,scope)=>beginMcpOAuth(url,cb,scope,fakeOAuth(scope).fetcher));
+ const first=await flow.begin(revision,'demo',draft),state=new URL(first.url).searchParams.get('state')!;
+ assert.equal((await import('node:fs')).readFileSync(file,'utf8'),before);
+ assert.equal(await flow.finish(new URLSearchParams({state,error:'access_denied',iss:issuer})),false);
+ assert.equal((await import('node:fs')).readFileSync(file,'utf8'),before);
+ const second=await flow.begin(revision,'demo',draft),state2=new URL(second.url).searchParams.get('state')!;
+ assert.equal(await flow.finish(new URLSearchParams({state:state2,code:'synthetic-code',iss:issuer})),true);
+ const saved=JSON.parse((await import('node:fs')).readFileSync(file,'utf8'));
+ assert.equal(saved.mcpConnections[0].oauthScope,'read write');assert.notEqual(saved.mcpConnections[0].token,oldRef);assert.equal(saved.mcpConnections[0].enabled,true);
+});
+
+test('cancelled OAuth drafts cannot later replace the saved connection',async t=>{
+ const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js'),{McpOAuthFlow}=await import('../src/mcp-oauth-flow.js');
+ const {dir}=storeFixture(t,'namo-oauth-cancel-'),file=join(dir,'config.json');
+ writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[]}));
+ const before=(await import('node:fs')).readFileSync(file,'utf8'),manager=new Management(file),revision=manager.config().revision;
+ const flow=new McpOAuthFlow(manager,()=> 'http://127.0.0.1:45678',(url,cb,scope)=>beginMcpOAuth(url,cb,scope,fakeOAuth().fetcher));
+ const draft={id:'new',type:'remote',url:resource,oauthScope:'read',enabled:false,audience:{organization:false,userIds:[],chatIds:[]},projects:[]};
+ const started=await flow.begin(revision,'',draft),state=new URL(started.url).searchParams.get('state')!;flow.cancel('');
+ assert.equal(await flow.finish(new URLSearchParams({state,code:'synthetic-code',iss:issuer})),false);
+ assert.equal((await import('node:fs')).readFileSync(file,'utf8'),before);
+ assert.throws(()=>manager.prepareMcpOAuth(revision,'',{...draft,id:'Bad ID'}),/mcp_invalid_config/);
+ const inFlight=await flow.begin(revision,'',draft),state2=new URL(inFlight.url).searchParams.get('state')!;
+ const finishing=flow.finish(new URLSearchParams({state:state2,code:'synthetic-code',iss:issuer}));flow.cancel('');
+ assert.equal(await finishing,false);assert.equal((await import('node:fs')).readFileSync(file,'utf8'),before);
 });
