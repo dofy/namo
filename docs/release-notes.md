@@ -1,5 +1,12 @@
 # Release notes
 
+## 0.3.1 — 2026-10-28
+
+- Fix MCP requests on Node 24 by using the same Undici implementation for fetch
+  and its DNS-filtering connection agent. Regressions verify the actual rejection
+  reason for mixed public/private DNS answers, including native Request inputs.
+- Includes all 0.3.0 improvements below.
+
 ## 0.3.0 — 2026-10-28
 
 - Code review reads paginated patches and surrounding source at fixed revisions.

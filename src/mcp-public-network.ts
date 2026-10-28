@@ -1,7 +1,7 @@
 import { lookup } from 'node:dns';
 import { isIP } from 'node:net';
 import ipaddr from 'ipaddr.js';
-import { Agent } from 'undici';
+import { Agent, fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici';
 
 /** MCP requests never use ambient proxy settings, private networks, or redirects. */
 export function publicAddress(address:string):boolean {
@@ -25,7 +25,20 @@ export function publicNetwork(resolver:typeof lookup=lookup):{fetcher:typeof fet
   }}});
   const fetcher:typeof fetch=(input,init)=>{
     publicHttpsUrl(input instanceof Request?input.url:String(input));
-    return fetch(input,{...init,redirect:'error',dispatcher:agent} as RequestInit);
+    // Node's bundled fetch can use a different dispatcher protocol (notably Node 24).
+    // Keep fetch and Agent from the same package; bridge native Request objects explicitly.
+    let url=input instanceof URL?input.toString():input;
+    let options=init;
+    if(input instanceof Request){
+      const request=new Request(input,init);
+      url=request.url;
+      options={method:request.method,headers:[...request.headers],body:request.body,
+        signal:request.signal,cache:request.cache,credentials:request.credentials,
+        integrity:request.integrity,keepalive:request.keepalive,mode:request.mode,
+        referrer:request.referrer,referrerPolicy:request.referrerPolicy};
+    }
+    // Both expose the Fetch API; their separately declared iterator types differ.
+    return undiciFetch(url as string,{...options,duplex:'half',redirect:'error',dispatcher:agent} as UndiciRequestInit) as unknown as Promise<Response>;
   };
   return {fetcher,close:async()=>{await agent.close();}};
 }

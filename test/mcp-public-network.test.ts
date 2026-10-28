@@ -13,5 +13,12 @@ test('public MCP network rejects local, private, mapped, and reserved addresses'
 test('DNS is checked at connection time and mixed public/private answers fail closed',async()=>{
  let lookedUp=false;
  const resolver=((_host:unknown,_options:unknown,callback:(error:null,addresses:{address:string;family:number}[])=>void)=>{lookedUp=true;callback(null,[{address:'8.8.8.8',family:4},{address:'127.0.0.1',family:4}]);}) as typeof import('node:dns').lookup;
- const network=publicNetwork(resolver);try{await assert.rejects(network.fetcher('https://public.example/mcp'));assert.equal(lookedUp,true);}finally{await network.close();}
+ const network=publicNetwork(resolver);
+ try{
+  for(const input of ['https://public.example/mcp',new URL('https://public.example/mcp'),new Request('https://public.example/mcp',{method:'POST',body:'{}'})]){
+   lookedUp=false;
+   await assert.rejects(network.fetcher(input),error=>error instanceof TypeError&&error.cause instanceof Error&&error.cause.message==='mcp_address_denied');
+   assert.equal(lookedUp,true);
+  }
+ }finally{await network.close();}
 });
