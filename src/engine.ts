@@ -13,7 +13,7 @@ import { RuntimeError, type Runtime, type RunControls } from './runtime.js';
 import { Tasks, TaskInputError, policyHash, scopeOf, type Task, type ProjectBinding } from './tasks.js';
 import { randomUUID } from 'node:crypto';
 import { Recovery, RecoveryError } from './recovery.js';
-import { Cards, type CardEvent } from './cards.js';
+import { Cards, renderTaskListCard, type CardEvent } from './cards.js';
 import { Profiles, ProfileError } from './profiles.js';
 import { userModel, setUserModel, formatModelReply, ModelPreferenceError } from './model-preferences.js';
 import { listCodexModels } from './codex-connection.js';
@@ -177,7 +177,7 @@ export class Engine {
         } catch(e) {if(!(e instanceof RecoveryError))throw e;reply=e.message;}
       }
       else if (command === '/whoami') reply = `用户 open_id：${m.senderId}\n会话 chat_id：${m.chatId}`;
-      else if (command === '/tasks') reply = this.tasks.list(m).map(t => `${taskStateLabel(t.state)}${t.project ? ` · ${t.project}` : ''}\n\`/task ${t.id}\``).join('\n\n') || '尚无任务记录。';
+      else if (command === '/tasks') reply = this.tasks.list(m).map(t => `${taskStateLabel(t.state)}${t.project ? ` · ${t.project}` : ''} · \`/task ${t.id}\``).join('\n') || '尚无任务记录。';
       else if (command === '/task') { const id = m.text.trim().split(/\s+/)[1]; const t = id ? this.tasks.owned(id, m) : this.tasks.latest(m); reply = t && this.taskAccessible(t) ? taskStatus(this.store, t) : '未找到可访问的任务。用 /tasks 查看任务编号。'; }
       else if (command === '/session') {
         const wid = m.text.trim().split(/\s+/)[1];
@@ -579,11 +579,15 @@ export class Engine {
       if(this.config.feishu?.cards&&this.sender.sendCard) card=new Cards(this.store).prepare(output);
       const route = output.route ? JSON.parse(output.route) as DeliveryRoute : undefined;
       const plainOnly = output.payload && JSON.parse(output.payload).textOnly;
+      const incoming=this.store.get(output.inboxKey);
+      if(!card && !plainOnly && this.sender.sendCard && output.kind==='result' && incoming?.text.trim()==='/tasks')
+        card=renderTaskListCard(output.content);
       const previous=output.part?this.store.db.prepare('SELECT content FROM outbox WHERE inboxKey=? AND kind=? AND part<? ORDER BY part').all(output.inboxKey,output.kind,output.part).map(row=>String(row.content)).join(''):'';
       const display=output.kind==='result' && output.part===0 && !previous
         ? formatControlDisplay(this.store.get(output.inboxKey)?.text ?? '',output.content) : output.content;
       const post = !card && !plainOnly && this.sender.sendPost && hasMarkdown(previous+display) ? richPost(display, openFence(previous)??false) : undefined;
-      try { platformId = card ? await this.sender.sendCard!(output.chatId, card, output.uuid, route) : post ? await this.sender.sendPost!(output.chatId, post, output.uuid, route) : await this.sender.send(output.chatId, display, output.uuid, route); }
+      const plain=plainOnly && incoming?.text.trim()==='/tasks' ? display.replaceAll('`','') : display;
+      try { platformId = card ? await this.sender.sendCard!(output.chatId, card, output.uuid, route) : post ? await this.sender.sendPost!(output.chatId, post, output.uuid, route) : await this.sender.send(output.chatId, plain, output.uuid, route); }
       catch (e) {
         const error = e instanceof SendError ? e : new SendError(true, 'transport_error');
         if((card||post)&&!error.unknown&&['feishu_230001','feishu_230099'].includes(error.code)) {

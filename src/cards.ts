@@ -10,6 +10,22 @@ import { Waits, WaitInputError, linkedExternalWait } from './waits.js';
 
 export interface CardEvent { operator?: { open_id?: string; tenant_key?: string }; context?: { open_chat_id?: string; open_message_id?: string }; action?: { value?: { namo?: string } }; }
 const plain=(content:string)=>({tag:'plain_text',content});
+
+/** Only host-generated task rows may introduce Feishu color tags. */
+export function renderTaskListCard(content:string): object | undefined {
+  const colors: Record<string,string> = {'已完成':'green','排队中':'blue','正在处理':'blue','等待你补充':'orange',
+    '未完成':'red','已停止':'grey','执行中断，需核对':'orange','需要核对补充要求':'orange','状态待核对':'grey'};
+  const rows=content.split('\n');
+  const rendered:string[]=[];
+  for(const row of rows) {
+    const match=/^(排队中|正在处理|已完成|等待你补充|未完成|已停止|执行中断，需核对|需要核对补充要求|状态待核对)(?: · ([A-Za-z0-9_-]{1,48}))? · `\/task (N-[A-F0-9]{12})`$/.exec(row);
+    if(!match)return;
+    const [,state,project,id]=match;
+    rendered.push(`<font color='${colors[state]}'>${state}</font>${project ? ` · ${project}` : ''} · \`/task ${id}\``);
+  }
+  if(!rendered.length)return;
+  return {config:{wide_screen_mode:true},elements:[{tag:'markdown',content:rendered.join('\n')}]};
+}
 export function renderTaskCard(t: Task, content: string, kind: string, part: number, actions: { action:string; token:string; label?: string }[] = []): object {
   const title=part?'回复（续）':kind==='external-wait'?'等待外部检查':taskStateLabel(t.state);
   const body=(kind==='result'||kind==='progress')&&hasMarkdown(content)?{tag:'markdown',content:cardMarkdown(content)}:{tag:'div',text:plain(content)};

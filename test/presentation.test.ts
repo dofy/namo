@@ -298,3 +298,41 @@ test('viewing details repeatedly does not stop shared progress updates or repeat
   assert.equal(f.store.db.prepare("SELECT COUNT(*) n FROM outbox WHERE kind LIKE 'card-status:%'").get()?.n,1);
   assert.equal(f.store.db.prepare("SELECT COUNT(*) n FROM outbox WHERE kind='result'").get()?.n,1);
 });
+
+test('task list keeps each command on its status line and colors statuses in a card',async t=>{
+  const f=fixture(t),m=message('original');f.store.enqueue(m);
+  const task=f.tasks.create(f.store.get(m.key)!,{cwd:'/tmp',policyHash:'test'});
+  f.store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(task.id);
+  f.engine.start();f.engine.accept(message('list-command','/tasks'));
+  await waitFor(()=>f.store.get('list-command')?.state==='replied');
+  const source=String(f.store.db.prepare("SELECT content FROM outbox WHERE inboxKey='list-command' AND kind='result'").get()?.content);
+  assert.equal(source,`已完成 · \`/task ${task.id}\``);
+  const card=f.cards.at(-1);assert.equal(card.elements[0].tag,'markdown');
+  assert.equal(card.elements[0].content,`<font color='green'>已完成</font> · \`/task ${task.id}\``);
+});
+
+test('task list colors only strictly validated host-generated rows', async()=>{
+  const {renderTaskListCard}=await import('../src/cards.js');
+  const rows="排队中 · alpha · `/task N-AAAAAAAAAAAA`\n未完成 · `/task N-BBBBBBBBBBBB`\n等待你补充 · `/task N-CCCCCCCCCCCC`";
+  const card=renderTaskListCard(rows) as any;
+  assert.match(card.elements[0].content,/<font color='blue'>排队中<\/font>/);
+  assert.match(card.elements[0].content,/<font color='red'>未完成<\/font>/);
+  assert.match(card.elements[0].content,/<font color='orange'>等待你补充<\/font>/);
+  assert.equal(renderTaskListCard("已完成 · <at user_id='all'> · `/task N-AAAAAAAAAAAA`"),undefined);
+});
+
+test('rejected task list card falls back to one compact plain reply',async t=>{
+  const f=fixture(t),m=message('seed');f.store.enqueue(m);
+  const task=f.tasks.create(f.store.get(m.key)!,{cwd:'/tmp',policyHash:'test'});
+  f.store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(task.id);
+  const texts:string[]=[];let cards=0;
+  const engine=new Engine(f.store,{async run(){throw Error('unexpected');}},{
+    async send(_chat,text,id){texts.push(text);return id;},
+    async sendCard(){cards++;throw new SendError(false,'feishu_230099');},
+  },{dataDir:'/tmp',concurrency:1,feishu:{cards:false}});
+  try {
+    engine.start();engine.accept(message('fallback-list','/tasks'));
+    await waitFor(()=>f.store.get('fallback-list')?.state==='replied');
+    assert.equal(cards,1);assert.deepEqual(texts,[`已完成 · /task ${task.id}`]);
+  } finally {await engine.stop();}
+});
