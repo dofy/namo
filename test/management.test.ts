@@ -346,3 +346,26 @@ test('workbench logs, source inspection and optional inference share local autho
   assert.equal(inspected.status,200);const text=await inspected.text();assert.doesNotMatch(text,/FAKE_SOURCE_SECRET|fixture_1234/);assert.equal(JSON.parse(text).applications.length,1);
   assert.equal(readFileSync(file,'utf8'),before);assert.equal((await post('/api/migration-inspect',{sourceFile:'relative',sourceInstanceId:'fixture'})).status,400);
 });
+
+test('CLI update controls require local authentication, exact origin, and current configuration',async t=>{
+ const f=fixture(t),fake=join(f.dir,'fake-codex');
+ writeFileSync(fake,'#!/bin/sh\nprintf "codex-cli 0.154.0\\n"\n',{mode:0o700});
+ writeFileSync(f.file,JSON.stringify({...f.raw,codex:{...f.raw.codex,bin:fake}}));
+ const ui=await startUi(f.manager);t.after(()=>ui.close());
+ const revision=f.manager.config().revision;
+ const post=(body:any,cookie='',origin=ui.url)=>fetch(ui.url+'/api/codex-update',{method:'POST',headers:{'Content-Type':'application/json',Origin:origin,...(cookie?{Cookie:cookie}:{})},body:JSON.stringify(body)});
+ assert.equal((await fetch(ui.url+'/api/codex-update')).status,401);
+ assert.equal((await post({action:'automatic',enabled:true,configRevision:revision})).status,401);
+ const login=await fetch(ui.url+'/api/session',{method:'POST',headers:{Origin:ui.url,'Content-Type':'application/json'},body:JSON.stringify({code:new URL(ui.entryUrl).hash.slice(1)})});
+ const cookie=login.headers.get('set-cookie')!;
+ assert.equal((await post({action:'automatic',enabled:true,configRevision:revision},cookie,'https://attacker.invalid')).status,403);
+ assert.equal((await post({action:'automatic',enabled:true,configRevision:'stale'},cookie)).status,409);
+ const enabled=await post({action:'automatic',enabled:true,configRevision:revision},cookie);
+ assert.equal(enabled.status,200);assert.equal((await enabled.json() as any).automatic,true);
+ const status=await fetch(ui.url+'/api/codex-update',{headers:{Cookie:cookie}}),value=await status.json() as any;
+ assert.equal(value.currentVersion,'0.154.0');assert.equal(value.managed,false);
+ assert.doesNotMatch(JSON.stringify(value),/PRIVATE_TEST_SECRET|PRIVATE_EXTRA|fake-codex/);
+ assert.equal((await post({action:'automatic',enabled:'yes',configRevision:revision},cookie)).status,409);
+ assert.equal((await post({action:'exec',configRevision:revision},cookie)).status,409);
+ assert.equal((await post({action:'automatic',enabled:false,configRevision:revision},cookie)).status,200);
+});

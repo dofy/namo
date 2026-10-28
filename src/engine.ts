@@ -17,6 +17,8 @@ import { Cards, type CardEvent } from './cards.js';
 import { Profiles, ProfileError } from './profiles.js';
 import { userModel, setUserModel, ModelPreferenceError } from './model-preferences.js';
 import { listCodexModels } from './codex-connection.js';
+import { ModelCatalog } from './model-catalog.js';
+import { resolveCodexBinary } from './codex-installation.js';
 import { agentCodexConfig } from './agent-registry.js';
 import { EvidenceRecorder, readEvidence } from './evidence.js';
 import { runnerJob } from './runner-store.js';
@@ -74,13 +76,17 @@ export class Engine {
   private autoMemories?: AutoMemories;
   private memoryRunning?: Promise<void>;
   private memoryAbort?: AbortController;
-  private models: {id:string;name:string;isDefault:boolean}[] = [];
+  private modelCatalog?: ModelCatalog;
   constructor(readonly store: Store, private runtime: Runtime, private sender: Sender,
     private config: Pick<Config, 'dataDir' | 'concurrency' | 'github'> & { file?:string; codex?: Config['codex']; agents?: Config['agents']; feishu?: Partial<Config['feishu']> },
     private redact: (s: string) => string = s => s,
     private log: Log = () => {},
     private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); this.feedback = new Feedback(store, sender,task=>this.taskAccessible(task)); this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined,id=>{const task=this.tasks.get(id);return !!task&&this.taskAccessible(task);});
       if(config.file){const file=config.file;this.approvals=new ApprovalService(store,loadConfig(file),digest(readFileSync(file,'utf8')),()=>digest(readFileSync(file,'utf8')));}
+      if(runtime.persistent && config.codex) {
+        const codex = config.codex;
+        this.modelCatalog = new ModelCatalog(() => listCodexModels(codex), () => resolveCodexBinary(codex.bin, codex.home));
+      }
       if(runtime.extractMemory&&(config.feishu?.access||config.feishu?.allowedUserIds?.length))this.autoMemories=new AutoMemories(store,{
         allowedUsers:config.feishu?.allowedUserIds??[],authorize:row=>{
           try {
@@ -102,6 +108,7 @@ export class Engine {
 
   private fatal(code: string): void {
     this.stopped = true; clearInterval(this.interval);
+    void this.modelCatalog?.stop();
     this.log(code); this.onFatal(code);
   }
 
@@ -213,7 +220,9 @@ export class Engine {
     if (parts.length > 2) return '用法：/model 查看；/model 模型ID 设置；/model default 恢复默认。';
     try {
       if (parts.length === 2) setUserModel(this.store, identity, parts[1] === 'default' ? '' : parts[1]);
-      const catalog = this.models.length ? `\n可选模型：\n${this.models.map(model=>`${model.id}${model.isDefault?'（推荐）':''}`).join('\n')}` : '\n模型列表暂不可用，可手动输入 Codex 模型 ID。';
+      void this.modelCatalog?.refresh();
+      const models = this.modelCatalog?.models ?? [];
+      const catalog = models.length ? `\n可选模型：\n${models.map(model=>`${model.id}${model.isDefault?'（推荐）':''}`).join('\n')}` : '\n模型列表暂不可用，可手动输入 Codex 模型 ID。';
       return `个人默认模型：${userModel(this.store, identity) || '跟随服务默认'}${catalog}\n用 /model 模型ID 设置，/model default 恢复服务默认。新任务生效；已接受的任务保持原选择。模型是否可用以实际运行结果为准。`;
     } catch (error) { if (error instanceof ModelPreferenceError) return error.message; throw error; }
   }
@@ -279,7 +288,7 @@ export class Engine {
     catch (e) { if (e instanceof RuntimeError) return '当前项目已从配置移除，请用 /project 选择其他项目'; throw e; }
   }
   start(): void {
-    if (this.runtime.persistent && this.config.codex) void listCodexModels(this.config.codex).then(models=>{this.models=models;}).catch(()=>{});
+    this.modelCatalog?.start();
     this.approvals?.start();
     this.log('recovered', this.store.recover(this.runtime.persistent));
     this.tasks.recover(this.runtime.persistent);
@@ -566,6 +575,7 @@ export class Engine {
   }
   async stop(): Promise<void> {
     this.stopped = true; clearInterval(this.interval);
+    const modelDiscovery = this.modelCatalog?.stop();
     this.memoryAbort?.abort();
     const tasks = [...this.active.values()];
     for (const task of tasks) task.abort.abort(this.runtime.persistent ? 'receiver_stopped' : undefined);
@@ -575,6 +585,7 @@ export class Engine {
     await this.externalPolling;
     await this.memoryRunning;
     await this.approvals?.idle();
+    await modelDiscovery;
     while (this.outputBusy) await new Promise(r => setTimeout(r, 20));
   }
   acceptCard(event: CardEvent): ReturnType<Cards['accept']> {

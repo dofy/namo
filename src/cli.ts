@@ -16,6 +16,7 @@ import { serviceAction, assertNoLegacyReceiver } from './service.js';
 import { currentRuntimeRelease } from './release.js';
 import { parseLocale, systemLocale } from './i18n.js';
 import { PROJECT_URL } from './project.js';
+import { startCodexAutoUpdates } from './codex-updates.js';
 
 process.umask(0o077);
 const args = process.argv.slice(2);
@@ -81,6 +82,7 @@ async function main(): Promise<void> {
   let releaseReceiver: (() => void) | undefined;
   let store: Store | undefined, engine: Engine | undefined, transport: FeishuTransport | undefined;
   let closing: Promise<void> | undefined;
+  let stopUpdates: (() => Promise<void>) | undefined;
   let health: Record<string, unknown> = { pid: process.pid, startedAt: new Date().toISOString(), ready: false, connection: 'connecting',
     configRevision,managementVersion:2,...(startupRelease ? { releaseId: startupRelease.id } : {}) };
   const log = (event: string, fields: Record<string, unknown> = {}) => {
@@ -94,7 +96,11 @@ async function main(): Promise<void> {
   };
   const close = () => closing ??= (async () => {
     transport?.close();
-    try { await engine?.stop(); } finally { try { store?.close(); } finally { releaseReceiver?.(); release(); } }
+    try {
+      const stopped=await Promise.allSettled([engine?.stop(),stopUpdates?.()]);
+      const failure=stopped.find(result=>result.status==='rejected');
+      if(failure?.status==='rejected')throw failure.reason;
+    } finally { try { store?.close(); } finally { releaseReceiver?.(); release(); } }
     log('stopped');
   })();
   const stop = async (code: number) => { try { await close(); finish(code); } catch { console.error(tr("cli.serviceShutdownFailed")); finish(1); } };
@@ -109,6 +115,7 @@ async function main(): Promise<void> {
     const service = engine;
     await transport.connect(m => withLocale('zh-CN', () => { service.accept(m); }), event => withLocale('zh-CN', () => service.acceptCard(event))); if (closing) return;
     withLocale('zh-CN', () => service.start()); log('ready', { dataDir: config.dataDir, concurrency: config.concurrency });
+    stopUpdates=startCodexAutoUpdates(config);
   } catch (e) { await close(); throw e; }
 }
 const languageChoice = args.includes('--lang') ? args[args.indexOf('--lang') + 1] : process.env.NAMO_LANG;

@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import type { Config } from './config.js';
 import { CodexRuntime, probeRuntime, RuntimeError, type Runtime } from './runtime.js';
 import { codexEnvironment } from './safety.js';
+import { resolveCodexBinary } from './codex-installation.js';
 
 export interface AgentInfo { id: string; kind: 'local-cli' | 'gateway'; supported: boolean; path?: string; version?: string; installed: boolean; }
 export interface Check { id: string; status: 'ok' | 'warn' | 'fail'; message: string; next?: string; }
@@ -29,7 +30,7 @@ export async function probeAgent(source: Config, profileId?: string): Promise<Ch
   try { c = {...source, codex: agentCodexConfig(source, selectAgent(source, profileId))}; }
   catch { return [{id:'agent.profile',status:'fail',message:tr("agents.selectedExecutorUnavailableDisabledMissingNoFallback")}]; }
   const checks: Check[] = [];
-  const path = findExecutable(c.codex.bin);
+  const path = findExecutable(resolveCodexBinary(c.codex.bin,c.codex.home));
   if (!path) return [{ id: 'agent.binary', status: 'fail', message: tr("agents.codexExecutableNotFound"), next: tr("agents.installOfficialCodexSetItsFullPath") }];
   checks.push({ id: 'agent.binary', status: 'ok', message: `Codex：${realpathSync(path)}` });
   if (!existsSync(c.codex.home)) return [...checks, { id: 'agent.auth', status: 'fail', message: tr("agents.namosIsolatedCodexEnvironmentNotCreatedSigned"), next: tr("agents.runNamoLoginPersonalCodexCredentialsNot") }];
@@ -48,7 +49,7 @@ export async function probeAgent(source: Config, profileId?: string): Promise<Ch
 }
 export async function loginAgent(source: Config, profileId?: string): Promise<void> {
   const c = {...source, codex:agentCodexConfig(source, selectAgent(source, profileId))};
-  const path = findExecutable(c.codex.bin); if (!path) throw new Error(tr("agents.codexNotFoundInstallOfficialCodexCli"));
+  const path = findExecutable(resolveCodexBinary(c.codex.bin,c.codex.home)); if (!path) throw new Error(tr("agents.codexNotFoundInstallOfficialCodexCli"));
   mkdirSync(c.codex.home, { recursive: true, mode: 0o700 });
   await new Promise<void>((resolve, reject) => {
     const p = spawn(path, ['login'], { env: codexEnvironment(c.codex.home), stdio: 'inherit' });

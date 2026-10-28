@@ -6,6 +6,7 @@ import { delimiter, dirname, join, resolve } from 'node:path';
 import type { Config } from './config.js';
 import { codexEnvironment } from './safety.js';
 import { RuntimeError } from './runtime-contract.js';
+import { resolveCodexBinary } from './codex-installation.js';
 import { readSkillSettings, skillReadDirectories, skillSettingsOverride, SkillAccessError, type SkillAccess, type SkillCatalog } from './skill-access.js';
 
 type Obj = Record<string, any>;
@@ -17,7 +18,8 @@ export class Rpc {
   private listeners = new Set<(method: string, params: Obj) => void>();
   private requestListeners = new Set<(method: string, params: Obj, id: string | number) => boolean>();
   private closed = false;
-  constructor(bin: string, home: string, sandbox: Config['codex']['sandbox'] = 'read-only', policy?: Config['codex'], extraction = false, skills?: SkillAccess) {
+  constructor(bin: string, home: string, sandbox: Config['codex']['sandbox'] = 'read-only', policy?: Config['codex'], extraction = false, skills?: SkillAccess, managed = true) {
+    if (managed) bin = resolveCodexBinary(bin, home);
     const access = sandbox === 'workspace-write' ? 'write' : 'read';
     const executable = bin.includes('/') ? resolve(bin)
       : (process.env.PATH ?? '').split(delimiter).map(dir => join(dir, bin)).find(existsSync);
@@ -32,6 +34,10 @@ export class Rpc {
     // launcher and its canonical binary, without granting the rest of HOME.
     if (executable && existsSync(executable)) {
       files[dirname(realpathSync(executable))] = 'read';
+      const packageRoot = dirname(dirname(realpathSync(executable)));
+      if (existsSync(join(packageRoot, 'codex-package.json'))) {
+        for (const resource of ['codex-path','codex-resources']) if (existsSync(join(packageRoot,resource))) files[join(packageRoot,resource)]='read';
+      }
     }
     for (const path of policy?.denyPaths ?? []) files[path] = 'deny';
     for (const path of skills?.directories ?? []) files[path] = 'read';

@@ -22,6 +22,7 @@ import { MigrationMemory, MigrationMemoryError, migrationMemoryStatus } from './
 import { Profiles, ProfileError } from './profiles.js';
 import { userModel, setUserModel, ModelPreferenceError } from './model-preferences.js';
 import { listCodexModels } from './codex-connection.js';
+import { CodexUpdates } from './codex-updates.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
 import { Browse, BrowseError } from './browse.js';
 import { parseGitHubAccessConfig, publicGitHubAccess } from './github-access.js';
@@ -37,6 +38,9 @@ const defaults:ManagementDeps={status:serviceStatus,action:serviceAction,wait:wa
 export class Management {
   readonly dataDir: string;
   private deps:ManagementDeps;
+  private codexUpdater?: { revision: string; updates: CodexUpdates };
+  private updateOperations=new Set<CodexUpdates>();
+  async close(): Promise<void> { await Promise.allSettled([...this.updateOperations].map(updater=>updater.close())); }
   constructor(readonly file:string, deps:Partial<ManagementDeps>={}) {
     const raw=readJson(file),path=raw.dataDir??'./data';
     if(typeof path!=='string') throw new ManagementError(tr("management.invalidDataDirectoryConfigurationFixNamoInit"));
@@ -275,6 +279,16 @@ export class Management {
   }
   async models(): Promise<{id:string;name:string;isDefault:boolean}[]> {
     try {return await listCodexModels(loadConfig(this.file).codex);} catch {throw new ManagementError('模型列表暂不可用，请检查 Codex 登录和服务配置。',503);}
+  }
+  async codexUpdate(input?: {action:string;configRevision:string;enabled?:boolean}) {
+    const {revision}=this.source();
+    if(input && input.configRevision!==revision)throw new ManagementError('update_config_changed');
+    if(!this.codexUpdater || this.codexUpdater.revision!==revision) {
+      this.codexUpdater={revision,updates:new CodexUpdates(loadConfig(this.file),{},revision)};
+      this.updateOperations.add(this.codexUpdater.updates);
+    }
+    try { return input ? await this.codexUpdater.updates.action(input.action,input.enabled) : await this.codexUpdater.updates.status(); }
+    catch(error) { throw new ManagementError(error instanceof Error && /^update_[a-z_]+$/.test(error.message)?error.message:'update_failed'); }
   }
   async saveGitHub(revision:string,patch:any):Promise<any> {
     if (patch?.github?.source!=='gh') return this.save(revision,patch);

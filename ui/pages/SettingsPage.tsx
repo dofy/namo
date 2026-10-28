@@ -5,6 +5,7 @@ import { Button, Checkbox, Heading, Text, TextArea, TextField } from '@radix-ui/
 import type { ConfigValues, ConfigView } from '../../src/ui-contract';
 import { api, message } from '../api';
 import { Choice, ConfirmButton, Field, Notice } from '../components';
+import { CodexUpdatePanel } from '../components/CodexUpdatePanel';
 
 type ProjectRow = { id: string; name: string; path: string };
 interface Draft extends Omit<ConfigValues, 'projects' | 'readPaths' | 'denyPaths' | 'timeoutMs' | 'concurrency' | 'progressDelayMs' | 'progressIntervalMs' | 'progressHeartbeatMs'> {
@@ -54,7 +55,7 @@ export function SettingsPage({ config, recoveryAvailable, refresh, notify }: {
   const booleanFields = (keys: ['networkAccess' | 'allowLocalCommits' | 'cards' | 'requireMention' | 'reactions' | 'progressUpdates', string][]) => <div className="checks">{keys.map(([key, label]) =>
     <Text as="label" size="2" key={key}><Checkbox checked={draft[key]!==false} disabled={saving || (key === 'allowLocalCommits' && draft.sandbox === 'read-only')}
       onCheckedChange={value => edit(key, value === true)} /> {label}</Text>)}</div>;
-  return <form onSubmit={async event => {
+  return <><form onSubmit={async event => {
     event.preventDefault(); if (saving) return; setSaving(true); setError('');
     try { const saved = await api.save(revision, toPatch(draft)); reset(saved); notify(tr("settings.configurationSavedPreviousValuesBackedUpApply")); await refresh(); }
     catch (e) { setError(message(e)); } finally { setSaving(false); }
@@ -114,5 +115,7 @@ export function SettingsPage({ config, recoveryAvailable, refresh, notify }: {
       <ConfirmButton title={tr("settings.confirmApplyConfiguration")} description={tr("settings.restartReceiverItsQueueIdleExistingConfiguration")} action={tr("settings.confirmApply")}
         disabled={dirty || saving || !recoveryAvailable} onConfirm={async () => { const result = await api.apply(revision); notify(result.message, !result.ready); await refresh(); }}><Icon name="play" />{tr("settings.applyConfiguration")}</ConfirmButton>
     </div>
-  </form>;
+  </form>
+    <CodexUpdatePanel configRevision={config.revision} disabled={dirty || saving || !config.valid} />
+  </>;
 }

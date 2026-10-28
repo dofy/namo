@@ -1,4 +1,4 @@
-import type { ApprovalAction, ApprovalList, ApprovalView, ServiceLog, MigrationInspection, ServiceAccessPatch } from '../src/ui-contract';
+import type { ApprovalAction, ApprovalList, ApprovalView, CodexUpdateStatus, ServiceLog, MigrationInspection, ServiceAccessPatch } from '../src/ui-contract';
 import { t as tr, getLocale } from './i18n';
 import type { ApplyResult, AssistantView, AssistantValues, BrowseOptions, ConfigValues, ConfigView, GitHubConfigPatch, Dashboard, Diagnostic, Issue, ManagementState, MemoryMutation, MemoryViewState, PageResult, ProfileValues, ResolutionAction, SessionSummary, TaskDetail, TaskList, UserProfile } from '../src/ui-contract';
 
@@ -27,6 +27,9 @@ export const api = {
   session: (code: string) => request('/api/session', { code }),
   state: (signal?: AbortSignal) => request<ManagementState>('/api/state', undefined, signal),
   models: (signal?: AbortSignal) => request<{id:string;name:string;isDefault:boolean}[]>('/api/models', undefined, signal),
+  codexUpdate: (signal?: AbortSignal) => request<CodexUpdateStatus>('/api/codex-update', undefined, signal),
+  changeCodexUpdate: (configRevision: string, action: 'check' | 'upgrade' | 'automatic' | 'rollback', enabled?: boolean) =>
+    request<CodexUpdateStatus>('/api/codex-update', { action, configRevision, ...(enabled === undefined ? {} : { enabled }) }),
   tasks: (query: string, signal?: AbortSignal) => request<TaskList>(`/api/tasks?${query}`, undefined, signal),
   sessions: (query: string, signal?: AbortSignal) => request<PageResult<SessionSummary>>(`/api/sessions?${query}`, undefined, signal),
   dashboard: (signal?: AbortSignal) => request<Dashboard>('/api/dashboard', undefined, signal),

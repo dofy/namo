@@ -3,6 +3,12 @@ import type { Audience, OrganizationAccess, ProjectAccess } from './access-contr
 export const uiRoutes = { dashboard: '/', tasks: '/tasks', sessions: '/sessions', settings: '/settings', assistant: '/assistant', memory: '/memory', profiles: '/profiles', connections: '/connections' } as const;
 export type UiPage = keyof typeof uiRoutes;
 
+export interface CodexUpdateStatus {
+  supported: boolean; currentVersion: string | null; latestVersion: string | null; checkedAt: number | null;
+  automatic: boolean; state: 'idle' | 'checking' | 'installing' | 'deferred' | 'failed';
+  updateAvailable: boolean; managed: boolean; previousVersion: string | null; error: string | null;
+}
+
 export interface ConfigValues {
   projectAccess?: Record<string, ProjectAccess>;
   projects: Record<string, string>;

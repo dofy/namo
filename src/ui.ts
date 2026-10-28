@@ -70,6 +70,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/approvals')return send(200,manager.approvals());
         if(path==='/api/state')return send(200,manager.state());
         if(path==='/api/models')return send(200,await manager.models());
+        if(path==='/api/codex-update')return send(200,await manager.codexUpdate());
         if(path==='/api/tasks')return send(200,manager.browse('tasks',new URL(req.url!,origin).searchParams));
         if(path==='/api/sessions')return send(200,manager.browse('sessions',new URL(req.url!,origin).searchParams));
         if(path==='/api/dashboard')return send(200,manager.browse('dashboard'));
@@ -93,6 +94,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/approvals')return send(200,await manager.approval(input));
         if(path==='/api/profiles')return send(200,manager.saveProfile(input.configRevision,input.userId,input.version,input.patch));
         if(path==='/api/user-model')return send(200,{model:manager.saveUserModel(input.configRevision,input.userId,input.expected,input.model)});
+        if(path==='/api/codex-update')return send(200,await manager.codexUpdate(input));
         if(path==='/api/resolve')return send(200,manager.reconcile(input));
         if(path==='/api/cancel')return send(200,manager.cancel(input.id,input.inputVersion,input.requestId));
         return send(404,{error:tr("common.actionNotFound")});
@@ -103,7 +105,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
   const address=server.address();if(!address||typeof address==='string')throw new Error('ui_listen_failed');
   origin=`http://127.0.0.1:${address.port}`;cookieName=`namo_ui_${address.port}`;
-  return {url:origin,entryUrl:`${origin}/#${bootstrap}`,close:async()=>{session='';bootstrap='';server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
+  return {url:origin,entryUrl:`${origin}/#${bootstrap}`,close:async()=>{session='';bootstrap='';server.closeAllConnections();await manager.close();await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
 }
 function headers(res:ServerResponse,styleNonce:string):void{
   res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Content-Type-Options','nosniff');
