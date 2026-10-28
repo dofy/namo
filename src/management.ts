@@ -26,7 +26,7 @@ import { listCodexModels } from './codex-connection.js';
 import { CodexUpdates } from './codex-updates.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
 import { Browse, BrowseError } from './browse.js';
-import { isOAuthReference, resolveMcpCredential } from './mcp-oauth.js';
+import { isOAuthReference, resolveMcpCredential, discoverMcpOAuthScopes } from './mcp-oauth.js';
 import { parseMcpConnections, publicMcpConnections, remoteRead } from './mcp-connections.js';
 import { parseGitHubAccessConfig, publicGitHubAccess } from './github-access.js';
 import { FeishuTransport } from './feishu.js';
@@ -293,6 +293,12 @@ export class Management {
     }
     try { return input ? await this.codexUpdater.updates.action(input.action,input.enabled) : await this.codexUpdater.updates.status(); }
     catch(error) { throw new ManagementError(error instanceof Error && /^update_[a-z_]+$/.test(error.message)?error.message:'update_failed'); }
+  }
+  async mcpOAuthScopes(revision:unknown,url:unknown) {
+    if(typeof revision!=='string'||this.source().revision!==revision)throw new ManagementError('mcp_config_changed');
+    if(typeof url!=='string'||url.length>2048)throw new ManagementError('mcp_invalid_config',400);
+    try{const result=await discoverMcpOAuthScopes(url);if(this.source().revision!==revision)throw new ManagementError('mcp_config_changed');return result;}
+    catch(error){if(error instanceof ManagementError)throw error;throw new ManagementError('mcp_oauth_discovery_failed',400);}
   }
   async testMcp(revision:unknown,id:unknown):Promise<{toolCount:number}> {
     if(typeof revision!=='string'||typeof id!=='string'||this.source().revision!==revision)throw new ManagementError('mcp_config_changed');

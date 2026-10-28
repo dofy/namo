@@ -39,11 +39,14 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
     try{path=new URL(req.url??'/',origin).pathname;}catch{return send(400,{error:tr("ui.invalidRequestPath")});}
     if(req.method==='GET'&&path==='/api/mcp-oauth/callback'){
       let ok=false;try{ok=await oauth.finish(new URL(req.url??'/',origin).searchParams);}catch{/* Invalid or expired callback; never expose raw OAuth errors. */}
-      res.writeHead(303,{'Location':ok?'/oauth-complete?status=success':'/oauth-complete?status=failed'});return res.end();
+      res.writeHead(303,{'Location':ok?'/oauth-complete?status=success':'/oauth-complete?status=failed&reason='+encodeURIComponent(oauth.failure)});return res.end();
     }
     if(req.method==='GET'&&path==='/oauth-complete'){
-      const ok=new URL(req.url??'/',origin).searchParams.get('status')==='success';
-      return send(200,ok?'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>MCP 授权完成</title><p>授权完成。请返回 Namo 管理界面并重新载入连接设置。</p></html>':'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>MCP 授权未完成</title><p>授权未完成。请返回 Namo 管理界面重新操作。</p></html>','text/html');
+      const parameters=new URL(req.url??'/',origin).searchParams;
+      const ok=parameters.get('status')==='success';
+      const reasons:Record<string,string>={mcp_oauth_invalid_scope:'所选权限范围不被服务支持。请返回连接设置，探测权限并重新勾选。',mcp_oauth_access_denied:'服务拒绝了授权，或你取消了授权。',mcp_oauth_invalid_grant:'授权码已失效，请重新登录授权。',mcp_oauth_scope:'服务返回的权限超出请求范围，授权未保存。',mcp_oauth_callback_invalid:'授权回调无效或已使用，请重新开始授权。',mcp_oauth_invalid_client:'服务未接受此登录客户端，请重新开始授权或联系服务管理员。',mcp_config_changed:'授权期间配置发生变化，请重新载入后再授权。',mcp_oauth_expired:'本次授权已过期，请重新开始。'};
+      const reason=reasons[parameters.get('reason')??'']??'授权未完成。请返回 Namo 管理界面重新操作。';
+      return send(200,ok?'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>MCP 授权完成</title><p>授权完成。请返回 Namo 管理界面并重新载入连接设置。</p></html>':'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>MCP 授权未完成</title><p>'+reason+'</p></html>','text/html');
     }
     if(req.headers['sec-fetch-site']==='cross-site')return send(403,{error:tr("ui.invalidRequestOrigin")});
     if(req.method==='GET'&&Object.values(uiRoutes).some(route=>route===path)) {
@@ -99,8 +102,9 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/assistant')return send(200,manager.assistant(input.action,input.version,input.values));
         if(path==='/api/memories')return send(200,manager.memory(input.action,input.ownerId,input.input));
         if(path==='/api/organization')return send(200,await manager.organization());
-        if(path==='/api/mcp-oauth-start'){try{return send(200,await oauth.begin(input.revision,input.id));}catch{return send(400,{error:'mcp_oauth_failed'});}}
+        if(path==='/api/mcp-oauth-start'){try{return send(200,await oauth.begin(input.revision,input.id));}catch(error){const code=error instanceof Error&&/^mcp_[a-z_]+$/.test(error.message)?error.message:'mcp_oauth_failed';return send(400,{error:code});}}
         if(path==='/api/codex-mcp-import')return send(200,manager.importCodexMcp(input.revision,input.sourceRevision,input.ids));
+        if(path==='/api/mcp-oauth-scopes')return send(200,await manager.mcpOAuthScopes(input.revision,input.url));
         if(path==='/api/mcp-test')return send(200,await manager.testMcp(input.revision,input.id));
         if(path==='/api/config')return send(200,await manager.saveGitHub(input.revision,input.patch));
         if(path==='/api/apply')return send(200,await manager.apply(input.revision,input.confirmed===true));

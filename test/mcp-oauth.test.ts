@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { beginMcpOAuth, resolveMcpCredential, saveMcpOAuth, isOAuthReference, LEGACY_LINEAR_URL } from '../src/mcp-oauth.js';
+import { discoverMcpOAuthScopes, beginMcpOAuth, resolveMcpCredential, saveMcpOAuth, isOAuthReference, LEGACY_LINEAR_URL } from '../src/mcp-oauth.js';
 const resource='https://mcp.example/mcp',issuer='https://login.example',redirect='http://127.0.0.1:45678/api/mcp-oauth/callback';
 function fakeOAuth(){
  let registered=0,exchanged=0,refreshed=0;
@@ -38,9 +38,9 @@ test('OAuth rejects invalid callbacks, widened scopes and malicious metadata end
  const fake=fakeOAuth();await assert.rejects(beginMcpOAuth(resource,'http://localhost:45678/api/mcp-oauth/callback','read',fake.fetcher),/mcp_oauth_invalid/);
  const flow=await beginMcpOAuth(resource,redirect,'read',fake.fetcher);await assert.rejects(flow.finish('bad\ncode'),/mcp_oauth_invalid/);
  const elevated:typeof fetch=async(input,init)=>new URL(String(input)).pathname==='/token'?Response.json({access_token:'fake',token_type:'Bearer',expires_in:3600,scope:'read write'}):fake.fetcher(input,init);
- const unsafe=await beginMcpOAuth(resource,redirect,'read',elevated);await assert.rejects(unsafe.finish('synthetic-code'),/mcp_oauth_failed/);
+ const unsafe=await beginMcpOAuth(resource,redirect,'read',elevated);await assert.rejects(unsafe.finish('synthetic-code'),/mcp_oauth_scope/);
  const malicious:typeof fetch=async(input,init)=>new URL(String(input)).origin===issuer&&new URL(String(input)).pathname.startsWith('/.well-known/')?Response.json({issuer,authorization_endpoint:issuer+'/authorize',token_endpoint:'https://evil.example/token',registration_endpoint:issuer+'/register',response_types_supported:['code']}):fake.fetcher(input,init);
- await assert.rejects(beginMcpOAuth(resource,redirect,'read',malicious),/mcp_oauth_failed/);
+ await assert.rejects(beginMcpOAuth(resource,redirect,'read',malicious),/mcp_oauth_origin/);
 });
 test('OAuth callback is single-use, checks issuer and does not expose tokens',async t=>{
  const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js'),{McpOAuthFlow}=await import('../src/mcp-oauth-flow.js');
@@ -103,4 +103,30 @@ test('refresh responses without a replacement refresh token retain the existing 
 test('OAuth uses the challenged minimum scope without requesting all advertised scopes',async()=>{
  const fake=fakeOAuth();const fetcher:typeof fetch=(input,init)=>String(input)===resource?Promise.resolve(new Response(null,{status:401,headers:{'www-authenticate':'Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource", scope="read"'}})):fake.fetcher(input,init);
  const flow=await beginMcpOAuth(resource,redirect,'',fetcher);assert.equal(new URL(flow.url).searchParams.get('scope'),'read');
+});
+
+
+test('scope discovery exposes advertised choices without registration or automatic selection',async()=>{
+ const fake=fakeOAuth(),result=await discoverMcpOAuthScopes(resource,fake.fetcher);
+ assert.deepEqual(result.scopes,['read','write']);assert.deepEqual(result.recommended,[]);assert.equal(result.published,true);
+ assert.deepEqual(fake.counts,{registered:0,exchanged:0,refreshed:0});
+ await assert.rejects(beginMcpOAuth(resource,redirect,'unsupported',fake.fetcher),/mcp_oauth_invalid_scope/);
+ assert.equal(fake.counts.registered,0);
+});
+test('scope discovery distinguishes unpublished permissions and failed discovery',async()=>{
+ const fake=fakeOAuth(),unpublished:typeof fetch=async(input,init)=>{const response=await fake.fetcher(input,init);const data=await response.json().catch(()=>null);if(!data)return response;delete data.scopes_supported;return Response.json(data);};
+ const result=await discoverMcpOAuthScopes(resource,unpublished);assert.equal(result.published,false);assert.deepEqual(result.scopes,[]);
+ await assert.rejects(discoverMcpOAuthScopes(resource,async()=>{throw Error('PRIVATE_REMOTE_ERROR');}),/mcp_oauth_discovery_failed/);
+});
+
+test('provider authorization errors are bound to pending state, sanitized and single use',async t=>{
+ const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js'),{McpOAuthFlow}=await import('../src/mcp-oauth-flow.js');
+ const {dir}=storeFixture(t,'namo-oauth-error-'),file=join(dir,'config.json');
+ writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',enabled:false,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:[],token:''}]}));
+ const manager=new Management(file);let exchanged=false;
+ const flow=new McpOAuthFlow(manager,()=> 'http://127.0.0.1:45678',async()=>({url:issuer+'/authorize',issuer,state:'test-state',requireIssuer:false,async finish(){exchanged=true;throw Error();}}));
+ await flow.begin(manager.config().revision,'demo');
+ assert.equal(await flow.finish(new URLSearchParams({state:'test-state',error:'invalid_scope',error_description:'PRIVATE_ERROR'})),false);
+ assert.equal(flow.failure,'mcp_oauth_invalid_scope');assert.equal(exchanged,false);
+ assert.equal(await flow.finish(new URLSearchParams({state:'test-state',code:'code'})),false);
 });

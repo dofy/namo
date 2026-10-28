@@ -79,10 +79,29 @@ async function discover(serverUrl:string,fetcher:typeof fetch):Promise<{state:OA
  const state:OAuthDiscoveryState={authorizationServerUrl:issuer,authorizationServerMetadata:metadata,resourceMetadata};
  validateDiscovery(serverUrl,state);
  await sdk.selectResourceURL(serverUrl,{} as OAuthClientProvider,resourceMetadata);
- // scopes_supported lists capabilities, not the minimum access the user requested.
- state.resourceMetadata={...resourceMetadata,scopes_supported:undefined};
  return {state,challengedScope};
 }
+
+export interface McpOAuthScopes {scopes:string[];recommended:string[];published:boolean;issuer:string}
+function scopeOptions(found:{state:OAuthDiscoveryState;challengedScope:string}):McpOAuthScopes {
+ const resource=found.state.resourceMetadata?.scopes_supported,server=found.state.authorizationServerMetadata?.scopes_supported;
+ const declared=resource??server,challenged=found.challengedScope.split(/\s+/).filter(Boolean);
+ const values=[...new Set([...(declared??[]),...challenged])];
+ if(values.length>200||values.some(v=>typeof v!=='string'||v.length>256||!/^([\x21\x23-\x5b\x5d-\x7e])+$/.test(v)))throw new OAuthError('mcp_oauth_metadata');
+ return {scopes:values,recommended:challenged,published:declared!==undefined||challenged.length>0,issuer:String(found.state.authorizationServerUrl)};
+}
+/** Read metadata only; never register a client or send a saved credential. */
+export async function discoverMcpOAuthScopes(serverUrl:string,fetcher?:typeof fetch):Promise<McpOAuthScopes> {
+ publicHttpsUrl(serverUrl);
+ try{return scopeOptions(await withFetch(AbortSignal.timeout(30000),f=>discover(serverUrl,f),fetcher));}
+ catch(error){if(error instanceof OAuthError)throw error;throw new OAuthError('mcp_oauth_discovery_failed');}
+}
+export function oauthFailureCode(error:unknown):string {
+ if(error instanceof OAuthError)return error.code;
+ const code=(error as {errorCode?:unknown})?.errorCode;
+ return typeof code==='string'&&['invalid_scope','invalid_grant','access_denied','invalid_client','unauthorized_client'].includes(code)?'mcp_oauth_'+code:'mcp_oauth_failed';
+}
+
 class Provider implements OAuthClientProvider {
  client?:OAuthClientInformationMixed; value?:OAuthTokens; verifier=''; authorizationUrl?:URL; expiresAt=0;
  constructor(readonly serverUrl:string,readonly redirectUrl:string,readonly nonce:string,readonly scope:string,readonly discovery:OAuthDiscoveryState,record?:OAuthRecord){this.client=record?.client;this.value=record?.tokens;this.expiresAt=record?.expiresAt??0;}
@@ -116,6 +135,10 @@ export async function beginMcpOAuth(serverUrl:string,redirectUrl:string,scope=''
  const state=randomBytes(32).toString('hex');
  try {
   const found=await withFetch(AbortSignal.timeout(30000),f=>discover(serverUrl,f),fetcher),discovery=found.state;
+  const options=scopeOptions(found);
+  if(scope&&options.published&&scope.split(/\s+/).filter(Boolean).some(v=>!options.scopes.includes(v)))throw new OAuthError('mcp_oauth_invalid_scope');
+  // Advertised capabilities must never become an implicit request for every scope.
+  discovery.resourceMetadata={...discovery.resourceMetadata!,scopes_supported:undefined};
   const effectiveScope=scope||found.challengedScope,provider=new Provider(serverUrl,redirectUrl,state,effectiveScope,discovery);
   const {auth}=await import('@modelcontextprotocol/sdk/client/auth.js');
   const result=await withFetch(AbortSignal.timeout(30000),f=>auth(provider,{serverUrl,scope:effectiveScope||undefined,fetchFn:f}),fetcher);
@@ -124,9 +147,9 @@ export async function beginMcpOAuth(serverUrl:string,redirectUrl:string,scope=''
   return {url,state,issuer,requireIssuer:(discovery.authorizationServerMetadata as Record<string,unknown> | undefined)?.authorization_response_iss_parameter_supported===true,async finish(code:string){
    if(typeof code!=='string'||!code||code.length>4096||/[\x00-\x20\x7f]/.test(code))throw new OAuthError('mcp_oauth_invalid');
    try {const result=await withFetch(AbortSignal.timeout(30000),f=>auth(provider,{serverUrl,authorizationCode:code,scope:effectiveScope||undefined,fetchFn:f}),fetcher);if(result!=='AUTHORIZED')throw new Error();return provider.record();}
-   catch {throw new OAuthError('mcp_oauth_failed');}
+   catch(error) {throw new OAuthError(oauthFailureCode(error));}
   }};
- } catch {throw new OAuthError('mcp_oauth_failed');}
+ } catch(error) {throw new OAuthError(oauthFailureCode(error));}
 }
 export function saveMcpOAuth(dataDir:string,record:OAuthRecord):string {
  validate(record);const ref='oauth_'+randomBytes(24).toString('hex');ensureDirectory(dataDir,true);atomicJson(path(dataDir,ref),record,true);return ref;

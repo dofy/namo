@@ -1,10 +1,11 @@
 import type { Management } from './management.js';
-import { beginMcpOAuth, saveMcpOAuth, discardMcpOAuth, type OAuthStart } from './mcp-oauth.js';
+import { beginMcpOAuth, saveMcpOAuth, discardMcpOAuth, oauthFailureCode, type OAuthStart } from './mcp-oauth.js';
 
 interface Pending {revision:string;id:string;createdAt:number;flow:OAuthStart}
 /** OAuth state and PKCE verifier exist only in the authenticated local UI process. */
 export class McpOAuthFlow {
  private pending=new Map<string,Pending>();
+ failure='mcp_oauth_failed';
  constructor(private manager:Management,private origin:()=>string,private beginOAuth:typeof beginMcpOAuth=beginMcpOAuth){}
  clear():void {this.pending.clear();}
  async begin(revision:unknown,id:unknown):Promise<{url:string;issuer:string}> {
@@ -19,14 +20,18 @@ export class McpOAuthFlow {
   return {url:flow.url,issuer:flow.issuer};
  }
  async finish(query:URLSearchParams):Promise<boolean> {
+  this.failure='mcp_oauth_callback_invalid';
   const states=query.getAll('state'),codes=query.getAll('code'),issuers=query.getAll('iss');
-  if(states.length!==1||codes.length!==1||issuers.length>1)return false;
+  if(states.length!==1||issuers.length>1)return false;
   const pending=this.pending.get(states[0]);if(!pending)return false;
   if(pending.flow.requireIssuer&&issuers.length!==1||issuers.length===1&&issuers[0]!==pending.flow.issuer)return false;
+  if(query.has('error')){this.pending.delete(states[0]);const code=query.get('error');this.failure=code&&['invalid_scope','access_denied','invalid_client','invalid_request'].includes(code)?'mcp_oauth_'+code:'mcp_oauth_failed';return false;}
+  if(codes.length!==1)return false;
   this.pending.delete(states[0]);
-  if(Date.now()-pending.createdAt>600000||this.manager.config().revision!==pending.revision)return false;
+  if(Date.now()-pending.createdAt>600000){this.failure='mcp_oauth_expired';return false;}
+  if(this.manager.config().revision!==pending.revision){this.failure='mcp_config_changed';return false;}
   let ref:string|undefined;
   try {const record=await pending.flow.finish(codes[0]);ref=saveMcpOAuth(this.manager.dataDir,record);this.manager.saveMcpOAuth(pending.revision,pending.id,ref);return true;}
-  catch {if(ref)discardMcpOAuth(this.manager.dataDir,ref);return false;}
+  catch(error) {this.failure=oauthFailureCode(error);if(ref)discardMcpOAuth(this.manager.dataDir,ref);return false;}
  }
 }

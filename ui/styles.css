@@ -308,3 +308,6 @@ summary { cursor: pointer; font-size: 13px; color: #47657c; }
 :where(.form-section, .guide) details > summary { padding-block: 4px; }
 :where(.form-section, .guide) details > summary + * { margin-top: 12px; }
 :where(.form-section, .guide) .rt-TextAreaRoot { min-width: 0; }
+
+.mcp-scopes { margin-block: 18px; }
+.mcp-scopes code { overflow-wrap: anywhere; }

@@ -1,3 +1,4 @@
+import {McpScopes} from './McpScopes';
 import { useEffect, useState } from 'react';
 import { Badge, Button, Checkbox, Flex, Heading, Link, Text, TextField } from '@radix-ui/themes';
 import type { ConfigView, McpConnectionPatch } from '../src/ui-contract';
@@ -6,7 +7,7 @@ import { Field, Notice } from './components';
 import { api, message } from './api';
 import { t as tr } from './i18n';
 
-const mcpMessage=(error:unknown)=>{const value=message(error);return value==='codex_mcp_duplicate'?tr('mcp.importDuplicate'):value==='codex_mcp_config_changed'?tr('mcp.importChanged'):value==='codex_mcp_config_invalid'?tr('mcp.importInvalid'):value==='codex_mcp_selection_unsupported'?tr('mcp.importUnsupported'):value==='mcp_credential_target_changed'?tr('mcp.targetChanged'):value==='mcp_connection_failed'?tr('mcp.testFailed'):value==='mcp_config_changed'?tr('mcp.conflict'):value==='mcp_connection_not_enabled'?tr('mcp.notEnabled'):value==='mcp_invalid_config'?tr('mcp.invalid'):value==='mcp_oauth_failed'?tr('mcp.oauthFailed'):value;};
+const mcpMessage=(error:unknown)=>{const value=message(error);return value==='mcp_oauth_invalid_scope'?tr('mcp.scopeInvalid'):value==='mcp_oauth_scope'?tr('mcp.scopeGrantedMismatch'):value==='codex_mcp_duplicate'?tr('mcp.importDuplicate'):value==='codex_mcp_config_changed'?tr('mcp.importChanged'):value==='codex_mcp_config_invalid'?tr('mcp.importInvalid'):value==='codex_mcp_selection_unsupported'?tr('mcp.importUnsupported'):value==='mcp_credential_target_changed'?tr('mcp.targetChanged'):value==='mcp_connection_failed'?tr('mcp.testFailed'):value==='mcp_config_changed'?tr('mcp.conflict'):value==='mcp_connection_not_enabled'?tr('mcp.notEnabled'):value==='mcp_invalid_config'?tr('mcp.invalid'):value==='mcp_oauth_failed'?tr('mcp.oauthFailed'):value;};
 
 type Draft=McpConnectionPatch & {credentialConfigured:boolean;credentialSource?:'oauth'};
 const drafts=(c:ConfigView):Draft[] => (c.mcpConnections??[]).map(v=>({...v,newToken:''}));
@@ -47,6 +48,7 @@ export function McpSettings({config,refresh,expired}:{config:ConfigView;refresh:
     <Text as="p" size="2" color="gray">{tr('mcp.accessNote')}</Text>
     {error&&<Notice error>{error}</Notice>}{notice&&<Notice>{notice}</Notice>}{conflict&&<Notice>{tr('mcp.conflict')}</Notice>}
     <form onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');try{
+      if(items.some(item=>!/^[a-z][a-z0-9_-]{0,47}$/.test(item.id)))throw new Error(tr('mcp.invalidId'));
       const patch=items.map(({credentialConfigured:_,credentialSource:_source,...item})=>item);
       const saved=await api.saveMcp(revision,patch);reset(saved);setNotice(tr('mcp.saved'));await refresh();
     }catch(e){setError(mcpMessage(e));}finally{setBusy(false);}}}>
@@ -67,7 +69,7 @@ export function McpSettings({config,refresh,expired}:{config:ConfigView;refresh:
             <summary>{tr('mcp.advancedSettings')}</summary>
             <Field label={tr('mcp.id')} htmlFor={`mcp-id-${index}`}><TextField.Root id={`mcp-id-${index}`} value={item.id} disabled={item.credentialConfigured} onChange={e=>update(index,{id:e.target.value})}/></Field>
             <Field label={tr('mcp.remoteUrl')} htmlFor={`mcp-url-${index}`}><TextField.Root id={`mcp-url-${index}`} value={item.url??''} placeholder="https://example.com/mcp" onChange={e=>update(index,{url:e.target.value})}/></Field>
-            <Field label={tr('mcp.oauthScope')} htmlFor={`mcp-scope-${index}`}><TextField.Root id={`mcp-scope-${index}`} value={item.oauthScope??''} onChange={e=>update(index,{oauthScope:e.target.value})} placeholder={tr('mcp.oauthScopePlaceholder')}/></Field>
+            <McpScopes url={item.url??''} revision={revision} value={item.oauthScope??''} onChange={oauthScope=>update(index,{oauthScope})}/>
             <Text as="label" size="2"><Flex gap="2" align="center"><Checkbox checked={item.enabled} onCheckedChange={v=>update(index,{enabled:v===true})}/>{tr('mcp.remoteEnabled')}</Flex></Text>
             <Field label={tr('mcp.remoteAuth')} htmlFor={`mcp-token-${index}`}><TextField.Root id={`mcp-token-${index}`} type="password" autoComplete="new-password" value={item.newToken??''} onChange={e=>update(index,{newToken:e.target.value,clearToken:false})} placeholder={item.credentialConfigured?(item.credentialSource==='oauth'?tr('mcp.oauthConfigured'):tr('mcp.configured')):tr('mcp.remoteTokenPlaceholder')}/></Field>
             {item.credentialConfigured&&<Text as="label" size="2"><Flex gap="2" align="center"><Checkbox checked={item.clearToken??false} onCheckedChange={v=>update(index,{clearToken:v===true,newToken:'',...(v===true?{enabled:false}:{})})}/>{tr('mcp.clearAuthorization')}</Flex></Text>}
