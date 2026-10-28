@@ -1,5 +1,7 @@
+import { SectionHeading } from './PageSection';
+import { SettingToggle } from './SettingToggle';
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Button, Checkbox, Flex, Heading, Text } from '@radix-ui/themes';
+import { Badge, Button, Flex, Text } from '@radix-ui/themes';
 import type { CodexUpdateStatus } from '../../src/ui-contract';
 import { api, ApiError } from '../api';
 import { ConfirmButton, Notice } from '../components';
@@ -81,9 +83,9 @@ export function CodexUpdatePanel({ configRevision, disabled }: { configRevision:
     idle: 'codexUpdate.idle', checking: 'codexUpdate.checking', installing: 'codexUpdate.installing',
     deferred: 'codexUpdate.deferred', failed: 'codexUpdate.failed',
   };
-  return <section className="form-section" aria-labelledby="codex-update-title">
+  return <section className="page-panel" aria-labelledby="codex-update-title">
     <div className="section-title">
-      <Heading as="h2" size="4" id="codex-update-title">{tr('codexUpdate.title')}</Heading>
+      <SectionHeading icon="refresh" id="codex-update-title" title={tr('codexUpdate.title')} />
       {status && <Badge color={status.managed ? 'green' : 'gray'}>{tr(status.managed ? 'codexUpdate.managed' : 'codexUpdate.external')}</Badge>}
     </div>
     <Text as="p" size="2" color="gray">{tr('codexUpdate.help')}</Text>
@@ -111,10 +113,6 @@ export function CodexUpdatePanel({ configRevision, disabled }: { configRevision:
         <Icon name="reset" />{tr('codexUpdate.rollback')}
       </ConfirmButton>
     </Flex>
-    <div className="checks"><Text as="label" size="2">
-      <Checkbox checked={status?.automatic === true} disabled={unavailable} onCheckedChange={value => void act('automatic', value === true)} />
-      {tr('codexUpdate.automatic')}
-    </Text></div>
-    <Text as="p" size="1" color="gray">{tr('codexUpdate.automaticHelp')}</Text>
+    <div className="setting-options"><SettingToggle icon="refresh" title={tr('codexUpdate.automatic')} description={tr('codexUpdate.automaticHelp')} checked={status?.automatic === true} disabled={unavailable} onChange={value => void act('automatic', value)} /></div>
   </section>;
 }

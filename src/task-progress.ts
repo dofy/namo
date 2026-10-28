@@ -5,10 +5,15 @@ import { readEvidence } from './evidence.js';
 
 export type ActivityPhase = 'connecting' | 'working' | 'command' | 'file' | 'tool' | 'answering';
 const labels: Record<string, string> = { queued:'排队中', connecting:'正在连接执行器', working:'正在处理', command:'正在运行命令', file:'正在修改文件', tool:'正在调用工具', answering:'正在整理回复', waiting:'等待你补充', succeeded:'已完成', failed:'执行失败', cancelled:'已停止', interrupted:'运行中断', needs_attention:'需要核对', lost:'执行器失联', finishing:'执行已结束，正在整理回复', execution_failed:'执行未完成，正在整理结果' };
+export function taskElapsed(task:Task, now=Date.now()):string {
+  if (!task.startedAt) return '尚未开始';
+  const seconds=Math.max(0,Math.floor(((task.finishedAt??now)-task.startedAt)/1000));
+  return seconds<60?`${seconds} 秒`:seconds<3600?`${Math.floor(seconds/60)} 分 ${seconds%60} 秒`:`${Math.floor(seconds/3600)} 小时 ${Math.floor(seconds%3600/60)} 分 ${seconds%60} 秒`;
+}
 export function recordActivity(store: Store, runId: string, phase: ActivityPhase): void {
   store.db.prepare('INSERT INTO run_activity(runId,phase,updatedAt) VALUES(?,?,?) ON CONFLICT(runId) DO UPDATE SET phase=excluded.phase,updatedAt=excluded.updatedAt').run(runId,phase,Date.now());
 }
-export function progressState(store: Store, task: Task, now = Date.now(), timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone): { phase: string; content: string; terminal: boolean; revision: string } {
+export function progressState(store: Store, task: Task, now = Date.now(), timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone): { phase: string; content: string; terminal: boolean; revision: string; totals?: ReturnType<typeof progressTotals> } {
   const run = store.db.prepare(`SELECT r.id,a.phase,a.updatedAt,j.state AS worker,j.updatedAt AS heartbeat FROM task_runs r LEFT JOIN run_activity a ON a.runId=r.id LEFT JOIN runner_jobs j ON j.runId=r.id WHERE r.taskId=? ORDER BY r.rowid DESC LIMIT 1`).get(task.id);
   const terminal = !['queued','running','waiting'].includes(task.state);
   const phase = terminal || task.state !== 'running' ? task.state : run?.worker === 'lost' ? 'lost'
@@ -16,16 +21,14 @@ export function progressState(store: Store, task: Task, now = Date.now(), timeZo
   const executing = task.state==='running'&&!['lost','finishing','execution_failed'].includes(phase);
   const stamp = (time: number) => new Intl.DateTimeFormat('sv-SE', {timeZone,year:'numeric',month:'2-digit',day:'2-digit',
     hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(time);
-  const seconds = task.startedAt ? Math.max(0,Math.floor(((task.finishedAt??now)-task.startedAt)/1000)) : 0;
-  const elapsed = !task.startedAt ? '尚未开始' : seconds<60 ? `${seconds} 秒`
-    : seconds<3600 ? `${Math.floor(seconds/60)} 分 ${seconds%60} 秒` : `${Math.floor(seconds/3600)} 小时 ${Math.floor(seconds%3600/60)} 分 ${seconds%60} 秒`;
+  const elapsed = taskElapsed(task,now);
   const progress = run ? readProgress(store,String(run.id)) : undefined;
   const revision=`${task.inputVersion}:${run?.id??''}:${phase}:${progress?.revision??0}`;
   const times=[`**开始时间**：${task.startedAt?stamp(task.startedAt):'尚未开始'}`,
     ...(terminal&&task.finishedAt?[`**结束时间**：${stamp(task.finishedAt)}`]:[]),`本地时间 · ${timeZone}`];
   if(terminal){
     const totals=progressTotals(store,task.id),plan=totals.plan;
-    return {phase,terminal,revision,content:[`**${labels[phase]??'状态待核对'} · 总用时：${elapsed}**`,times.join('\n'),
+    return {phase,terminal,revision,totals,content:[`**${labels[phase]??'状态待核对'} · 总用时：${elapsed}**`,times.join('\n'),
       '**执行统计**',
       plan?`📋 计划步骤：${plan.completed} / ${plan.total} 已完成（模型计划）`:'📋 计划步骤：未提供结构化计划',
       `🔧 已记录工具步骤：${totals.total} 次${totals.limited?'（记录有限）':''}`,

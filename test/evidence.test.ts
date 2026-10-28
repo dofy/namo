@@ -12,7 +12,7 @@ import { EvidenceRecorder, projectEvidenceItem, readEvidence, evidenceSummary } 
 import { makeRedactor } from '../src/safety.js';
 import { Cards } from '../src/cards.js';
 import { GitHubRestAdapter } from '../src/external-waits.js';
-import { parseReviewArguments } from '../src/github-review.js';
+import { parseReviewArguments, parseReviewContext } from '../src/github-review.js';
 
 function fixture(t: { after(fn: () => void): void }) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'namo-evidence-'))), cwd = join(dir, 'project');
@@ -178,4 +178,55 @@ test('review caps file pages and bytes and fails without exposing raw response t
   let requests=0;const adapter=new GitHubRestAdapter({fetch:async url=>{requests++;return Response.json(String(url).includes('/files?')?Array.from({length:100},(_,i)=>({...file,filename:`file-${requests}-${i}`})):{...pull,changed_files:250});}});
   const result=await adapter.review(target,Date.now()+5000);assert.equal(result.files.length,200);assert.equal(result.totalFiles,250);assert.equal(result.limited,true);assert.equal(requests,4);
   await assert.rejects(new GitHubRestAdapter({fetch:async()=>new Response('secret error',{status:500})}).review(target,Date.now()+5000),e=>e instanceof Error&&e.message==='github_read_failed');
+});
+
+test('review batches resume across files and oversized patches without losing data', async()=>{
+  const patch='@@ -0,0 +1,1 @@\n+'+'x'.repeat(18000);
+  const all=Array.from({length:12},(_,i)=>({...file,filename:`file-${i}`,patch:i===2?patch:file.patch,additions:1,deletions:i===2?0:1}));
+  const adapter=new GitHubRestAdapter({fetch:async url=>{
+    const u=new URL(String(url));
+    return Response.json(u.pathname.endsWith('/files')?all.slice((Number(u.searchParams.get('page'))-1)*10,Number(u.searchParams.get('page'))*10):{...pull,changed_files:all.length});
+  }});
+  let cursor: {baseSha:string;headSha:string;index:number;offset:number}|undefined;
+  const parts=new Map<string,string>(); let count=0;
+  do {
+    const batch=await adapter.reviewBatch(target,Date.now()+5000,cursor); count++;
+    for(const f of batch.files) { const name=String(f.path); parts.set(name,(parts.get(name)??'')+String(f.patch)); assert.equal(f.sourceLimited,false); }
+    cursor=batch.next??undefined;
+    assert.ok(count<10);
+  } while(cursor);
+  assert.equal(parts.size,12); assert.equal(parts.get('file-2'),patch); assert.ok(count>2);
+});
+
+test('review batches reject moved revisions and disclose unavailable patches and file cap',async()=>{
+  const adapter=new GitHubRestAdapter({fetch:async url=>Response.json(String(url).includes('/files?')?[{...file,patch:undefined}]:{...pull,changed_files:3001})});
+  const batch=await adapter.reviewBatch(target,Date.now()+5000);
+  assert.equal(batch.files[0].sourceLimited,true); assert.equal(batch.fileListLimited,true);
+  await assert.rejects(adapter.reviewBatch(target,Date.now()+5000,{baseSha:'c'.repeat(40),headSha:pull.head.sha,index:0,offset:0}),/head_changed/);
+});
+
+test('review context reads pinned source in chunks and rejects binary or changed revisions',async()=>{
+  const content='first\n'+'x'.repeat(9000)+'\nlast';
+  let moved=false, binary=false; const requests:string[]=[];
+  const adapter=new GitHubRestAdapter({fetch:async url=>{requests.push(String(url));return Response.json(String(url).includes('/contents/')?{type:'file',encoding:'base64',size:binary?1:Buffer.byteLength(content),content:Buffer.from(binary?'\0':content).toString('base64')}:{...pull,...(moved?{head:{sha:'c'.repeat(40)}}:{})});}});
+  const context={baseSha:pull.base.sha,headSha:pull.head.sha,path:'src/app.ts',side:'head' as const,offset:0};
+  const first=await adapter.reviewContext(target,Date.now()+5000,context);
+  const second=await adapter.reviewContext(target,Date.now()+5000,first.context.next!);
+  assert.equal(first.context.text+second.context.text,content);assert.equal(second.context.next,null);
+  assert.ok(requests.some(u=>u.endsWith('/contents/src/app.ts?ref='+pull.head.sha)));
+  binary=true;await assert.rejects(adapter.reviewContext(target,Date.now()+5000,context),/context_unavailable/);
+  moved=true;await assert.rejects(adapter.reviewContext(target,Date.now()+5000,context),/head_changed/);
+});
+
+test('recognized PR reads record safe metadata without claiming missing execution',()=>{
+  const item=projectEvidenceItem({id:'pr-read',type:'dynamicToolCall',tool:'read_pull_request',status:'completed',arguments:{secret:'private'},contentItems:['private code']});
+  assert.equal(item?.limited,undefined);assert.match(item!.label,/正文不保存/);assert.doesNotMatch(JSON.stringify(item),/private/);
+});
+
+
+test('review context rejects traversal, unpinned revisions and invalid offsets',()=>{
+  const valid={baseSha:pull.base.sha,headSha:pull.head.sha,path:'src/app.ts',side:'head',offset:0};
+  assert.deepEqual(parseReviewContext(valid),valid);
+  for(const patch of [{path:'../config'},{path:'/etc/passwd'},{path:'a//b'},{path:'a\\b'},{headSha:'main'},{offset:-1},{offset:1.5},{side:'other'},{extra:true}])
+    assert.throws(()=>parseReviewContext({...valid,...patch}),/invalid_context/);
 });

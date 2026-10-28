@@ -1,4 +1,5 @@
 import { t as tr, getLocale } from '../i18n';
+import { PageSection, EmptyState } from '../components/PageSection';
 import { Icon } from '../Icon';
 import { useEffect, useRef, useState } from 'react';
 import { Badge, Button, Text, TextField } from '@radix-ui/themes';
@@ -61,12 +62,12 @@ export function ProfilesPage({ profiles, expired, refresh }: { profiles: Profile
       try { await refresh(); } catch { setNotice(tr("profiles.profileSavedButRefreshFailedRefreshLater")); }
     } finally { setBusy(false); }
   }
-  return <div className="profiles-page">
+  return <div className="profiles-page user-profiles-page">
     <Text as="p" size="2" color="gray">{tr("profiles.enableProfileUseAssistantSettingsApplyThese")}</Text>
     {!profiles.available && <Notice>{profiles.reason}</Notice>}
-    {profiles.available && !profiles.entries.length && <Notice>{tr("profiles.noPairedUsersYetRunNamoInit")}</Notice>}
+    {profiles.available && !profiles.entries.length && <EmptyState icon="profiles" title={tr("profiles.noPairedUsersYetRunNamoInit")} />}
     {selected && <>
-      <Field label={tr("profiles.pairedUser")} htmlFor="profile-user"><Choice id="profile-user" value={key(selected)} disabled={dirty || busy || !profiles.available}
+      <PageSection icon="profiles" title={tr("design.profileUser")}><Field label={tr("profiles.pairedUser")} htmlFor="profile-user"><Choice id="profile-user" value={key(selected)} disabled={dirty || busy || !profiles.available}
         onChange={value => { const next = profiles.entries.find(p => key(p) === value); reset(next, profiles.configRevision); setNotice(''); }}
         options={(current ? profiles.entries : [selected, ...profiles.entries]).map(p => ({ value: key(p), label: p.name && profiles.entries.filter(other => other.name === p.name).length === 1 ? p.name : `${p.name || tr("profiles.nameNotSet")} · …${p.userId.slice(-8)}` }))} /></Field>
       <details className="profile-account"><summary>{tr("profiles.accountDetails")}</summary>
@@ -77,7 +78,9 @@ export function ProfilesPage({ profiles, expired, refresh }: { profiles: Profile
       {(!current || revision !== profiles.configRevision) && <Notice>{tr("profiles.pairingAppConfigurationChangedDraftPreservedDiscard")}</Notice>}
       {current && selected.version !== current.version && dirty && <Notice>{tr("profiles.newerVersionProfileExistsDraftPreservedReview")}</Notice>}
       {notice && <Notice>{notice}</Notice>}{error && <Notice error>{error}</Notice>}
-      <UserModelSettings key={key(selected)} profile={current ?? selected} revision={revision} editable={editable} refresh={refresh} />
+      </PageSection>
+      <PageSection icon="assistant" title={tr("design.profileModel")} description={tr("design.profileModelHelp")}><UserModelSettings key={key(selected)} profile={current ?? selected} revision={revision} editable={editable} refresh={refresh} /></PageSection>
+      <PageSection icon="profiles" title={tr("design.profileIdentity")} description={tr("design.profileIdentityHelp")}>
       <form onSubmit={async event => { event.preventDefault(); if (busy) return; try { await save(draft); } catch (e) { setError(message(e)); } }}>
         <fieldset disabled={busy || !editable}>
           <Field label={tr("profiles.preferredName")} htmlFor="profile-name"><TextField.Root id="profile-name" value={draft.name} maxLength={160} placeholder={tr("profiles.exampleSeven")} onChange={event => { setDraft(p => ({ ...p, name: event.target.value })); setDirty(true); }} /></Field>
@@ -87,7 +90,7 @@ export function ProfilesPage({ profiles, expired, refresh }: { profiles: Profile
           </div>
           <Text as="p" size="1" color="gray">{tr("profiles.upCharactersNameLeaveBlankUnsetNot")}</Text>
         </fieldset>
-        <div className="profile-save">
+        <div className="profile-save" data-dirty={dirty}>
           <Text as="p" size="2" color="gray">{selected.version ? tr("profiles.savedVersion", selected.version) : tr("profiles.noSavedProfile")}{selected.updatedAt ? ` · ${new Date(selected.updatedAt).toLocaleString(getLocale())}` : ''}</Text>
           <div className="profile-save-actions"><Button type="submit" disabled={!dirty || !editable} loading={busy}><Icon name="save" />{tr("profiles.save")}</Button>
           <ConfirmButton disabled={busy || expired} title={tr("profiles.reloadSavedProfile")} description={tr("profiles.unsavedDraftDiscarded")} action={tr("profiles.loadSavedProfile")} onConfirm={async () => {
@@ -101,6 +104,7 @@ export function ProfilesPage({ profiles, expired, refresh }: { profiles: Profile
         {selected.changes.map(change => <div key={change.version}><Text as="p" size="2">{tr("common.version")} {change.version} · {change.fields.map(f => labels[f]).join('、')} · {change.source === 'self' ? tr("profiles.ownersFeishuLarkDirectMessage") : tr("profiles.localWorkbench")}</Text>
           <Text size="1" color="gray">{new Date(change.createdAt).toLocaleString(getLocale())}{change.sourceRef ? tr("profiles.sourceMessage", change.sourceRef) : ''}</Text></div>)}
       </div></details>}
+      </PageSection>
     </>}
   </div>;
 }

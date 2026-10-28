@@ -23,9 +23,10 @@ function healthy(db: DatabaseSync): void {
   const integrity = db.prepare('PRAGMA integrity_check').all();
   if (integrity.length !== 1 || integrity[0]?.integrity_check !== 'ok' || db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('backup_database_invalid');
 }
-/** Must own the config and receiver locks before any release mutation.
+/** Must own the config lock and (except live-upgrade) receiver lock.
+ * Live backups preserve a read snapshot and never restore over newer receipts.
  * Install requires an absent plist; upgrade requires an existing one. */
-export async function createUpgradeBackup(c: Config, plist: string, operation: 'upgrade' | 'install' = 'upgrade'): Promise<string> {
+export async function createUpgradeBackup(c: Config, plist: string, operation: 'upgrade' | 'install' | 'live-upgrade' = 'upgrade'): Promise<string> {
   let directory: string | undefined;
   try {
     if (operation === 'install' && existsSync(plist)) throw new Error('backup_source_changed');
@@ -35,7 +36,7 @@ export async function createUpgradeBackup(c: Config, plist: string, operation: '
     const id = `${operation}-${Date.now()}-${randomUUID()}`;
     directory = join(root, '.' + id + '.pending'); mkdirSync(directory, { mode: 0o700 });
     const sources = [ [c.file, 'config.json'], [plist, 'launch-agent.plist'],
-      [join(c.dataDir, 'service.json'), 'service.json'], [join(c.dataDir, 'service-bootstrap.mjs'), 'service-bootstrap.mjs'] ];
+      [join(c.dataDir, 'service.json'), 'service.json'], [join(c.dataDir, 'active-runtime.json'), 'active-runtime.json'], [join(c.dataDir, 'service-bootstrap.mjs'), 'service-bootstrap.mjs'] ];
     const files: { source: string; name: string; sha256: string }[] = [];
     for (const [source, name] of sources) {
       if (operation === 'install' && name === 'launch-agent.plist') continue;
@@ -51,6 +52,8 @@ export async function createUpgradeBackup(c: Config, plist: string, operation: '
       regular(database); if (statSync(database).size === 0) throw new Error('backup_database_empty');
       const source = new DatabaseSync(database, { readOnly: true });
       try {
+        // A WAL read snapshot remains consistent while the receiver accepts new messages.
+        if (operation === 'live-upgrade') source.exec('BEGIN');
         healthy(source); fingerprint = databaseFingerprint(source);
         const target = join(directory, 'bot.sqlite');
         await sqlite.backup(source, target); regular(target); chmodSync(target, 0o600);
@@ -59,6 +62,7 @@ export async function createUpgradeBackup(c: Config, plist: string, operation: '
         try { healthy(copy); if (databaseFingerprint(copy) !== fingerprint) throw new Error('backup_database_mismatch'); }
         finally { copy.close(); }
         if (databaseFingerprint(source) !== fingerprint) throw new Error('backup_source_changed');
+        if (operation === 'live-upgrade') source.exec('COMMIT');
         syncFile(target);
       } finally { source.close(); }
     }

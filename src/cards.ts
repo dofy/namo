@@ -4,8 +4,8 @@ import { Tasks, type Task } from './tasks.js';
 import { digest } from './paths.js';
 import { readEvidence } from './evidence.js';
 import { hasExecution, taskStateLabel, taskStatus } from './presentation.js';
-import { progressState } from './task-progress.js';
-import { cardMarkdown, hasMarkdown, openFence } from './richtext.js';
+import { progressState, taskElapsed } from './task-progress.js';
+import { cardMarkdown, resultMarkdown, hasMarkdown, openFence } from './richtext.js';
 import { Waits, WaitInputError, linkedExternalWait } from './waits.js';
 
 export interface CardEvent { operator?: { open_id?: string; tenant_key?: string }; context?: { open_chat_id?: string; open_message_id?: string }; action?: { value?: { namo?: string } }; }
@@ -24,10 +24,28 @@ export function renderTaskListCard(content:string): object | undefined {
     rendered.push(`<font color='${colors[state]}'>${state}</font>${project ? ` · ${project}` : ''} · \`/task ${id}\``);
   }
   if(!rendered.length)return;
-  return {config:{wide_screen_mode:true},elements:[{tag:'markdown',content:rendered.join('\n')}]};
+  return {schema:'2.0',config:{update_multi:true},body:{elements:[{tag:'markdown',content:rendered.join('\n')}]}};
 }
-export function renderTaskCard(t: Task, content: string, kind: string, part: number, actions: { action:string; token:string; label?: string }[] = []): object {
+export function renderTaskCard(t: Task, content: string, kind: string, part: number, actions: { action:string; token:string; label?: string }[] = [], totals?: ReturnType<typeof progressState>['totals']): object {
+  // Retire the live progress surface without competing with the durable result.
+  // Do not claim delivery: the independent result send may still be pending.
+  if (kind==='progress' && !['queued','running','waiting'].includes(t.state)) {
+    const state=t.state==='succeeded'?'处理结束':t.state==='failed'?'执行失败':taskStateLabel(t.state);
+    const summary=[`${state} · 用时：${taskElapsed(t)}`,
+      ...(totals?[`工具调用 ${totals.total} 次${totals.limited?'（记录有限）':''}`,
+        ...(totals.failed?[`失败 ${totals.failed} 次`]:[]),...(totals.unknown?[`未确认 ${totals.unknown} 次`]:[])]:[])].join(' · ');
+    return {config:{wide_screen_mode:true,update_multi:true},elements:[{tag:'note',elements:[plain(summary)]}]};
+  }
   const title=part?'回复（续）':kind==='external-wait'?'等待外部检查':taskStateLabel(t.state);
+  if (kind==='result') return {
+    schema:'2.0',config:{update_multi:true},
+    header:{title:plain(title),template:t.state==='succeeded'?'green':t.state==='cancelled'?'grey':'orange'},
+    body:{elements:[{tag:'markdown',content:resultMarkdown(content)},
+      ...(t.project&&!part?[{tag:'div',text:{...plain(`项目：${t.project}`),text_size:'notation'}}]:[]),
+      ...actions.map(a=>({tag:'button',text:plain(a.label??(a.action==='cancel'?'停止任务':'查看详情')),type:'default',
+        behaviors:[{type:'callback',value:{namo:a.token}}],
+        ...(a.action==='cancel'?{confirm:{title:plain('停止这项任务？'),text:plain('已发生的操作不会自动撤销。')}}:{})}))]},
+  };
   const body=(kind==='result'||kind==='progress')&&hasMarkdown(content)?{tag:'markdown',content:cardMarkdown(content)}:{tag:'div',text:plain(content)};
   const answers=actions.filter(a=>a.action.startsWith('answer:')),controls=actions.filter(a=>!a.action.startsWith('answer:'));
   const buttons=(group:typeof actions)=>({tag:'action',actions:group.map(a=>({tag:'button',text:plain(a.label??(a.action==='cancel'?'停止任务':'查看详情')),type:a.action.startsWith('answer:')?'primary':'default',value:{namo:a.token},
@@ -56,14 +74,15 @@ export class Cards {
         ...(['queued','running','waiting'].includes(task.state)?[{action:'cancel'}]:[])].map(a=>({...a,token:randomBytes(24).toString('base64url')}));
       for(const a of actions) this.store.db.prepare('INSERT INTO card_actions(token,outboxId,taskId,action,inputVersion,expiresAt) VALUES(?,?,?,?,?,?)')
         .run(a.token,output.id,task.id,a.action,task.inputVersion,Date.now()+900_000);
-      const content=output.kind==='progress'?progressState(this.store,task).content:choices&&!output.part?`${wait!.question}\n\n点击下面的答案继续，也可以引用这条消息自由回复。`:output.content;
+      const progress=output.kind==='progress'?progressState(this.store,task):undefined;
+      const content=progress?progress.content:choices&&!output.part?`${wait!.question}\n\n点击下面的答案继续，也可以引用这条消息自由回复。`:output.content;
       const prefix=output.part?this.store.db.prepare('SELECT content FROM outbox WHERE inboxKey=? AND kind=? AND part<? ORDER BY part').all(output.inboxKey,output.kind,output.part).map(row=>String(row.content)).join(''):'';
       const fence=output.kind==='result'?openFence(prefix):undefined;
       const display=(fence?fence+'\n':'')+content;
-      const payload=renderTaskCard(task,display,wait&&linkedExternalWait(this.store,wait.id)?'external-wait':output.kind,output.part,actions);
+      const payload=renderTaskCard(task,display,wait&&linkedExternalWait(this.store,wait.id)?'external-wait':output.kind,output.part,actions,progress?.totals);
       // Receipt text is not host formatting. Keep it literal beside the
       // structured Markdown progress block, including on the first card.
-      if(output.kind==='progress'&&output.content)(payload as {elements:unknown[]}).elements.unshift({tag:'div',text:plain(output.content)});
+      if(output.kind==='progress'&&output.content&&['queued','running','waiting'].includes(task.state))(payload as {elements:unknown[]}).elements.unshift({tag:'div',text:plain(output.content)});
       this.store.db.prepare('UPDATE outbox SET payload=? WHERE id=?').run(JSON.stringify(payload),output.id);
       return payload;
     });

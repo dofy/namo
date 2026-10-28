@@ -14,6 +14,7 @@ import { digest, readJson, atomicJson } from './paths.js';
 import { probeAgent } from './agents.js';
 import { createRuntimeRelease, sourcePackageRoot, verifyRuntimeRelease, type RuntimeRelease } from './release.js';
 import { SCHEMA_VERSION } from './store.js';
+import { activeRuntimeId, assertLiveCompatible, runtimeRelease, requestLiveUpgrade } from './live-upgrade.js';
 import { createUpgradeBackup } from './upgrade-backup.js';
 import { acquireLock } from './safety.js';
 
@@ -50,6 +51,11 @@ export function verifyServiceRegistration(c: Config, plist: string): RegisteredS
     const bootstrap = join(c.dataDir, 'service-bootstrap.mjs');
     if (lstatSync(bootstrap).isSymbolicLink() || createHash('sha256').update(readFileSync(bootstrap)).digest('hex')
       !== manifest.files.find(file => file.path === 'dist/src/service-bootstrap.js')?.sha256) throw new Error('bootstrap');
+    const activeId = activeRuntimeId(c.dataDir,record.release.id);
+    if(activeId!==record.release.id) {
+      const active=runtimeRelease(c.dataDir,activeId);
+      assertLiveCompatible(manifest,verifyRuntimeRelease(active.root,active.id));
+    }
     const installed = readFileSync(plist, 'utf8');
     if (installed !== renderLaunchAgent(c, record.label, record.release.entry, record.node, record.path, record.release)) throw new Error('plist');
     return record;
@@ -154,11 +160,14 @@ export function serviceStatus(c: Config, verifyRelease = false): Record<string, 
   const saved = serviceRecord(c);
   if (saved?.format === 2 && typeof saved.release?.id === 'string' && /^[a-f0-9]{64}$/.test(saved.release.id)) {
     const releaseId = saved.release.id;
-    installedRelease = releaseId;
+    try { installedRelease = activeRuntimeId(c.dataDir,releaseId); } catch { releaseVerified = false; }
     if (verifyRelease) {
       try {
         if (realpathSync(saved.release.root) !== realpathSync(join(c.dataDir, 'releases', releaseId))) throw new Error('path');
-        verifyRuntimeRelease(saved.release.root, releaseId); releaseVerified = true;
+        const host=verifyRuntimeRelease(saved.release.root, releaseId);
+        const active=runtimeRelease(c.dataDir,activeRuntimeId(c.dataDir,releaseId));
+        if(active.id!==releaseId)assertLiveCompatible(host,verifyRuntimeRelease(active.root,active.id));
+        releaseVerified = true;
       } catch { releaseVerified = false; }
     }
   }
@@ -166,7 +175,9 @@ export function serviceStatus(c: Config, verifyRelease = false): Record<string, 
   return { platform: process.platform, supported: process.platform === 'darwin', label, installed: existsSync(plistFile(label)), registered,
     running: live, mode: registered ? 'background' : live ? 'foreground' : 'stopped', pid, connection: live && health?.pid === pid ? health.connection : 'unknown',
     ready: live && health?.pid === pid && health.ready === true, config: c.file,
-    release: { installed: installedRelease, running: runningRelease, verified: releaseVerified,
+    liveUpgrade: live && health?.pid === pid && health.liveUpgradeVersion === 1,
+    upgrading: live && health?.pid === pid && health.upgrading === true,
+    release: { installed: installedRelease, running: runningRelease, receiver: saved?.release?.id, verified: releaseVerified,
       matches: installedRelease && runningRelease ? installedRelease === runningRelease : undefined } };
 }
 export async function serviceAction(action: string, c: Config): Promise<Record<string, unknown>> {
@@ -213,7 +224,17 @@ export async function serviceAction(action: string, c: Config): Promise<Record<s
     const finishUpgrade = acquireLock(join(c.dataDir, 'config-edit.lock'));
     try {
       const state = serviceStatus(c, false);
-      if (state.registered || activeData(c.dataDir)) throw new Error(tr("service.safeUpgradeRequiresStoppedServiceRunNamo"));
+      if (state.registered || activeData(c.dataDir)) {
+        if (!state.ready || !state.liveUpgrade) throw new Error('live_upgrade_receiver_not_supported_service_kept_running');
+        const record=verifyServiceRegistration(c,plist);
+        const release=createRuntimeRelease(sourcePackageRoot(import.meta.url),join(c.dataDir,'releases'));
+        assertLiveCompatible(verifyRuntimeRelease(record.release.root,record.release.id),verifyRuntimeRelease(release.root,release.id));
+        const from=activeRuntimeId(c.dataDir,record.release.id);
+        if(from===release.id)return {...serviceStatus(c,true),upgrade:{mode:'live',unchanged:true}};
+        upgradeBackup=await createUpgradeBackup(c,plist,'live-upgrade');
+        const receipt=await requestLiveUpgrade(c,record.release.id,from,release.id);
+        return {...serviceStatus(c,true),upgrade:{mode:'live',state:receipt.state},backup:{path:upgradeBackup,verified:true}};
+      }
       const finishReceiver = acquireLock(c.dataDir);
       try {
         if (serviceStatus(c, false).registered) throw new Error(tr("service.serviceStopStateChangedReleaseNotSwitched"));
@@ -226,6 +247,7 @@ export async function serviceAction(action: string, c: Config): Promise<Record<s
         const record = registration(c, label, release);
         replacePlist(join(c.dataDir, 'service-bootstrap.mjs'), readFileSync(join(release.root, 'dist/src/service-bootstrap.js'), 'utf8'), 0o400);
         atomicJson(join(c.dataDir, 'service.json'), record);
+        if(existsSync(join(c.dataDir,'active-runtime.json')))unlinkSync(join(c.dataDir,'active-runtime.json'));
         replacePlist(plist, renderLaunchAgent(c, label, release.entry, record.node, record.path, release));
       } finally { finishReceiver(); }
     } finally { finishUpgrade(); }

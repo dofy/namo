@@ -38,7 +38,7 @@ test('progress uses explicit local time and literal public text within a Markdow
   assert.match(state.content,/2026-10-27 12:12:51/);assert.match(state.content,/Asia\/Shanghai/);
   assert.doesNotMatch(state.content,/04:12:51|UTC|<at/);assert.match(state.content,/52 秒/);
   assert.ok(state.content.includes('\\*\\*unsafe\\*\\*'));
-  const card=renderTaskCard(f.tasks.get(f.task.id)!,state.content,'progress',0) as any;
+  const card=renderTaskCard(f.tasks.get(f.task.id)!,state.content,'progress',0,[],state.totals) as any;
   assert.equal(card.elements[0].tag,'markdown');assert.match(card.elements[0].content,/\*\*最近进展\*\*/);
   const newYork=progressState(f.store,f.tasks.get(f.task.id)!,f.start+52_000,'America/New_York');
   assert.match(newYork.content,/2026-10-27 00:12:51/);
@@ -60,8 +60,12 @@ test('terminal summary removes progress and counts tools across runs, not claims
   assert.match(state.content,/总用时：1 分 40 秒/);assert.match(state.content,/1 \/ 2 已完成/);
   assert.match(state.content,/成功 2 · ❌ 失败 1 · ⚪ 未确认 2/);
   assert.doesNotMatch(state.content,/最近进展|最近活动|状态核对|私人进展|86项/);
-  const card=renderTaskCard(f.tasks.get(f.task.id)!,state.content,'progress',0) as any;
-  assert.equal(card.header.template,'green');assert.equal(card.elements[0].tag,'markdown');
+  const card=renderTaskCard(f.tasks.get(f.task.id)!,state.content,'progress',0,[],state.totals) as any;
+  assert.equal(card.header,undefined);assert.equal(card.elements[0].tag,'note');
+  assert.match(JSON.stringify(card),/处理结束 · 用时：1 分 40 秒 · 工具调用 5 次 · 失败 1 次 · 未确认 2 次/);
+  assert.doesNotMatch(JSON.stringify(card),/已完成|执行统计|成功 2|开始时间|停止任务/);
+  const result=renderTaskCard(f.tasks.get(f.task.id)!,'actual result','result',0) as any;
+  assert.equal(result.header.title.content,'已完成');assert.match(JSON.stringify(result),/actual result/);
 });
 
 test('bounded and legacy projections label incomplete statistics explicitly',t=>{
@@ -72,6 +76,9 @@ test('bounded and legacy projections label incomplete statistics explicitly',t=>
   const state=progressState(f.store,f.tasks.get(f.task.id)!);
   assert.match(state.content,/记录有限|不能视为完整总量/);assert.match(state.content,/未提供结构化计划/);
   assert.doesNotMatch(state.content,/最近进展/);
+  const card=renderTaskCard(f.tasks.get(f.task.id)!,state.content,'progress',0,[],state.totals);
+  assert.match(JSON.stringify(card),/工具调用 256 次（记录有限）/);
+  assert.doesNotMatch(JSON.stringify(card),/失败 0|未确认 0/);
   const report=readProgress(f.store,f.run)!;
   delete report.limited;for(const entry of report.seen){delete entry.kind;delete entry.outcome;}
   f.store.db.prepare('UPDATE run_progress SET report=? WHERE runId=?').run(JSON.stringify(report),f.run);
@@ -86,6 +93,9 @@ test('active and ended duplicates compact visually without losing factual tool c
     f.store.db.prepare('UPDATE tasks SET state=?,finishedAt=? WHERE id=?').run(terminal,f.start+3601_000,f.task.id);
     const ended=progressState(f.store,f.tasks.get(f.task.id)!);
     assert.match(ended.content,/1 小时 0 分 1 秒/);assert.doesNotMatch(ended.content,/最近进展/);
+    const card=renderTaskCard(f.tasks.get(f.task.id)!,ended.content,'progress',0) as any;
+    assert.equal(card.header,undefined);assert.doesNotMatch(JSON.stringify(card),/处理结束|已完成|执行统计/);
+    assert.match(JSON.stringify(card),terminal==='cancelled'?/已停止/:/执行中断/);
   }
 });
 

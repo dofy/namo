@@ -129,5 +129,5 @@ function GitHubEditor({ config, profiles, refresh, expired, onStateChange, cance
 }
 
 export function GitHubSettings(props:{config:ConfigView;profiles:ProfileState;refresh:()=>Promise<unknown>;expired:boolean}) {
- return <SettingsPanelDialog title="GitHub" summary={tr('github.groupsReadPrivateChatCanUseAll')} disabled={props.expired}>{controls=><GitHubEditor {...props} {...controls}/>}</SettingsPanelDialog>;
+ return <SettingsPanelDialog icon="external" title="GitHub" summary={tr('github.groupsReadPrivateChatCanUseAll')} disabled={props.expired}>{controls=><GitHubEditor {...props} {...controls}/>}</SettingsPanelDialog>;
 }

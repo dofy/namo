@@ -32,7 +32,7 @@ test('one progress card is updated from real activity and terminal state fences 
   const cards:object[]=[];const feedback=new Feedback(f.store,{async send(){throw new Error('never create');},async updateCard(id,card){assert.equal(id,'card-id');cards.push(card);}});
   await feedback.tick({cadenceMs:0,heartbeatMs:0});assert.match(JSON.stringify(cards[0]),/正在运行命令/);
   const before=progressState(f.store,f.tasks.get(f.task.id)!);assert.equal(before.phase,'command');
-  f.store.db.prepare("UPDATE tasks SET state='succeeded',finishedAt=? WHERE id=?").run(Date.now(),f.task.id);await feedback.tick({cadenceMs:0});await feedback.tick({cadenceMs:0});assert.equal(cards.length,2);assert.match(JSON.stringify(cards[1]),/已完成/);
+  f.store.db.prepare("UPDATE tasks SET state='succeeded',finishedAt=? WHERE id=?").run(Date.now(),f.task.id);await feedback.tick({cadenceMs:0});await feedback.tick({cadenceMs:0});assert.equal(cards.length,2);assert.match(JSON.stringify(cards[1]),/处理结束/);
   assert.equal(f.store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE kind='progress'").get()?.n,1);
 });
 test('reply routing and original answer survive chunking; Markdown cannot produce mentions or images',t=>{
@@ -51,7 +51,7 @@ test('an in-flight working update is corrected before a terminal fence releases'
   const active=feedback.tick({cadenceMs:0});await new Promise(resolve=>setImmediate(resolve));
   f.store.db.prepare("UPDATE tasks SET state='succeeded',finishedAt=? WHERE id=?").run(Date.now(),f.task.id);
   let fenced=false;const final=feedback.finalize(f.task.id).then(()=>{fenced=true;});assert.equal(fenced,false);release();await active;await final;
-  assert.equal(cards.length,2);assert.match(JSON.stringify(cards.at(-1)),/已完成/);assert.equal(fenced,true);
+  assert.equal(cards.length,2);assert.match(JSON.stringify(cards.at(-1)),/处理结束/);assert.equal(fenced,true);
 });
 
 test('empty result retains its raw source and still reaches a terminal delivery state',t=>{
@@ -99,7 +99,7 @@ test('a slow reaction cannot hold the progress writer or terminal update behind 
   feedback.accepted('m');const slow=feedback.tick({cadenceMs:0});
   await new Promise(resolve=>setImmediate(resolve));assert.equal(cards.length,1);
   f.store.db.prepare("UPDATE tasks SET state='succeeded',finishedAt=? WHERE id=?").run(Date.now(),f.task.id);
-  await feedback.finalize(f.task.id);assert.equal(cards.length,2);assert.match(JSON.stringify(cards[1]),/已完成/);
+  await feedback.finalize(f.task.id);assert.equal(cards.length,2);assert.match(JSON.stringify(cards[1]),/处理结束/);
   release();await slow;
 });
 

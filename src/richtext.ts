@@ -72,6 +72,12 @@ export function cardMarkdown(text:string):string {
   });
   return safeMarkdown(balanceFences(adapted));
 }
+/** Card 2.0 keeps native inline code; normalize only prose headings. */
+export function resultMarkdown(text:string):string {
+  return safeMarkdown(balanceFences(proseLines(text,line=>line
+    .replace(/^ {0,3}#{1,6}[ \t]+(.+?)\s*$/,(_match,title:string)=>`**${title.replace(/[ \t]+#+[ \t]*$/,'')}**`)
+    .replace(/^(Base|Head|结论|PR 概览|具体问题|验证要点|已核对的要点|覆盖限制|覆盖与验证|剩余风险|读取覆盖|审查版本)([：:])\s*/i,'**$1$2** '))));
+}
 export function richPost(text: string, initiallyFenced: boolean|string = false): object {
   const framed=(initiallyFenced?(typeof initiallyFenced==='string'?initiallyFenced:'```')+'\n':'')+text;
   const balanced=balanceFences(framed);

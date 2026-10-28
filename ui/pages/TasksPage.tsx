@@ -1,4 +1,5 @@
 import { t as tr, getLocale } from '../i18n';
+import { SectionHeading, EmptyState } from '../components/PageSection';
 import { Icon } from '../Icon';
 import { useCallback, useState } from 'react';
 import { Badge, Button, Heading, Link, Spinner, Table, Text } from '@radix-ui/themes';
@@ -43,7 +44,7 @@ export function TasksPage({ state, onOpen, navigate, search, kind, enabled }: {
     </div>}
     <Filters kind={kind} search={search} options={options.data} onSearch={go} />
     {options.error && <Notice error>{tr("tasks.couldNotLoadFilterOptions")}{options.error}</Notice>}
-    <div className="section-title list-title"><Heading as="h2" size="4">{kind === 'tasks' ? session ? tr("tasks.sessionTasks") : tr("tasks.taskHistory") : tr("tasks.sessionHistory")}</Heading><Text size="2" color="gray">{busy ? tr("tasks.refreshing") : data ? tr("tasks.total", data.total, kind === 'tasks' ? tr("tasks.tasks") : tr("common.sessions")) : ''}</Text></div>
+    <section className="page-panel records-panel"><div className="list-title"><SectionHeading icon={kind} title={kind === 'tasks' ? session ? tr("tasks.sessionTasks") : tr("tasks.taskHistory") : tr("tasks.sessionHistory")} action={<Text size="2" color="gray">{busy ? tr("tasks.refreshing") : data ? tr("tasks.total", data.total, kind === 'tasks' ? tr("tasks.tasks") : tr("common.sessions")) : ''}</Text>} /></div>
     {kind === 'sessions' && <Text as="p" size="2" color="gray">{tr("tasks.sessionsPreserveContextTitlesComeFirstTask")}</Text>}
     {error && <Notice error>{error}{tr("tasks.adjustFiltersClickRefreshTryAgain")}</Notice>}
     {!data && busy && <div className="loading"><Spinner />  {tr("tasks.loadingRecords")}</div>}
@@ -57,9 +58,10 @@ export function TasksPage({ state, onOpen, navigate, search, kind, enabled }: {
           <Table.Cell><StatusBadge state={item.state} />{item.current && <span className="current-session"><Badge variant="outline" color="gray">{tr("tasks.currentSession")}</Badge></span>}</Table.Cell>
           <Table.Cell>{item.taskCount}</Table.Cell><Table.Cell><DateTime value={item.lastActiveAt} /><span className="created-hint" title={new Date(item.createdAt).toLocaleString(getLocale())}>{tr("tasks.created")} {new Date(item.createdAt).toLocaleDateString(getLocale())}</span></Table.Cell>
         </Table.Row>)}</Table.Body></Table.Root>
-      : <div className="list-empty"><Heading as="h3" size="3">{tr("tasks.noMatching")}{kind === 'tasks' ? tr("nav.tasks") : tr("nav.sessions")}</Heading><Text as="p" size="2" color="gray">{tr("tasks.clearFiltersExpandDateRangeRecordsAppear")}</Text></div>}
+      : <EmptyState icon={kind} title={tr("tasks.noMatching") + (kind === 'tasks' ? tr("nav.tasks") : tr("nav.sessions"))} description={tr("tasks.clearFiltersExpandDateRangeRecordsAppear")} />}
       <Pagination page={data} busy={busy} onChange={(page, size) => { const q = new URLSearchParams(search); q.set('page', String(page)); q.set('pageSize', String(size)); go(q); document.querySelector('.list-title')?.scrollIntoView({ block: 'start' }); }} />
     </div>}
+    </section>
     {kind === 'tasks' && issues.length > 0 && <details className="recovery-panel" open={reviewing || undefined}>
       <summary>{tr("tasks.globalIssueReview")}{issues.length}  {tr("tasks.itemsUpRecentRecordsIndependentFiltersAbove")}</summary>
       <div className="issue-list">{issues.slice((currentIssuePage - 1) * 10, currentIssuePage * 10).map(issue => <div className="issue-row" key={issue.subject}>

@@ -1,3 +1,4 @@
+import { SectionHeading } from './components/PageSection';
 import { t as tr, getLocale, useLocale } from './i18n';
 import { useEffect, useId, useState, type MouseEvent, type ReactNode } from 'react';
 import { Button, Card, Link, Text, TextField } from '@radix-ui/themes';
@@ -76,7 +77,7 @@ export function Filters({ kind, search, options, onSearch }: { kind: 'tasks' | '
     for (const key of filterKeys) { if (draft[key]) query.set(key, draft[key]); else query.delete(key); }
     onSearch(query);
   }}>
-    <div className="filter-primary">
+    <SectionHeading icon="filter" title={tr("design.filters")} description={tr("design.filtersHelp")} /><div className="filter-primary">
       <Field label={tr("common.search")} htmlFor={`${id}-search`} className="filter-search"><TextField.Root id={`${id}-search`} type="search" value={draft.q} maxLength={200} onChange={e => change('q', e.target.value)} placeholder={kind === 'tasks' ? tr("browse.taskContentTaskSessionId") : tr("browse.sessionIdAnyTaskContent")}><TextField.Slot><Icon name="search" /></TextField.Slot></TextField.Root></Field>
       <Field label={tr("common.user")} htmlFor={`${id}-owner`}><Choice id={`${id}-owner`} value={draft.owner} onChange={value => change('owner', value)} options={[{ value: '', label: tr("browse.allUsers") }, ...users]} /></Field>
       <Field label={tr("common.project")} htmlFor={`${id}-project`}><Choice id={`${id}-project`} value={draft.project} onChange={value => change('project', value)} options={[{ value: '', label: tr("browse.allProjects") }, { value: 'isolated', label: tr("common.isolatedDirectory") }, ...projects]} /></Field>

@@ -3,6 +3,7 @@ import type { Task } from './tasks.js';
 import { evidenceSummary, readEvidence } from './evidence.js';
 import type { RunEvidence } from './ui-contract.js';
 import { Waits, linkedExternalWait } from './waits.js';
+import { progressState } from './task-progress.js';
 
 export const taskStateLabel = (state: string): string => ({ queued: '排队中', running: '正在处理', succeeded: '已完成',
   waiting: '等待你补充', failed: '未完成', cancelled: '已停止', interrupted: '执行中断，需核对', needs_attention: '需要核对补充要求' }[state] ?? '状态待核对');
@@ -23,7 +24,9 @@ export function evidenceBrief(e: RunEvidence): string {
   if (failed.length) lines.push(`有 ${failed.length} 项操作失败或被拒绝，请查看详情。`);
   if (unknown.length) lines.push(`有 ${unknown.length} 项操作结果待核对。`);
   if (e.git.status === 'changed') lines.push('检测到提交变化，归属尚未核对。');
-  if (e.state === 'partial' || e.truncated || e.items.some(i => i.limited)) lines.push('执行记录不完整。');
+  if (e.state === 'partial') lines.push('执行未完整结束，需核对结果。');
+  else if (e.truncated) lines.push('操作记录达到保存上限，部分记录未保存。');
+  else if (e.items.some(i => i.limited)) lines.push('部分工具内容未纳入执行记录；这不表示任务中断。');
   return '\n\n' + (lines.join('\n') || '执行记录已保存。');
 }
 
@@ -57,6 +60,7 @@ export function taskStatus(store: Store, task: Task): string {
   if (Number(revisions?.n)) lines.push(`有 ${revisions!.n} 条补充要求尚未确认应用，请核对最终结果。`);
   const report = readEvidence(store, task.id).at(-1);
   if (report) { const evidence = evidenceSummary(report).trim(); if (evidence) lines.push('', literal(evidence)); }
+  if (!['queued','running','waiting'].includes(task.state)) lines.push('',progressState(store,task).content);
   lines.push('', `任务编号：${task.id}`);
   if (['queued','running'].includes(task.state) && (!job || ['starting','running'].includes(String(job.state))))
     lines.push(`补充：\`/amend ${task.id} 新要求\``, `停止：\`/cancel ${task.id}\``);

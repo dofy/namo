@@ -1,3 +1,4 @@
+import { SectionHeading } from './components/PageSection';
 import { useState } from 'react';
 import { Badge, Button, Code, Flex, Heading, Text, TextField } from '@radix-ui/themes';
 import type { ApprovalList, ApprovalView, ManagementState, MigrationInspection, ServiceLog, TaskListItem } from '../src/ui-contract';
@@ -15,8 +16,8 @@ export function OperationsPanel({state, expired}: {state: ManagementState; expir
     setBusy(true); setError('');
     try {setLogs(await api.logs());} catch (error) {setError(message(error));} finally {setBusy(false);}
   };
-  return <section className="form-section operations-panel" aria-labelledby="operations-title">
-    <Heading as="h2" size="5" id="operations-title">{tr('operations.title')}</Heading>
+  return <section className="page-panel operations-panel" aria-labelledby="operations-title">
+    <SectionHeading icon="activity" id="operations-title" title={tr('operations.title')} description={tr('design.operations')} />
     <dl className="operations-info">
       <div><dt>{tr('operations.connection')}</dt><dd>{state.service.ready?tr('app.feishuConnected'):state.service.running?tr('app.connectionNotReady'):tr('app.serviceStopped')}</dd></div>
       <div><dt>{tr('operations.backgroundService')}</dt><dd>{state.service.installed?tr('operations.installed'):tr('operations.notInstalled')}</dd></div>

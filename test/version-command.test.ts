@@ -1,3 +1,4 @@
+import { NAMO_VERSION } from '../src/version.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
@@ -23,7 +24,7 @@ test('/version and /status report actual CLI and do not create model tasks',asyn
     e.accept(incoming('version','/version'));e.accept(incoming('status','/status'));
     for(const key of ['version','status']) {
       const out=store.db.prepare("SELECT content FROM outbox WHERE inboxKey=? AND kind='result'").get(key);
-      assert.match(String(out?.content),/Namo：`0\.2\.0`/);
+      assert.ok(String(out?.content).includes('Namo：`' + NAMO_VERSION + '`'));
       assert.match(String(out?.content),/Codex CLI：`0\.165\.0`/);
     }
     assert.equal(store.db.prepare('SELECT COUNT(*) n FROM tasks').get()?.n,0);assert.equal(runs,0);

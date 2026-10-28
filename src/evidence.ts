@@ -49,6 +49,8 @@ export function projectEvidenceItem(raw: unknown): EvidenceItem | undefined {
         ? [{ path: path(c.path), action: c.kind.type, ...(c.kind.move_path ? { movedTo: path(c.kind.move_path) } : {}) }] : []) };
   }
   if (item.type === 'imageGeneration') return { ...base, kind: 'artifact', label: '生成图片', path: path(item.savedPath) };
+  if (item.type === 'dynamicToolCall' && item.tool === 'read_pull_request')
+    return {...base,kind:'tool',label:'PR 变更 / 上下文读取（正文不保存）'};
   if (['mcpToolCall', 'dynamicToolCall'].includes(item.type)) return { ...base, kind: 'tool', label: '其他工具（未采集内容）', limited: true };
 }
 

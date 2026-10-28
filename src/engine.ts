@@ -1,3 +1,4 @@
+import { sessionList } from './session-list.js';
 import { mcpApprovalCommand } from './mcp-write-approval.js';
 import { authorizationRevision } from './runtime-config.js';
 import { memoryProjects } from './memory-access.js';
@@ -42,7 +43,7 @@ import { richPost, openFence, hasMarkdown } from './richtext.js';
 import { Feedback, recordActivity } from './feedback.js';
 import { admitted, projectAllowed, executionPolicy } from './access.js';
 import { assertMcpDelivery, mcpRead } from './mcp-connections.js';
-import { assertReviewDelivery, readReview } from './github-review.js';
+import { assertReviewDelivery, readReview, reviewCoverageBrief } from './github-review.js';
 import { recordProgress } from './public-progress.js';
 
 export interface DeliveryRoute { messageId: string; thread: boolean; }
@@ -70,6 +71,7 @@ export class Engine {
   private outputBusy = false;
   private stopped = false;
   private started = false;
+  private paused = false;
   private interval?: NodeJS.Timeout;
   private pumping = false;
   private nextSendAt = 0;
@@ -118,7 +120,7 @@ export class Engine {
     this.log(code); this.onFatal(code);
   }
 
-  accept(m: Incoming): boolean {
+  accept(m: Incoming, defer = false): boolean {
     if (this.config.feishu?.access) {
       const f=this.config.file?loadConfig(this.config.file).feishu:this.config.feishu as Config['feishu'];
       if (!admitted(f,m.senderId,m.chatId,m.envelope?.tenantKey)) return false;
@@ -129,17 +131,20 @@ export class Engine {
       if (/^\/material(?:\s|$)/.test(safe.text)) safe.envelope = { ...safe.envelope, version: 1, type: safe.envelope?.type ?? 'text',
         kind: 'material', scopeKey: scopeOf(safe), materials: safe.envelope?.materials ?? [], limitations: safe.envelope?.limitations ?? [] };
       if (!this.store.enqueue(safe)) return false;
-      if (!this.handleControl(safe)) this.route(this.store.get(safe.key)!);
-      this.autoMemories?.enqueue([safe.key],this.tasks.binding(safe)?.project??null,`message:${safe.key}`);
-      if (this.store.get(safe.key)?.taskId && this.config.feishu?.reactions !== false) this.feedback.accepted(safe.key);
+      if (!defer) this.routeAccepted(safe);
       return true;
     });
-    if (!fresh) return false;
+    if (!fresh || defer) return fresh;
     for (const active of this.active.values()) if (this.store.get(active.key)?.cancelRequested) active.abort.abort();
     const slot = this.active.get(m.chatKey);
     if (slot) void this.steer(slot).catch(() => this.fatal('revision_storage_error'));
     void this.pump();
     return true;
+  }
+  private routeAccepted(m: Incoming): void {
+    if (!this.handleControl(m)) this.route(this.store.get(m.key)!);
+    this.autoMemories?.enqueue([m.key],this.tasks.binding(m)?.project??null,`message:${m.key}`);
+    if (this.store.get(m.key)?.taskId && this.config.feishu?.reactions !== false) this.feedback.accepted(m.key);
   }
   private handleControl(m: Incoming): boolean {
     if (m.envelope?.kind === 'material') return false;
@@ -186,7 +191,7 @@ export class Engine {
         const wid = m.text.trim().split(/\s+/)[1];
         if (wid && this.store.hasPending(m.chatKey, m.key,m.senderId,scopeOf(m))) reply = '仍有未完成请求，暂不能切换工作线。';
         else if (wid) reply = this.tasks.selectStream(m, wid) ? `已选择工作线 ${wid.toUpperCase()}；下一项任务续接其上下文。` : '未找到可访问的工作线。';
-        else reply = `**当前工作线**\n${this.tasks.binding(m)?.id ?? '尚未创建'}\n\n**可用工作线**\n${this.tasks.streams(m).map(w => `${w.id} · ${w.project ?? '隔离目录'}`).join('\n') || '暂无'}\n\n切换：\`/session W-编号\`\n新开：\`/new\``;
+        else reply = sessionList(this.store, m, { accessible: task => this.taskAccessible(task), redact: this.redact });
       }
       else if (command === '/version') reply = `**版本信息**\n${this.versionLines(m)}`;
       else if (command === '/status') {
@@ -318,7 +323,8 @@ export class Engine {
     try { return this.project(m).cwd; }
     catch (e) { if (e instanceof RuntimeError) return '当前项目已从配置移除，请用 /project 选择其他项目'; throw e; }
   }
-  start(): void {
+  start(paused = false): void {
+    this.paused = paused;
     if(this.config.codex) {
       try {this.versions.get(agentCodexConfig({...this.config,codex:this.config.codex}));} catch { /* A missing runtime remains visible as unavailable. */ }
     }
@@ -328,10 +334,10 @@ export class Engine {
     this.tasks.recover(this.runtime.persistent);
     this.feedback.recover();
     this.artifacts.recover();
-    this.store.db.prepare("DELETE FROM settings WHERE key='maintenance'").run();
+    if (!paused) this.store.db.prepare("DELETE FROM settings WHERE key='maintenance'").run();
     this.store.transaction(() => {
       const rows = this.store.db.prepare("SELECT key FROM inbox WHERE state='queued' AND taskId IS NULL ORDER BY seq").all() as { key: string }[];
-      for (const row of rows) { const m = this.store.get(row.key)!; if (!this.handleControl(m)) this.route(m); }
+      for (const row of rows) { const m = this.store.get(row.key)!; this.routeAccepted(m); }
     });
     this.started = true;
     if (this.runtime.persistent) {
@@ -341,8 +347,9 @@ export class Engine {
     this.interval = setInterval(() => void this.pump(), 250);
     void this.pump();
   }
+  resume(): void { this.paused = false; void this.pump(); }
   async pump(): Promise<void> {
-    if (!this.started || this.stopped || this.pumping) return;
+    if (!this.started || this.stopped || this.paused || this.pumping) return;
     this.pumping = true;
     try {
       for(const active of this.active.values()) if(this.store.get(active.key)?.cancelRequested) active.abort.abort();
@@ -459,7 +466,7 @@ export class Engine {
         if (result.waiting) {
           new Waits(this.store).park(task, run, result.waiting);
           this.tasks.progress();
-        } else this.tasks.finish(task, run, this.redact(result.text) + (report ? evidenceBrief(report) : ''));
+        } else this.tasks.finish(task, run, this.redact(result.text) + reviewCoverageBrief(this.store,task.id) + (report ? evidenceBrief(report) : ''));
       });
       this.log('turn_completed', { messageId: m.messageId });
     } catch (e) {

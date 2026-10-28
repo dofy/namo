@@ -12,7 +12,7 @@ import { Store, type Incoming } from '../src/store.js';
 import { Tasks, policyHash } from '../src/tasks.js';
 import { Management } from '../src/management.js';
 import { Engine } from '../src/engine.js';
-import { assertReviewDelivery } from '../src/github-review.js';
+import { assertReviewDelivery, reviewCoverageBrief } from '../src/github-review.js';
 import { selectAgent, selectedPolicyHash, agentCodexConfig } from '../src/agent-registry.js';
 import { Memories } from '../src/memory.js';
 import { memoryProjects } from '../src/memory-access.js';
@@ -75,6 +75,13 @@ test('revoked repository grants block cached review delivery',t=>{
   store.db.prepare('INSERT INTO settings VALUES(?,?)').run(`github-review:${task.workstreamId}`,JSON.stringify([{target,context,scope}]));
   const config=parseConfig({feishu:f,github},join(dir,'config.json'));assert.doesNotThrow(()=>assertReviewDelivery(store,config,task));
   assert.throws(()=>assertReviewDelivery(store,{...config,github:{...github,grants:[]}},task),/denied|changed/);
+});
+test('review coverage reports reads as evidence, not as completed review',t=>{
+  const {store}=fixture(t);
+  assert.equal(reviewCoverageBrief(store,'task'),'');
+  store.db.prepare('INSERT INTO settings VALUES(?,?)').run('github-review-coverage:task',JSON.stringify({headSha:'a'.repeat(40),baseSha:'b'.repeat(40),totalFiles:86,completedFiles:31,incompleteFiles:2,next:{index:31,offset:0},fileListLimited:false}));
+  const text=reviewCoverageBrief(store,'task');
+  assert.match(text,/31\/86/);assert.match(text,/2 个补丁/);assert.match(text,/仍有内容未读取/);assert.match(text,/读取不等于已审查/);
 });
 test('management saves shared credentials without a paired owner, detects revision conflicts and exposes no credentials',async t=>{
   const{dir}=fixture(t),file=join(dir,'config.json');writeFileSync(file,JSON.stringify({dataDir:dir,feishu:f,codex:{}}));

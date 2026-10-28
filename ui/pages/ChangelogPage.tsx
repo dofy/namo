@@ -1,3 +1,4 @@
+import { Icon } from '../Icon';
 import { Badge, Heading, Text } from '@radix-ui/themes';
 import { t as tr, type MessageKey } from '../i18n';
 import type { AutomaticChange, AutomaticRelease } from '../../src/changelog-contract';
@@ -20,7 +21,7 @@ const known:Record<NonNullable<AutomaticChange['known']>,MessageKey>={changelogP
 
 export function ChangelogPage() {
   return <section className="changelog" aria-label={tr('changelog.title')}>
-    <div className="changelog-current"><Text size="2" color="gray">{tr('changelog.currentVersion')}</Text>
+    <div className="changelog-current"><span className="panel-icon"><Icon name="changelog" size={20} /></span><Text size="2" color="gray">{tr('changelog.currentVersion')}</Text>
       <Text size="3" weight="medium">v{__NAMO_VERSION__}</Text></div>
     {__NAMO_CHANGELOG__.source==='git' && <Text as="p" size="1" color="gray" className="changelog-generated">{tr('changelog.generated')}</Text>}
     <div className="changelog-list">{(__NAMO_CHANGELOG__.source==='git'?__NAMO_CHANGELOG__.releases:fallback).map((release,index) => <article className="changelog-entry" key={release.version ?? `pending-${index}`}>

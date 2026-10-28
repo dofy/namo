@@ -1,3 +1,4 @@
+import { NAMO_VERSION } from '../src/version.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -65,7 +66,7 @@ test('CLI follows system language, supports explicit overrides, and keeps machin
   assert.equal(run(['--lang', 'invalid', '--help']).status, 1);
   assert.equal(run(['--lang', 'en', '--lang', 'zh-CN', '--help']).status, 1);
   assert.equal(run(['--lang']).status, 1);
-  assert.equal(run(['--version', '--lang', 'zh-CN']).stdout.trim(), '0.2.0');
+  assert.equal(run(['--version', '--lang', 'zh-CN']).stdout.trim(), NAMO_VERSION);
   for (const language of ['en', 'zh-CN']) {
     const moved = run(['status', '--lang', language]);
     assert.equal(moved.status, 1);

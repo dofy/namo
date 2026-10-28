@@ -115,9 +115,9 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
         </div>
       </div>
     </aside>
-    <main>
-      <header className={view === 'memory' ? 'memory-profiles-header' : undefined}><div><Heading as="h1" size="7">{pages[view]}</Heading>
-        <Text as="p" size="2" color="gray">{descriptions[view]}</Text></div>
+    <main className={`workbench-main page-${view}`}>
+      <header className="page-header"><div className="page-heading"><span className="page-icon"><Icon name={pageIcons[view]} size={24} /></span><div><Heading as="h1" size="7">{pages[view]}</Heading>
+        <Text as="p" size="2" color="gray">{descriptions[view]}</Text></div></div>
         <Button variant="outline" color="gray" disabled={!state || expired} loading={refreshing} onClick={async () => {
           setRefreshing(true); try { await refresh(); } catch (e) { notify(message(e), true); } finally { setRefreshing(false); }
         }}><Icon name="refresh" />{tr("common.refreshStatus")}</Button>

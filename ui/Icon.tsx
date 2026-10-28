@@ -1,5 +1,5 @@
 import {
-  Activity, BookUser, Bot, ChevronLeft, ChevronRight, CircleCheck, Info,
+  AtSign, PanelsTopLeft, Smile, Activity, BookUser, Bot, ChevronLeft, ChevronRight, CircleCheck, Info,
   ClipboardCheck, ExternalLink, Funnel, LayoutDashboard, MessageSquare, ScrollText,
   Play, Plug, Plus, RotateCcw, RotateCw, Save, SlidersHorizontal, Square,
   Trash2, UserRound, X, Search, type LucideIcon,
@@ -7,6 +7,9 @@ import {
 
 // Keep UI intent separate from library names, and import only the icons we use.
 const icons = {
+  mention: AtSign,
+  cards: PanelsTopLeft,
+  reaction: Smile,
   info: Info,
   external: ExternalLink,
   dashboard: LayoutDashboard,

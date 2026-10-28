@@ -4,12 +4,13 @@ import { join } from 'node:path';
 import { loadConfig } from './config.js';
 import { acquireLock, makeRedactor } from './safety.js';
 import { Store } from './store.js';
-import { Engine } from './engine.js';
+import { RuntimeHost } from './runtime-host.js';
+import { createLiveRuntime, type LiveRuntimeOptions } from './live-runtime.js';
+import { activeRuntimeId, runtimeRelease, loadLiveFactory, watchLiveUpgrades } from './live-upgrade.js';
 import { FeishuTransport } from './feishu.js';
 import { configFile, atomicJson, receiverDir, digest } from './paths.js';
 import { Management } from './management.js';
 import { loginAgent, probeAgent } from './agents.js';
-import { RunnerRuntime } from './runner.js';
 import { TerminalPrompter, Cancelled } from './prompts.js';
 import { onboard } from './onboarding.js';
 import { serviceAction, assertNoLegacyReceiver } from './service.js';
@@ -81,8 +82,9 @@ async function main(): Promise<void> {
   if ((await probeAgent(config)).some(c => c.status === 'fail')) throw new Error(tr("cli.agentNotReadyRunNamoDoctorNamo"));
   const release = acquireLock(config.dataDir);
   let releaseReceiver: (() => void) | undefined;
-  let store: Store | undefined, engine: Engine | undefined, transport: FeishuTransport | undefined;
+  let store: Store | undefined, engine: RuntimeHost | undefined, transport: FeishuTransport | undefined;
   let closing: Promise<void> | undefined;
+  let stopLiveUpgrades: (() => Promise<void>) | undefined;
   let stopUpdates: (() => Promise<void>) | undefined;
   let health: Record<string, unknown> = { pid: process.pid, startedAt: new Date().toISOString(), ready: false, connection: 'connecting',
     configRevision,managementVersion:2,...(startupRelease ? { releaseId: startupRelease.id } : {}) };
@@ -98,6 +100,7 @@ async function main(): Promise<void> {
   const close = () => closing ??= (async () => {
     transport?.close();
     try {
+      await stopLiveUpgrades?.();
       const stopped=await Promise.allSettled([engine?.stop(),stopUpdates?.()]);
       const failure=stopped.find(result=>result.status==='rejected');
       if(failure?.status==='rejected')throw failure.reason;
@@ -112,11 +115,20 @@ async function main(): Promise<void> {
     releaseReceiver = acquireLock(receiverDir(config.feishu.appId));
     store = new Store(dbFile); store.bindAccount(config.feishu.appId);
     transport = new FeishuTransport(config.feishu, log);
-    engine = new Engine(store, new RunnerRuntime(store, config), transport, config, redact, log, () => void stop(1));
+    const options: LiveRuntimeOptions = { store, config, sender: transport, redact, log, onFatal: () => void stop(1) };
+    const activeId = startupRelease ? activeRuntimeId(config.dataDir, startupRelease.id) : undefined;
+    const factory = startupRelease && activeId && activeId !== startupRelease.id
+      ? await loadLiveFactory(startupRelease, runtimeRelease(config.dataDir, activeId), options) : () => createLiveRuntime(options);
+    engine = new RuntimeHost(factory);
+    if (startupRelease) health = { ...health, releaseId: activeId, receiverReleaseId: startupRelease.id, liveUpgradeVersion: 1 };
     const service = engine;
     await transport.connect(m => withLocale('zh-CN', () => { service.accept(m); }), event => withLocale('zh-CN', () => service.acceptCard(event))); if (closing) return;
     withLocale('zh-CN', () => service.start()); log('ready', { dataDir: config.dataDir, concurrency: config.concurrency });
     stopUpdates=startCodexAutoUpdates(config);
+    if (startupRelease && activeId) stopLiveUpgrades=watchLiveUpgrades(config,startupRelease,activeId,service,options,fields=>{
+      health={...health,...fields,updatedAt:new Date().toISOString()};
+      atomicJson(join(config.dataDir,'health.json'),health);
+    });
   } catch (e) { await close(); throw e; }
 }
 const languageChoice = args.includes('--lang') ? args[args.indexOf('--lang') + 1] : process.env.NAMO_LANG;

@@ -81,7 +81,7 @@ test('registered and running release identity comes from registration and matchi
   try {
     atomicJson(join(config.dataDir, 'health.json'), { pid: process.pid, ready: true, connection: 'connected', releaseId: release.id });
     const status = serviceStatus(config, true) as any;
-    assert.deepEqual(status.release, { installed: release.id, running: release.id, verified: true, matches: true });
+    assert.deepEqual(status.release, { installed: release.id, running: release.id, receiver: release.id, verified: true, matches: true });
     atomicJson(join(config.dataDir, 'health.json'), { pid: process.pid, ready: true, connection: 'connected', releaseId: 'f'.repeat(64) });
     assert.equal((serviceStatus(config, true) as any).release.matches, false);
   } finally { unlock(); }

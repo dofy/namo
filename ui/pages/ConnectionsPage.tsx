@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { Button, Code, Flex, Heading, Link, Text } from '@radix-ui/themes';
 import type { ManagementState, Diagnostic } from '../../src/ui-contract';
 import { api, message } from '../api';
+import { SectionHeading } from '../components/PageSection';
 import { Notice } from '../components';
 import { CodexReplyTest } from '../CodexReplyTest';
 import { ServiceAccessSettings } from '../ServiceAccessSettings';
@@ -18,8 +19,9 @@ export function ConnectionsPage({ state, refresh, expired }: {
   const { config, profiles } = state;
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [checks, setChecks] = useState<Diagnostic[]>([]);
   const [testing, setTesting] = useState(false);
-  return <>
-    <div className="connection"><div><Heading as="h2" size="5">Codex</Heading><Text as="p" size="2" color="gray">{tr("connections.officialAppServerIsolatedLogin")}</Text></div>
+  return <div className="connections-page">
+    <section className="page-panel">
+    <div className="connection"><SectionHeading icon="assistant" title="Codex" description={tr("connections.officialAppServerIsolatedLogin")} />
       <Flex gap="2" wrap="wrap"><Button variant="soft" disabled={expired || testing} loading={busy} onClick={async () => {
         setBusy(true); setError('');
         try { setChecks(await api.diagnose()); } catch (e) { setError(message(e)); } finally { setBusy(false); }
@@ -31,25 +33,27 @@ export function ConnectionsPage({ state, refresh, expired }: {
       <Text as="p" size="2">{check.status === 'ok' ? '✓' : check.status === 'warn' ? '!' : '×'} {check.message}</Text>
       {check.next && <Text as="p" size="2" color="gray">{check.next}</Text>}
     </div>)}</div>
-    <div className="guide"><Heading as="h3" size="3">{tr("connections.signReauthorize")}</Heading>
+    <details className="connection-help"><summary>{tr("design.codexLogin")}</summary><div className="guide"><Heading as="h3" size="3">{tr("connections.signReauthorize")}</Heading>
       <Text as="p" size="2" color="gray">{tr("connections.runCommandLocalTerminalCompleteOfficialLogin")}</Text>
       <Code variant="ghost">namo login --config {quote(config.file)}</Code>
       <Text as="p" size="2" color="gray">{tr("connections.diagnosticsCheckEnvironmentConnectionWithoutCallingModel")}</Text>
     </div>
-    <div className="connection"><div><Heading as="h2" size="5">{tr("connections.feishuBot")}</Heading>
+    </details></section>
+    <section className="page-panel"><div className="connection"><div><SectionHeading icon="sessions" title={tr("connections.feishuBot")} />
       <Text as="p" size="2" color="gray">{config.feishu.appId}  {config.feishu.access?tr("connections.organizationService"):tr("connections.pairedUsers",config.feishu.pairedUsers)} {config.feishu.secretConfigured ? tr("common.credentialsConfigured") : tr("connections.credentialsMissing")}</Text></div>
       <Link href={config.feishu.domain === 'lark' ? 'https://open.larksuite.com/app' : 'https://open.feishu.cn/app'} target="_blank" rel="noopener noreferrer">{tr("connections.openDeveloperConsole")}</Link>
     </div>
-    <ol className="steps"><li>{tr("connections.enableBotCapabilitiesSetAppAvailabilityScope")}</li><li>{tr("connections.usePersistentConnectionSubscribeImMessageReceive")}</li>
+    <details className="connection-help"><summary>{tr("design.feishuSetup")}</summary><ol className="steps"><li>{tr("connections.enableBotCapabilitiesSetAppAvailabilityScope")}</li><li>{tr("connections.usePersistentConnectionSubscribeImMessageReceive")}</li>
       <li>{tr("connections.requestPermissionsReceiveDirectMessagesGroupMentions")}</li><li>{tr("connections.cardButtonsAlsoRequireCardActionTrigger")}</li></ol>
     {!config.feishu.access && <div className="guide"><Heading as="h3" size="3">{tr("connections.pairAnotherUser")}</Heading>
       <Text as="p" size="2" color="gray">{tr("connections.stopReceiverDuringMaintenanceWindowThenRun")}</Text>
       <Code variant="ghost">{'namo service stop --config ' + quote(config.file) + '\nnamo init --config ' + quote(config.file)}</Code>
       <Text as="p" size="2" color="gray">{tr("connections.setupCannotConnectWhileAnotherReceiverActive")}</Text>
     </div>}
+    </details></section>
     <ServiceAccessSettings config={config} refresh={refresh} expired={expired} />
     <McpSettings config={config} refresh={refresh} expired={expired} />
     <GitHubSettings config={config} profiles={profiles} refresh={refresh} expired={expired} />
     <OperationsPanel state={state} expired={expired}/>
-  </>;
+  </div>;
 }

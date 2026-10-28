@@ -14,7 +14,7 @@ import { parseConfig } from '../src/config.js';
 import { Waits } from '../src/waits.js';
 import { Cards, renderTaskCard } from '../src/cards.js';
 import { Feedback } from '../src/feedback.js';
-import { cardMarkdown, hasMarkdown, openFence, richPost, splitDisplay } from '../src/richtext.js';
+import { cardMarkdown, resultMarkdown, hasMarkdown, openFence, richPost, splitDisplay } from '../src/richtext.js';
 
 const answer = { text: 'pong，在。', threadId: 'thread', turnId: 'turn' };
 const message = (key: string, text = 'ping', senderId = 'alice'): Incoming => ({ key, messageId: key, chatKey: 'chat', chatId: 'chat', senderId, text });
@@ -184,7 +184,7 @@ test('final answer delivery does not wait for a slow progress patch; same card i
   await f.engine.pump();await waitFor(()=>updates.length===1);
   f.finish();await waitFor(()=>texts.some(text=>text.startsWith('final answer')));
   assert.equal(updates.length,1);assert.equal(f.store.get('slow-patch')?.state,'replied');
-  patch.release();await waitFor(()=>updates.length===2);assert.match(JSON.stringify(updates[1]),/已完成/);
+  patch.release();await waitFor(()=>updates.length===2);assert.match(JSON.stringify(updates[1]),/处理结束/);
   assert.equal(cards.length,1);
 });
 
@@ -263,7 +263,7 @@ test('format rejection allows exactly one plain fallback; ambiguous sends are ne
 test('result cards use the code-capable component and degrade unsupported blocks without altering stored answers',t=>{
   const f=replyFormatFixture(t),answer='# Heading\n> quote\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```ts\nconst x = 1;\n```';
   const card=renderTaskCard(f.task,answer,'result',0) as any;
-  assert.equal(card.elements[0].tag,'markdown');assert.equal(card.config.update_multi,true);
+  assert.equal(card.schema,'2.0');assert.equal(card.body.elements[0].tag,'markdown');assert.equal(card.config.update_multi,true);
   const rendered=cardMarkdown(answer);assert.match(rendered,/\*\*Heading\*\*/);assert.match(rendered,/```(?:text)?\n\| A/);
   assert.match(rendered,/```ts\nconst x = 1;/);assert.doesNotMatch(rendered,/^# Heading/m);
   assert.doesNotMatch(cardMarkdown('<at user_id="all">all</at> ![x](https://example.com/a.png) [bad](javascript:alert)'),/<at|!\[x\]|javascript:/);
@@ -307,17 +307,17 @@ test('task list keeps each command on its status line and colors statuses in a c
   await waitFor(()=>f.store.get('list-command')?.state==='replied');
   const source=String(f.store.db.prepare("SELECT content FROM outbox WHERE inboxKey='list-command' AND kind='result'").get()?.content);
   assert.equal(source,`已完成 · \`/task ${task.id}\``);
-  const card=f.cards.at(-1);assert.equal(card.elements[0].tag,'markdown');
-  assert.equal(card.elements[0].content,`<font color='green'>已完成</font> · \`/task ${task.id}\``);
+  const card=f.cards.at(-1);assert.equal(card.body.elements[0].tag,'markdown');
+  assert.equal(card.body.elements[0].content,`<font color='green'>已完成</font> · \`/task ${task.id}\``);
 });
 
 test('task list colors only strictly validated host-generated rows', async()=>{
   const {renderTaskListCard}=await import('../src/cards.js');
   const rows="排队中 · alpha · `/task N-AAAAAAAAAAAA`\n未完成 · `/task N-BBBBBBBBBBBB`\n等待你补充 · `/task N-CCCCCCCCCCCC`";
   const card=renderTaskListCard(rows) as any;
-  assert.match(card.elements[0].content,/<font color='blue'>排队中<\/font>/);
-  assert.match(card.elements[0].content,/<font color='red'>未完成<\/font>/);
-  assert.match(card.elements[0].content,/<font color='orange'>等待你补充<\/font>/);
+  assert.match(card.body.elements[0].content,/<font color='blue'>排队中<\/font>/);
+  assert.match(card.body.elements[0].content,/<font color='red'>未完成<\/font>/);
+  assert.match(card.body.elements[0].content,/<font color='orange'>等待你补充<\/font>/);
   assert.equal(renderTaskListCard("已完成 · <at user_id='all'> · `/task N-AAAAAAAAAAAA`"),undefined);
 });
 
@@ -335,4 +335,35 @@ test('rejected task list card falls back to one compact plain reply',async t=>{
     await waitFor(()=>f.store.get('fallback-list')?.state==='replied');
     assert.equal(cards,1);assert.deepEqual(texts,[`已完成 · /task ${task.id}`]);
   } finally {await engine.stop();}
+});
+
+
+test('v2 result Markdown styles review labels and preserves code without interpreting it as prose',()=>{
+  const source='已核对的要点：\n- **权限链**：`adminProcedure`\n\nBase: `abc123`\nHead：`def456`\n\n```text\nBase: literal\n# literal\n```';
+  const rendered=resultMarkdown(source);
+  assert.match(rendered,/\*\*已核对的要点：\*\*/);assert.match(rendered,/\*\*Base:\*\* `abc123`/);assert.match(rendered,/\*\*Head：\*\* `def456`/);
+  assert.match(rendered,/```text\nBase: literal\n# literal\n```/);
+  assert.match(rendered,/`adminProcedure`/);
+  assert.doesNotMatch(resultMarkdown('<at id=all>all</at> ![image](https://x) [bad](javascript:alert)'),/<at|!\[image\]|javascript:/);
+});
+
+test('v2 result controls preserve the authorized callback token',t=>{
+  const f=replyFormatFixture(t);
+  const card=renderTaskCard(f.task,'**Result**: `code`','result',0,[{action:'details',token:'opaque-test-token'}]) as any;
+  assert.equal(card.schema,'2.0');assert.equal(card.elements,undefined);
+  const button=card.body.elements.find((e:any)=>e.tag==='button');
+  assert.deepEqual(button.behaviors,[{type:'callback',value:{namo:'opaque-test-token'}}]);
+  assert.equal(button.value,undefined);assert.ok(!card.body.elements.some((e:any)=>e.tag==='action'));
+});
+
+test('/session command renders task context without invoking a model or changing the binding', t => {
+  const f = fixture(t, { async run() { throw new Error('session listing must not invoke a model'); } });
+  f.store.enqueue(message('session-seed', '优化手机端设置卡片'));
+  const task = f.tasks.create(f.store.get('session-seed')!, { cwd: tmpdir(), project: 'bot', policyHash: 'policy' });
+  f.engine.accept(message('session-list-command', '/session'));
+  const output = f.store.db.prepare("SELECT content FROM outbox WHERE inboxKey='session-list-command' AND kind='result'").get();
+  assert.match(String(output?.content), /优化手机端设置卡片 · 当前会话/);
+  assert.ok(String(output?.content).includes(`/session ${task.workstreamId}`));
+  assert.equal(f.tasks.binding(message('check'))?.id, task.workstreamId);
+  assert.equal(f.tasks.list(message('check')).length, 1);
 });

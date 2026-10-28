@@ -1,6 +1,9 @@
+import { SectionHeading } from '../components/PageSection';
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Button, Flex, Heading, Switch, Text, TextArea, TextField } from '@radix-ui/themes';
-import { t as tr } from '../i18n';
+import { Button, Flex, RadioCards, Text, TextArea, TextField } from '@radix-ui/themes';
+import { getLocale, t as tr } from '../i18n';
+import { Icon } from '../Icon';
+import { SettingToggle } from '../components/SettingToggle';
 import { Choice, ConfirmButton, Field, Notice } from '../components';
 
 // Browser-only mirror of src/assistant.ts's JSON contract. Keeping this page
@@ -88,6 +91,7 @@ export function AssistantPage({ settings, editable, unavailableReason, save, res
   const observed = useRef(settings);
   const conflict = settings.version !== baseVersion;
   const canEdit = editable && !conflict;
+  const active = baseVersion > 0;
 
   function load(next: AssistantPageSettings) {
     setDraft(valuesOf(next)); setBaseVersion(next.version); setDirty(false); setError(''); setSample('');
@@ -106,7 +110,7 @@ export function AssistantPage({ settings, editable, unavailableReason, save, res
   }, [dirty]);
 
   async function persist() {
-    if (!dirty || !canEdit || busy) return;
+    if ((!dirty && active) || !canEdit || busy) return;
     setBusy(true); setError(''); setNotice('');
     try {
       const next = await save(baseVersion, draft); load(next); setNotice(c.saved);
@@ -115,70 +119,93 @@ export function AssistantPage({ settings, editable, unavailableReason, save, res
     finally { setBusy(false); }
   }
 
-  return <div className="profiles-page">
-    <Flex gap="3" align="center" wrap="wrap">
-      <Badge color={settings.active ? 'green' : 'gray'}>{settings.active ? c.active : c.inactive}</Badge>
-      <Text size="2" color="gray">{c.version} {settings.version}</Text>
-    </Flex>
-    <Text as="p" size="2" color="gray">{c.intro}</Text>
-    <Text as="p" size="1" color="gray">{c.local}</Text>
-    {!settings.active && <Notice>{c.legacy}</Notice>}
+  return <div className="profiles-page assistant-settings">
+    <div className="assistant-state">
+      <span className="assistant-state-icon"><Icon name={active ? 'check' : 'settings'} size={21} /></span>
+      <div><Text as="p" size="2" weight="medium">{active ? c.active : c.inactive}</Text>
+        <Text as="p" size="2" color="gray">{active ? tr('assistant.activeHelp') : c.legacy}</Text></div>
+    </div>
     {!editable && <Notice error>{unavailableReason || c.local}</Notice>}
     {conflict && <Notice>{c.conflict}</Notice>}
-    {dirty && <Text as="p" size="1" color="gray">{c.draft}</Text>}
     {notice && <Notice>{notice}</Notice>}{error && <Notice error>{error}</Notice>}
 
     <form onSubmit={event => { event.preventDefault(); void persist(); }}>
       <fieldset disabled={!canEdit || busy}>
-        <div className="form-grid">
-          <Field label={c.name} htmlFor="assistant-name"><TextField.Root id="assistant-name" value={draft.name} maxLength={60}
-            onChange={event => change({ name: event.target.value })} /><Text size="1" color="gray">{c.nameHint}</Text></Field>
-          <Field label={c.role} htmlFor="assistant-role"><TextField.Root id="assistant-role" value={draft.role} maxLength={160}
-            onChange={event => change({ role: event.target.value })} /><Text size="1" color="gray">{c.roleHint}</Text></Field>
-        </div>
-        <Field label={c.personality} htmlFor="assistant-personality"><TextArea id="assistant-personality" value={draft.personality} maxLength={1000} rows={5}
-          onChange={event => change({ personality: event.target.value })} /><Text size="1" color="gray">{c.personalityHint}</Text></Field>
-        <div className="form-grid">
-          <Field label={c.language} htmlFor="assistant-language"><Choice id="assistant-language" value={draft.defaultLanguage}
-            onChange={value => change({ defaultLanguage: value as AssistantPageValues['defaultLanguage'] })}
-            options={[{ value: 'auto', label: c.automatic }, { value: 'zh-CN', label: c.chinese }, { value: 'en-US', label: c.english }]} /></Field>
-          <Field label={c.replyLength} htmlFor="assistant-length"><Choice id="assistant-length" value={draft.replyLength}
-            onChange={value => change({ replyLength: value as AssistantPageValues['replyLength'] })}
-            options={[{ value: 'concise', label: c.concise }, { value: 'balanced', label: c.balanced }, { value: 'detailed', label: c.detailed }]} /></Field>
-          <Field label={c.detail} htmlFor="assistant-detail"><Choice id="assistant-detail" value={draft.technicalDetail}
-            onChange={value => change({ technicalDetail: value as AssistantPageValues['technicalDetail'] })}
-            options={[{ value: 'essential', label: c.essential }, { value: 'balanced', label: c.balanced }, { value: 'deep', label: c.deep }]} /></Field>
-          <Field label={c.emoji} htmlFor="assistant-emoji"><Choice id="assistant-emoji" value={draft.emoji}
-            onChange={value => change({ emoji: value as AssistantPageValues['emoji'] })}
-            options={[{ value: 'never', label: c.never }, { value: 'sparingly', label: c.sparingly }, { value: 'freely', label: c.freely }]} /></Field>
-        </div>
-        <Flex direction="column" gap="4" my="4">
-          <Text as="label" size="2" weight="medium"><Flex gap="3" align="center"><Switch checked={draft.conclusionFirst}
-            onCheckedChange={checked => change({ conclusionFirst: checked })} />{c.conclusion}</Flex></Text>
-          <div><Text as="label" size="2" weight="medium"><Flex gap="3" align="center"><Switch checked={draft.useProfile}
-            onCheckedChange={checked => change({ useProfile: checked })} />{c.profile}</Flex></Text>
-            <Text as="p" size="1" color="gray">{c.profileHelp}</Text></div>
-        </Flex>
+        <section className="assistant-section" aria-labelledby="assistant-identity-title">
+          <SectionHeading icon="assistant" id="assistant-identity-title" title={tr('assistant.identityTitle')} description={tr('assistant.identityHelp')} />
+          <div className="form-grid">
+            <Field label={c.name} htmlFor="assistant-name"><TextField.Root id="assistant-name" value={draft.name} maxLength={60}
+              onChange={event => change({ name: event.target.value })} /><Text size="1" color="gray">{c.nameHint}</Text></Field>
+            <Field label={c.role} htmlFor="assistant-role"><TextField.Root id="assistant-role" value={draft.role} maxLength={160}
+              onChange={event => change({ role: event.target.value })} /><Text size="1" color="gray">{c.roleHint}</Text></Field>
+          </div>
+          <Field label={c.personality} htmlFor="assistant-personality"><TextArea id="assistant-personality" value={draft.personality} maxLength={1000} rows={3}
+            onChange={event => change({ personality: event.target.value })} /><Text size="1" color="gray">{c.personalityHint}</Text></Field>
+        </section>
+        <section className="assistant-section" aria-labelledby="assistant-style-title">
+          <SectionHeading icon="sessions" id="assistant-style-title" title={tr('assistant.styleTitle')} description={tr('assistant.styleHelp')} />
+          <div className="form-grid">
+            <Field label={c.language} htmlFor="assistant-language"><Choice id="assistant-language" value={draft.defaultLanguage}
+              onChange={value => change({ defaultLanguage: value as AssistantPageValues['defaultLanguage'] })}
+              options={[{ value: 'auto', label: c.automatic }, { value: 'zh-CN', label: c.chinese }, { value: 'en-US', label: c.english }]} />
+              <Text size="1" color="gray">{tr('assistant.languageHelp')}</Text></Field>
+            <Field label={c.emoji} htmlFor="assistant-emoji"><Choice id="assistant-emoji" value={draft.emoji}
+              onChange={value => change({ emoji: value as AssistantPageValues['emoji'] })}
+              options={[{ value: 'never', label: c.never }, { value: 'sparingly', label: c.sparingly }, { value: 'freely', label: c.freely }]} />
+              <Text size="1" color="gray">{tr('assistant.emojiHelp')}</Text></Field>
+          </div>
+          <div className="assistant-choice-group">
+            <Text as="p" size="2" weight="medium" id="assistant-length-label">{c.replyLength}</Text>
+            <RadioCards.Root className="assistant-choices" aria-labelledby="assistant-length-label" value={draft.replyLength} disabled={!canEdit || busy}
+              onValueChange={value => change({ replyLength: value as AssistantPageValues['replyLength'] })}>
+              {([{value:'concise',label:c.concise,description:tr('assistant.conciseHelp')},{value:'balanced',label:c.balanced,description:tr('assistant.balancedLengthHelp')},
+                {value:'detailed',label:c.detailed,description:tr('assistant.detailedHelp')}] as const).map(option => <RadioCards.Item key={option.value} value={option.value}>
+                <span className="assistant-choice-copy"><strong>{option.label}</strong><span>{option.description}</span></span>
+              </RadioCards.Item>)}
+            </RadioCards.Root>
+          </div>
+          <div className="assistant-choice-group">
+            <Text as="p" size="2" weight="medium" id="assistant-detail-label">{c.detail}</Text>
+            <RadioCards.Root className="assistant-choices" aria-labelledby="assistant-detail-label" value={draft.technicalDetail} disabled={!canEdit || busy}
+              onValueChange={value => change({ technicalDetail: value as AssistantPageValues['technicalDetail'] })}>
+              {([{value:'essential',label:c.essential,description:tr('assistant.essentialHelp')},{value:'balanced',label:c.balanced,description:tr('assistant.balancedDetailHelp')},
+                {value:'deep',label:c.deep,description:tr('assistant.deepHelp')}] as const).map(option => <RadioCards.Item key={option.value} value={option.value}>
+                <span className="assistant-choice-copy"><strong>{option.label}</strong><span>{option.description}</span></span>
+              </RadioCards.Item>)}
+            </RadioCards.Root>
+          </div>
+          <div className="setting-options">
+            <SettingToggle icon="tasks" title={c.conclusion} description={tr('assistant.conclusionHelp')} checked={draft.conclusionFirst}
+              disabled={!canEdit || busy} onChange={checked => change({ conclusionFirst: checked })} />
+            <SettingToggle icon="profiles" title={c.profile} description={c.profileHelp} checked={draft.useProfile}
+              disabled={!canEdit || busy} onChange={checked => change({ useProfile: checked })} />
+          </div>
+        </section>
       </fieldset>
-      <Notice>{c.warning}</Notice>
-      <Flex gap="3" wrap="wrap" align="center" className="save-bar">
-        <ConfirmButton disabled={busy || !dirty} title={c.reloadTitle} description={c.reloadDescription} action={c.reload} onConfirm={async () => {
+      <details className="assistant-help"><summary>{tr('assistant.scopeTitle')}</summary>
+        <Text as="p" size="2" color="gray">{c.intro}</Text>
+        <Text as="p" size="2" color="gray">{c.local}</Text>
+        <Text as="p" size="2" color="gray">{c.warning}</Text>
+      </details>
+      <Flex gap="3" wrap="wrap" align="center" className="save-bar assistant-save-bar" data-dirty={dirty}>
+        <Text as="p" size="2" color="gray">{dirty ? c.draft : tr('assistant.saveHelp')}</Text>
+        <Button type="submit" disabled={(!dirty && active) || !canEdit} loading={busy}><Icon name="save" />{active ? c.save : tr('assistant.enable')}</Button>
+        {dirty && <ConfirmButton disabled={busy} title={c.reloadTitle} description={c.reloadDescription} action={c.reload} onConfirm={async () => {
           load(settings); setNotice('');
-        }}>{c.reload}</ConfirmButton>
-        <Button type="submit" disabled={!dirty || !canEdit} loading={busy}>{c.save}</Button>
+        }}>{c.reload}</ConfirmButton>}
         <ConfirmButton disabled={busy || dirty || !editable} title={c.resetTitle} description={c.resetDescription} action={c.reset} onConfirm={async () => {
           const next = await reset(settings.version); load(next); setNotice(c.resetDone); try { await refresh?.(); } catch { /* Keep returned state. */ }
         }}>{c.reset}</ConfirmButton>
       </Flex>
     </form>
 
-    <section className="audit">
-      <Heading as="h2" size="4">{c.preview}</Heading>
-      <Text as="p" size="1" color="gray">{c.previewHelp}</Text>
+    <details className="assistant-help assistant-preview">
+      <summary>{c.preview}</summary>
+      <Text as="p" size="2" color="gray">{c.previewHelp}</Text>
       <Button type="button" variant="soft" disabled={busy} onClick={async () => {
-        setError(''); try { setSample(await preview(draft)); } catch (failure) { setError(errorMessage(failure)); }
+        setError(''); try { setSample(await preview({ ...draft, defaultLanguage: draft.defaultLanguage === 'auto' ? (getLocale() === 'zh-CN' ? 'zh-CN' : 'en-US') : draft.defaultLanguage })); } catch (failure) { setError(errorMessage(failure)); }
       }}>{c.previewAction}</Button>
       {sample && <TextArea mt="3" value={sample} readOnly rows={5} aria-label={c.preview} />}
-    </section>
+    </details>
   </div>;
 }

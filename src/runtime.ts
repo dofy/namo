@@ -263,7 +263,7 @@ export class CodexRuntime implements Runtime {
             return;
           }
           if (params.tool === PR_REVIEW_TOOL.name && r.onReview) {
-            if (completed || pendingWait || reviewActive || ++reviewCalls>3 || params.namespace!==null || params.threadId!==threadId || params.turnId!==expectedTurn || typeof params.callId!=='string') {
+            if (completed || pendingWait || reviewActive || ++reviewCalls>300 || params.namespace!==null || params.threadId!==threadId || params.turnId!==expectedTurn || typeof params.callId!=='string') {
               rpc.respondError(id,-32602,'github_review_invalid_call'); return;
             }
             reviewActive=true;

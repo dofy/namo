@@ -69,7 +69,7 @@ flowchart LR
 
 **外部操作。** 群聊 GitHub 只读，本人私聊按授权使用账号 API；PR 审查和 CI 等待不隐含写操作。Git push 入口重验任务、提交、分支、远端、有效期与配置版本；该入口只提供有限保护，不是所有通用工具的强制审批边界。人工等待也不等于外部操作批准。
 
-**管理与升级。** UI 仅绑定 loopback，使用一次性启动授权、HttpOnly 会话、Host / Origin 校验和 CSP；浏览器仅导入 [ui-contract](../src/ui-contract.ts)。备份校验配置、数据库完整性与内容后，服务才切换登记；启动器校验快照，接收端及新 worker 使用同一版本。维护操作见[运维指南](operations.md)。
+**管理与升级。** UI 仅绑定 loopback，使用一次性启动授权、HttpOnly 会话、Host / Origin 校验和 CSP；浏览器仅导入 [ui-contract](../src/ui-contract.ts)。接收器固定在校验过的发布快照。兼容的执行代码可通过 [runtime-host](../src/runtime-host.ts) 在线替换，接收连接持续存在，切换期间消息落库后才确认收件；新任务使用新执行版本，已运行的独立 worker 保留原版本。备份使用 WAL 一致性快照；校验、加载失败保留旧执行版本，发送结果未知的记录不重放。接收器、存储或依赖不兼容时保留在线服务并拒绝热更新。维护操作见[运维指南](operations.md)。
 
 **扩展。** [runtime-contract](../src/runtime-contract.ts) 预留执行、修订、等待、取消和证据接口；没有其他 Agent SDK、探针、注册 UI、动态加载器或多 Agent 路由。旧 Codex profile 绑定只为兼容，退休适配器不回退执行。未来插件也必须遵守统一权限、调度和投递。
 

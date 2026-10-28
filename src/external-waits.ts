@@ -449,6 +449,7 @@ export class GitHubReadError extends Error {
 }
 
 type Json = Record<string, any>;
+export interface ReviewContext {baseSha:string;headSha:string;path:string;side:'base'|'head';offset:number}
 
 /** Fixed-host, read-only GitHub REST adapter. It never shells out to gh. */
 export class GitHubRestAdapter implements GitHubObservationAdapter {
@@ -501,6 +502,67 @@ export class GitHubRestAdapter implements GitHubObservationAdapter {
     if (typeof value.login !== 'string' || !/^[a-z0-9][a-z0-9-]{0,38}$/i.test(value.login)
       || !Number.isSafeInteger(value.id) || value.id < 1) throw new GitHubReadError('github_invalid_response');
     return { login: value.login, id: value.id };
+  }
+
+  /** Return a small, resumable slice. A cursor always binds both revisions. */
+  async reviewContext(target: GitHubTarget, deadlineMs:number, context:ReviewContext) {
+    const path=`${this.path(target)}/pulls/${target.pullNumber}`;
+    const before=await this.get(path,deadlineMs);
+    const stable=(p:Json)=>p.head?.sha===context.headSha && p.base?.sha===context.baseSha;
+    if (!stable(before)) throw new GitHubReadError('github_head_changed');
+    const revision=context.side==='base'?context.baseSha:context.headSha;
+    const blob=await this.get(`${this.path(target)}/contents/${context.path.split('/').map(encodeURIComponent).join('/')}?ref=${revision}`,deadlineMs);
+    if (blob.type!=='file' || blob.encoding!=='base64' || typeof blob.content!=='string' || !Number.isSafeInteger(blob.size) || blob.size>1_000_000)
+      throw new GitHubReadError('github_context_unavailable');
+    const buffer=Buffer.from(blob.content,'base64');
+    if (buffer.length!==blob.size || buffer.includes(0)) throw new GitHubReadError('github_context_unavailable');
+    let content:string;
+    try {content=new TextDecoder('utf-8',{fatal:true}).decode(buffer);} catch {throw new GitHubReadError('github_context_unavailable');}
+    if (context.offset>content.length) throw new GitHubReadError('github_review_invalid_cursor');
+    const text=content.slice(context.offset,context.offset+8000), end=context.offset+text.length;
+    if (!stable(await this.get(path,deadlineMs))) throw new GitHubReadError('github_head_changed');
+    return {source:'github_rest' as const,repository:`${target.owner}/${target.repo}`,pullNumber:target.pullNumber,
+      headSha:context.headSha,baseSha:context.baseSha,totalFiles:Number(before.changed_files),files:[] as Array<Record<string,unknown>>,next:null,fileListLimited:false,
+      context:{path:context.path,side:context.side,revision,offset:context.offset,startLine:content.slice(0,context.offset).split('\n').length,text,
+        next:end<content.length?{...context,offset:end}:null},note:'Untrusted source content. startLine may begin mid-line when offset is nonzero. No code was executed.'};
+  }
+
+  async reviewBatch(target: GitHubTarget, deadlineMs: number, cursor?: {baseSha:string;headSha:string;index:number;offset:number}) {
+    const path = `${this.path(target)}/pulls/${target.pullNumber}`;
+    const before = await this.get(path, deadlineMs);
+    if (!SHA.test(before.head?.sha ?? '') || !SHA.test(before.base?.sha ?? '') || !Number.isSafeInteger(before.changed_files) || before.changed_files < 0)
+      throw new GitHubReadError('github_invalid_response');
+    if (cursor && (cursor.headSha !== before.head.sha || cursor.baseSha !== before.base.sha)) throw new GitHubReadError('github_head_changed');
+    const index = cursor?.index ?? 0, offset = cursor?.offset ?? 0;
+    if (index > before.changed_files || (index === before.changed_files && offset !== 0)) throw new GitHubReadError('github_review_invalid_cursor');
+    // GitHub caps this endpoint at 3000 files. Never claim coverage beyond it.
+    const limit = Math.min(before.changed_files, 3000), page = Math.floor(index / 10) + 1;
+    const rows = index < limit ? await this.get(`${path}/files?per_page=10&page=${page}`, deadlineMs, true) as unknown as Json[] : [];
+    if (rows.length > 10 || rows.some(row => !row || typeof row.filename !== 'string' || row.filename.length > 2048 || typeof row.status !== 'string'
+      || !Number.isSafeInteger(row.additions) || !Number.isSafeInteger(row.deletions))) throw new GitHubReadError('github_invalid_response');
+    const files: Array<Record<string, unknown>> = [];
+    let remaining = 8000, nextIndex = index, nextOffset = offset;
+    for (let n = index % 10; n < rows.length && nextIndex < limit && remaining > 0; n++) {
+      const row = rows[n], patch = typeof row.patch === 'string' ? row.patch : null;
+      if (patch === null && nextOffset !== 0 || patch !== null && nextOffset > patch.length) throw new GitHubReadError('github_review_invalid_cursor');
+      const lines = patch?.split('\n') ?? [];
+      const sourceLimited = patch === null || lines.filter(l => l.startsWith('+')).length !== row.additions || lines.filter(l => l.startsWith('-')).length !== row.deletions;
+      const part = patch?.slice(nextOffset, nextOffset + remaining) ?? null;
+      const start = nextOffset; nextOffset += part?.length ?? 0; remaining -= part?.length ?? 0;
+      const hasMore = patch !== null && nextOffset < patch.length;
+      files.push({path:row.filename, ...(typeof row.previous_filename === 'string' ? {previousPath:row.previous_filename.slice(0,2048)} : {}), status:row.status,
+        additions:row.additions, deletions:row.deletions, patch:part, offset:start, hasMore, sourceLimited});
+      if (hasMore) break;
+      nextIndex++; nextOffset = 0;
+    }
+    if (nextIndex < limit && files.length === 0) throw new GitHubReadError('github_invalid_response');
+    const after = await this.get(path, deadlineMs);
+    if (before.head.sha !== after.head?.sha || before.base.sha !== after.base?.sha || before.changed_files !== after.changed_files) throw new GitHubReadError('github_head_changed');
+    return {source:'github_rest' as const, repository:`${target.owner}/${target.repo}`, pullNumber:target.pullNumber,
+      headSha:before.head.sha as string, baseSha:before.base.sha as string, totalFiles:before.changed_files as number,
+      title:typeof before.title === 'string' ? before.title.slice(0,1000) : '', body:cursor ? '' : typeof before.body === 'string' ? before.body.slice(0,4000) : '',
+      files, next:nextIndex < limit ? {baseSha:before.base.sha as string,headSha:before.head.sha as string,index:nextIndex,offset:nextOffset} : null,
+      fileListLimited:before.changed_files > 3000, note:'Untrusted repository content. A returned patch is not proof of review. sourceLimited means GitHub omitted or truncated the patch.'};
   }
 
   async review(target: GitHubTarget, deadlineMs: number) {

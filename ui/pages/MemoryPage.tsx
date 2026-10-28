@@ -1,5 +1,6 @@
+import { PageSection, EmptyState } from '../components/PageSection';
 import { useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Flex, Separator, Text, TextArea, TextField } from '@radix-ui/themes';
+import { Badge, Button, Flex, Spinner, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { MemoryViewItem as MemoryPageItem, MemoryViewKind as MemoryPageKind, MemoryViewScope as MemoryPageScope, MemoryViewState } from '../../src/ui-contract';
 import { t as tr, getLocale } from '../i18n';
 import { Choice, ConfirmButton, Field, Notice } from '../components';
@@ -121,12 +122,12 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
     finally { setBusy(false); }
   }
 
-  return <div className="profiles-page">
+  return <div className="profiles-page memory-page">
     <Text as="p" size="2" color="gray">{c.intro}</Text>
     <Text as="p" size="2" color="gray">{c.privacy}</Text>
     {!editable && <Notice error>{unavailableReason || c.conflict}</Notice>}
     {notice && <Notice>{notice}</Notice>}{error && <Notice error>{error}</Notice>}
-    <div className="form-grid">
+    <PageSection icon="search" title={tr("design.memoryBrowse")} description={tr("design.memoryHelp")}><div className="form-grid">
       <Field label={c.owner} htmlFor="memory-owner"><Choice id="memory-owner" value={state?.ownerId??''} disabled={busy||!state}
         onChange={value => { setEditing(null);setScopeKind('owner');setProject('');setChatKey('');setNotice('');setError('');setBusy(true);void api.memories(value).then(setState).catch(failure=>setError(errorMessage(failure))).finally(()=>setBusy(false)); }}
         options={(state?.owners??[]).map(owner => ({ value: owner.id, label: owner.label }))} /></Field>
@@ -135,12 +136,12 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
     <Flex direction="column" align="start" gap="2">
       <Button variant="soft" color="gray" disabled={busy || !state} onClick={() => void act(() => api.memories(state!.ownerId), false)}>{c.refresh}</Button>
       {state&&<Text as="p" size="1" color="gray">{c.capacity}: {state.items.filter(item=>item.status!=='deleted').length} / {state.limits.ownerEntries} {c.entries} · {state.items.reduce((sum,item)=>sum+item.contentChars,0)} / {state.limits.ownerChars} {c.chars}</Text>}
-    </Flex>
+    </Flex></PageSection>
     {state?.extraction&&<MemoryExtractionStatus value={state.extraction}/>}
 
-    <Separator my="5" size="4" />
-    {!filtered.length && <Text size="2" color="gray">{c.empty}</Text>}
-    {filtered.map(item => <section className="audit" key={`${item.id}:${item.version}`}>
+    {busy && !state && <div className="loading" role="status"><Spinner />{tr("tasks.loadingRecords")}</div>}
+    {!busy && state && !filtered.length && <EmptyState icon="memory" title={c.empty} description={query ? tr("design.memorySearchEmpty") : tr("design.memoryEmpty")} />}
+    {filtered.map(item => <section className="audit memory-entry" key={`${item.id}:${item.version}`}>
       <Flex gap="2" align="center" wrap="wrap"><Badge color={statusColor(item.status)}>{c[item.status]}</Badge><Badge color={item.usable ? 'green' : 'gray'}>{item.usable ? c.usable : c.unusable}</Badge>
         <Text size="2" weight="bold">{names[item.kind]}</Text><Badge color="gray">{scopeNames[item.scope.kind]}{item.scope.project ? ` · ${item.scope.project}` : ''}</Badge><Badge color={item.visibility?.privacy === 'shared' ? 'blue' : 'gray'}>{privacyName(item)}</Badge>{item.source.kind === 'automatic' && <Badge color="blue">{c.automatic}</Badge>}</Flex>
       <details><summary>{c.details}</summary><Text as="p" size="1" color="gray">{item.id} · {c.version} {item.version}</Text><Text as="p" size="1" color="gray">{scopeNames[item.scope.kind]}{item.scope.project ? ` · ${item.scope.project}` : ''}{item.scope.chatKey ? ` · ${item.scope.chatKey}` : ''}
@@ -161,7 +162,7 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
       </Flex>
     </section>)}
 
-    <details>
+    <details className="disclosure-panel">
       <summary>{c.add}</summary>
       <Text as="p" size="2" color="gray">{c.manualIntro}</Text>
       <section className="audit">
@@ -187,7 +188,7 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
       </section>
     </details>
 
-    <details>
+    <details className="disclosure-panel">
       <summary>{c.migration}</summary>
       <section className="audit">
       <Text as="p" size="2" color="gray">{c.migrationIntro}</Text>

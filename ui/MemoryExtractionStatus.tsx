@@ -1,3 +1,4 @@
+import { SectionHeading } from './components/PageSection';
 import { Badge, Flex, Text } from '@radix-ui/themes';
 import type { MemoryExtractionJob, MemoryExtractionView } from '../src/ui-contract';
 import { getLocale, t as tr } from './i18n';
@@ -33,8 +34,7 @@ function JobStatus({job,maxAttempts}:{job:MemoryExtractionJob;maxAttempts:number
 export function MemoryExtractionStatus({value}:{value:MemoryExtractionView}) {
   const latest=value.recent[0];
   return <section className="memory-extraction" aria-label={tr('memory.extraction.title')}>
-    <Text as="p" size="2" weight="bold">{tr('memory.extraction.title')}</Text>
-    <Text as="p" size="2" color="gray">{tr('memory.extraction.help')}</Text>
+    <SectionHeading icon="activity" title={tr('memory.extraction.title')} description={tr('memory.extraction.help')} />
     <Flex gap="2" wrap="wrap" role="status">
       <Badge color="gray">{tr('memory.extraction.pendingCount',value.pending)}</Badge>
       <Badge color="blue">{tr('memory.extraction.runningCount',value.running)}</Badge>

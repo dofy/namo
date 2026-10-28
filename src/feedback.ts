@@ -80,7 +80,7 @@ export class Feedback {
       }
       const important=state.terminal||task.state==='waiting';
       if(!important&&now-Number(last?.createdAt??row.acceptedAt??0)<(changed?cadence:heartbeat))continue;
-      const card=renderTaskCard(task,state.content,'progress',0);
+      const card=renderTaskCard(task,state.content,'progress',0,[],state.totals);
       // Preserve only the original authorized action tokens, whose acceptance rechecks current task/version.
       if(!state.terminal){const actions=original.elements?.filter((x:{tag:string})=>x.tag==='action')??[];(card as {elements:unknown[]}).elements.push(...actions);}
       const content=JSON.stringify(card),version=Number(last?.version??0)+1;
