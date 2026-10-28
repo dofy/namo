@@ -59,7 +59,7 @@ To build a local CLI package:
 
 ```sh
 pnpm pack
-npm install -g ./namo-0.1.0.tgz
+npm install -g ./namo-0.2.0.tgz
 namo init
 ```
 
@@ -87,7 +87,7 @@ NAMO_LANG=zh-CN namo ui
 
 ## Chat commands
 
-Use `/project` to switch projects, `/task` to inspect a task, `/cancel` to stop it, `/new` for a fresh context, `/profile` for your profile, and `/help` for available commands. In a private chat, `/model` shows model choices, `/model MODEL_ID` sets your default, and `/model default` follows the service default. The workbench can also set each user's default. Explicit selections are saved with accepted tasks; availability depends on the Codex account.
+Use `/project` to switch projects, `/task` to inspect a task, `/cancel` to stop it, `/new` for a fresh context, `/profile` for your profile, `/status` for service status and versions, `/version` for Namo and Codex CLI versions, and `/help` for available commands. In a private chat, `/model` shows model choices, `/model MODEL_ID` sets your default, and `/model default` follows the service default. The workbench can also set each user's default. Explicit selections are saved with accepted tasks; availability depends on the Codex account.
 
 The workbench’s **Settings → Codex CLI updates** panel provides version checks, manual upgrades, rollback and an automatic update toggle. Automatic upgrades are off by default. While the service runs, enabled updates check the official stable channel daily, defer while busy, and back off for at least an hour after failures. Namo keeps complete private packages in `namo-cli/` under its isolated Codex home, verifies SHA-256, version, app-server handshake, login, permissions and model discovery, then atomically selects the candidate when idle. It preserves the global CLI and model preferences. Rollback disables automatic upgrades. macOS/Linux arm64/x64 are supported. Feishu model discovery refreshes every five minutes and after CLI changes; failed updates retain the selected version. Historical CLI packages are currently retained without automatic cleanup.
 

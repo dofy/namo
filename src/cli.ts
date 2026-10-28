@@ -16,6 +16,7 @@ import { serviceAction, assertNoLegacyReceiver } from './service.js';
 import { currentRuntimeRelease } from './release.js';
 import { parseLocale, systemLocale } from './i18n.js';
 import { PROJECT_URL } from './project.js';
+import { NAMO_VERSION } from './version.js';
 import { startCodexAutoUpdates } from './codex-updates.js';
 
 process.umask(0o077);
@@ -44,7 +45,7 @@ async function main(): Promise<void> {
     if (valueFlags.includes(args[i])) { flag(args[i]); i++; continue; }
     if (args[i].startsWith('-') && !['--help','-h','--version','-v','--import'].includes(args[i])) throw new Error(tr('cli.unknownOptionRunNamoHelpUsage'));
   }
-  if (args.includes('--version') || args.includes('-v')) { console.log(JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version); return; }
+  if (args.includes('--version') || args.includes('-v')) { console.log(NAMO_VERSION); return; }
   if (args.includes('--help') || args.includes('-h') || command === 'help') { console.log(tr('cli.help') + '\n' + tr('cli.project', PROJECT_URL)); return; }
   if (!['init','login','start','service','ui'].includes(command)) throw new Error(tr('cli.unknownCommandRunNamoHelp', command));
   if (positional.length > (command === 'service' ? 2 : 1)) throw new Error(tr('cli.tooManyArgumentsRunNamoHelpUsage'));

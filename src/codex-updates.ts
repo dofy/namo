@@ -8,6 +8,7 @@ import { digest } from './paths.js';
 import { acquireLock } from './safety.js';
 import { SCHEMA_VERSION } from './store.js';
 import { Rpc } from './codex-connection.js';
+import { NAMO_VERSION } from './version.js';
 import { fetchStableRelease, installCodexRelease, readCodexVersion, targetTriple } from './codex-distribution.js';
 import { installationRoot, installationState, installedBinary, resolveCodexBinary, saveInstallation, type CodexInstallation } from './codex-installation.js';
 
@@ -21,7 +22,7 @@ const defaults: UpdateDependencies = { latest: fetchStableRelease, install: inst
     const abort=()=>rpc.stop();signal?.addEventListener('abort',abort,{once:true});
     try {
       if(signal?.aborted)throw Error('update_cancelled');
-      await rpc.request('initialize',{clientInfo:{name:'namo-update',version:'0.1.0'},capabilities:{experimentalApi:true}});
+      await rpc.request('initialize',{clientInfo:{name:'namo-update',version:NAMO_VERSION},capabilities:{experimentalApi:true}});
       rpc.notify('initialized');
       const account=await rpc.request('account/read',{refreshToken:false});
       const permissions=await rpc.request('permissionProfile/list',{});

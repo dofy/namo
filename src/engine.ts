@@ -20,6 +20,8 @@ import { listCodexModels } from './codex-connection.js';
 import { ModelCatalog } from './model-catalog.js';
 import { formatControlDisplay } from './control-display.js';
 import { resolveCodexBinary } from './codex-installation.js';
+import { RuntimeVersions } from './runtime-version.js';
+import { NAMO_VERSION } from './version.js';
 import { agentCodexConfig } from './agent-registry.js';
 import { EvidenceRecorder, readEvidence } from './evidence.js';
 import { runnerJob } from './runner-store.js';
@@ -78,6 +80,7 @@ export class Engine {
   private memoryRunning?: Promise<void>;
   private memoryAbort?: AbortController;
   private modelCatalog?: ModelCatalog;
+  private versions = new RuntimeVersions();
   constructor(readonly store: Store, private runtime: Runtime, private sender: Sender,
     private config: Pick<Config, 'dataDir' | 'concurrency' | 'github'> & { file?:string; codex?: Config['codex']; agents?: Config['agents']; feishu?: Partial<Config['feishu']> },
     private redact: (s: string) => string = s => s,
@@ -143,7 +146,7 @@ export class Engine {
     const memoryReply=memoryCommand(this.store,m,knownUsers,this.tasks.binding(m)?.project??this.config.codex?.defaultProject??null,this.redact,memoryProjects(this.contextConfig(),m));
     if(memoryReply!==undefined){if(this.store.claim(m.key))this.store.finish(m.key,memoryReply);return true;}
     const command = m.text.trim().split(/\s/)[0];
-    if (['/deliver','/profile','/model','/issues','/issue','/resolve','/status', '/whoami', '/cancel', '/reset', '/new', '/session', '/tasks', '/task', '/help', '/project', '/unsupported', '/too-long'].includes(command)) {
+    if (['/deliver','/profile','/model','/issues','/issue','/resolve','/status', '/version', '/whoami', '/cancel', '/reset', '/new', '/session', '/tasks', '/task', '/help', '/project', '/unsupported', '/too-long'].includes(command)) {
       if (!this.store.claim(m.key)) return true;
       let reply: string;
       if(command === '/deliver') {
@@ -182,9 +185,10 @@ export class Engine {
         else if (wid) reply = this.tasks.selectStream(m, wid) ? `已选择工作线 ${wid.toUpperCase()}；下一项任务续接其上下文。` : '未找到可访问的工作线。';
         else reply = `**当前工作线**\n${this.tasks.binding(m)?.id ?? '尚未创建'}\n\n**可用工作线**\n${this.tasks.streams(m).map(w => `${w.id} · ${w.project ?? '隔离目录'}`).join('\n') || '暂无'}\n\n切换：\`/session W-编号\`\n新开：\`/new\``;
       }
+      else if (command === '/version') reply = `**版本信息**\n${this.versionLines(m)}`;
       else if (command === '/status') {
         const pending = this.tasks.pending(m);
-        reply = `**服务可用**\n当前项目：${this.tasks.binding(m)?.project ?? this.store.project(this.projectScope(m)) ?? this.config.codex?.defaultProject ?? '隔离工作区'}\n\n**任务状态**\n正在处理 ${pending.filter(t => t.state === 'running').length} 项 · 排队 ${pending.filter(t => t.state === 'queued').length} 项 · 等待补充 ${pending.filter(t => t.state === 'waiting').length} 项\n\n用 \`/tasks\` 查看本人的任务。`;
+        reply = `**服务可用**\n当前项目：${this.tasks.binding(m)?.project ?? this.store.project(this.projectScope(m)) ?? this.config.codex?.defaultProject ?? '隔离工作区'}\n\n**版本信息**\n${this.versionLines(m)}\n\n**任务状态**\n正在处理 ${pending.filter(t => t.state === 'running').length} 项 · 排队 ${pending.filter(t => t.state === 'queued').length} 项 · 等待补充 ${pending.filter(t => t.state === 'waiting').length} 项\n\n用 \`/tasks\` 查看本人的任务。`;
       }
       else if (command === '/project') {
         const name = m.text.trim().split(/\s+/)[1];
@@ -200,7 +204,7 @@ export class Engine {
         '**任务**',
         '`/tasks` 查看任务列表\n`/task N-编号` 查看详情\n`/amend N-编号 补充要求` 追加要求\n`/cancel [N-编号]` 停止本人任务\n`/resume WAIT-编号 回答` 继续等待中的任务',
         '**会话与项目**',
-        '`/session [W-编号]` 查看或切换工作线\n`/new` 或 `/reset` 开始新工作线\n`/project` 查看或切换项目\n`/status` 查看服务与任务状态',
+        '`/session [W-编号]` 查看或切换工作线\n`/new` 或 `/reset` 开始新工作线\n`/project` 查看或切换项目\n`/status` 查看服务与任务状态\n`/version` 查看版本',
         '**材料与文件**',
         '`/material 内容` 暂存材料\n`/run 要求` 处理暂存材料\n`/deliver N-编号 相对路径` 交付任务文件',
         '**个人设置与记忆 · 私聊**',
@@ -269,6 +273,14 @@ export class Engine {
     const bound = reference ?? this.tasks.binding(m);
     return bound ? this.tasks.selection(bound.id) ?? selectAgent(c, 'codex') : selectAgent(c);
   }
+  private versionLines(m: Incoming): string {
+    let version:string|null=null;
+    try {
+      const c=this.config.codex;
+      if(c) version=this.versions.get(agentCodexConfig({...this.config,codex:c},this.selectedAgent(m)));
+    } catch { /* Invalid or missing runtime is reported without leaking paths or errors. */ }
+    return `Namo：\`${NAMO_VERSION}\`\nCodex CLI：${version ? `\`${version}\`` : '暂不可用，检测中或未安装'}`;
+  }
   private project(m: Incoming, reference?: Task): ProjectBinding {
     const c = this.config.codex, f=this.config.feishu as Config['feishu'];
     const bound = reference ?? this.tasks.binding(m);
@@ -302,6 +314,9 @@ export class Engine {
     catch (e) { if (e instanceof RuntimeError) return '当前项目已从配置移除，请用 /project 选择其他项目'; throw e; }
   }
   start(): void {
+    if(this.config.codex) {
+      try {this.versions.get(agentCodexConfig({...this.config,codex:this.config.codex}));} catch { /* A missing runtime remains visible as unavailable. */ }
+    }
     this.modelCatalog?.start();
     this.approvals?.start();
     this.log('recovered', this.store.recover(this.runtime.persistent));
@@ -602,6 +617,7 @@ export class Engine {
     await this.memoryRunning;
     await this.approvals?.idle();
     await modelDiscovery;
+    await this.versions.settle();
     while (this.outputBusy) await new Promise(r => setTimeout(r, 20));
   }
   acceptCard(event: CardEvent): ReturnType<Cards['accept']> {

@@ -6,6 +6,7 @@ import { delimiter, dirname, join, resolve } from 'node:path';
 import type { Config } from './config.js';
 import { codexEnvironment } from './safety.js';
 import { RuntimeError } from './runtime-contract.js';
+import { NAMO_VERSION } from './version.js';
 import { resolveCodexBinary } from './codex-installation.js';
 import { readSkillSettings, skillReadDirectories, skillSettingsOverride, SkillAccessError, type SkillAccess, type SkillCatalog } from './skill-access.js';
 
@@ -141,7 +142,7 @@ export class Rpc {
 async function initializedRpc(config: Config['codex'], skills: SkillAccess): Promise<Rpc> {
   const rpc = new Rpc(config.bin, config.home, config.sandbox, config, false, skills);
   try {
-    await rpc.request('initialize', { clientInfo: { name: 'namo', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+    await rpc.request('initialize', { clientInfo: { name: 'namo', version: NAMO_VERSION }, capabilities: { experimentalApi: true } });
     rpc.notify('initialized');
     return rpc;
   } catch (error) { await rpc.close(); throw error; }
