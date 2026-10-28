@@ -1,5 +1,10 @@
 // Stable message IDs. Copy edits must not rename keys. Keep placeholders aligned with zh-CN.
 export const english = {
+  "mcp.endpointDuplicate": "This MCP endpoint already exists. Edit the existing connection instead.",
+  "mcp.endpointExists": "This endpoint is already used by {0}. Use that connection or choose a different endpoint.",
+  "mcp.duplicateBadge": "Duplicate endpoint",
+  "mcp.existingDuplicate": "Shares an endpoint with {0}. Review which connection to keep; credentials and permissions are not merged.",
+  "mcp.importDuplicateOf": "Duplicates {0}; no import needed",
   "mcp.edit": "Edit",
   "mcp.editConnection": "Edit connection · {0}",
   "mcp.editorHelp": "Save settings, or save and sign in. Existing settings and credentials remain until authorization succeeds.",

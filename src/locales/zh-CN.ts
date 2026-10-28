@@ -1,6 +1,11 @@
 import type { MessageKey } from './en.js';
 
 export const chinese = {
+  "mcp.endpointDuplicate": "此 MCP 地址已存在，请编辑已有连接，不要重复添加。",
+  "mcp.endpointExists": "此地址已用于连接 {0}。请使用已有连接或填写不同的地址。",
+  "mcp.duplicateBadge": "地址重复",
+  "mcp.existingDuplicate": "与 {0} 指向同一地址；请核对后保留需要的连接，凭据和权限不会自动合并。",
+  "mcp.importDuplicateOf": "与 {0} 重复，无需导入",
   "mcp.edit": "编辑",
   "mcp.editConnection": "编辑连接 · {0}",
   "mcp.editorHelp": "保存配置，或直接保存并登录授权。新授权成功前保留原配置和凭据。",

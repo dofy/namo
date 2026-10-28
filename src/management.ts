@@ -1,3 +1,4 @@
+import {addsDuplicateMcpEndpoint} from './mcp-endpoint-contract.js';
 import { listCodexMcp, selectCodexMcp, CodexMcpImportError } from './codex-mcp-import.js';
 import { serviceLogs, listApprovals, changeApproval } from './management-operations.js';
 import { ApprovalError } from './approvals.js';
@@ -312,7 +313,7 @@ export class Management {
       return {toolCount:Array.isArray(result)?result.length:0};
     } catch(error) {if(error instanceof ManagementError)throw error;throw new ManagementError('mcp_connection_failed',400);}
   }
-  codexMcpCatalog() {try{return listCodexMcp(this.deps.codexMcpConfig);}catch{throw new ManagementError('codex_mcp_config_invalid',400);}}
+  codexMcpCatalog() {try{return listCodexMcp(this.deps.codexMcpConfig,parseMcpConnections(this.source().raw.mcpConnections));}catch{throw new ManagementError('codex_mcp_config_invalid',400);}}
   importCodexMcp(revision:unknown,sourceRevision:unknown,ids:unknown) {
     if(typeof revision!=='string'||this.source().revision!==revision)throw new ManagementError('mcp_config_changed');
     if(typeof sourceRevision!=='string'||!Array.isArray(ids)||!ids.length||ids.length>20||ids.some(id=>typeof id!=='string'))throw new ManagementError('codex_mcp_selection_invalid',400);
@@ -330,6 +331,7 @@ export class Management {
     const value=draft as McpConnectionPatch;
     if(id&&(!prior||id!==value.id)||!id&&connections.some(c=>c.id===value.id))throw new ManagementError('mcp_config_changed');
     let parsed;try{parsed=parseMcpConnections([{...value,token:''}])[0];parseConfig({...raw,mcpConnections:[...connections.filter(c=>c.id!==id),parsed]},this.file);}catch{throw new ManagementError('mcp_invalid_config',400);}
+    if(addsDuplicateMcpEndpoint(connections,[...connections.filter(c=>c.id!==id),parsed!]))throw new ManagementError('mcp_duplicate_endpoint',400);
     const {token:_token,...safe}=parsed!;return safe;
   }
   saveMcpOAuth(revision:string,id:string,reference:string,draft?:McpConnectionPatch):void {
@@ -410,6 +412,7 @@ export class Management {
       if(patch.newGithubToken||patch.clearGithubToken){next.github??={};delete next.github.tokenEnv;delete next.github.token;
         if(patch.newGithubToken)next.github.token=patch.newGithubToken;}
       try{parseConfig(next,this.file);}catch{throw new ManagementError(tr("management.configurationValidationFailedCheckProjectDirectoriesDefault"));}
+      if(patch.mcpConnections!==undefined&&addsDuplicateMcpEndpoint(parseMcpConnections(raw.mcpConnections),parseMcpConnections(next.mcpConnections)))throw new ManagementError('mcp_duplicate_endpoint',400);
       const editor=new ConfigEditor(this.file);if(digest(readFileSync(this.file,'utf8'))!==revision)throw new ManagementError(tr("management.configurationChangedRefreshContinue"));
       editor.save(next);return this.config();
     } finally {release();}

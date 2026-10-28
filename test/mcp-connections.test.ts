@@ -144,3 +144,39 @@ test('admin can test a disabled connection without enabling task access or invok
  await assert.rejects(manager.testMcp(revision,'missing'),/mcp_connection_not_found/);
  await assert.rejects(manager.testMcp('stale','linear'),/mcp_config_changed/);assert.equal(calls,1);
 });
+
+test('management rejects duplicate endpoints for add, edit and OAuth before saving credentials',async t=>{
+ const f=fixture(t),view=f.manager.config(),original=view.mcpConnections.map(({credentialConfigured:_configured,credentialSource:_source,...v}:any)=>v);
+ const before=readFileSync(f.file,'utf8');
+ // URL normalization accounts for host case, the default port and dot segments.
+ const duplicate={...original[0],id:'another',url:'https://MCP.LINEAR.APP:443/mcp/../mcp/readonly',enabled:false};
+ assert.throws(()=>f.manager.save(view.revision,{mcpConnections:[...original,duplicate]}),/mcp_duplicate_endpoint/);
+ const {McpOAuthFlow}=await import('../src/mcp-oauth-flow.js');let networkCalls=0;
+ const flow=new McpOAuthFlow(f.manager,()=> 'http://127.0.0.1:45678',async()=>{networkCalls++;throw new Error('unexpected_oauth_network');});
+ await assert.rejects(flow.begin(view.revision,'',duplicate),/mcp_duplicate_endpoint/);assert.equal(networkCalls,0);
+ assert.throws(()=>f.manager.saveMcpOAuth(view.revision,'','oauth_'+'a'.repeat(48),duplicate),/mcp_duplicate_endpoint/);
+ assert.equal(readFileSync(f.file,'utf8'),before);
+ const other={...duplicate,url:'https://mcp.linear.app/mcp'};
+ const saved=f.manager.save(view.revision,{mcpConnections:[...original,other]});
+ const {credentialConfigured:_configured,credentialSource:_source,...existing}=saved.mcpConnections[1];
+ assert.throws(()=>f.manager.save(saved.revision,{mcpConnections:[original[0],{...existing,url:original[0].url}]}),/mcp_duplicate_endpoint/);
+ assert.throws(()=>f.manager.prepareMcpOAuth(saved.revision,'another',{...existing,url:original[0].url}),/mcp_duplicate_endpoint/);
+});
+
+test('existing duplicate connections retain independent credentials and grants and can be removed',t=>{
+ const f=fixture(t);
+ f.edit(c=>{c.mcpConnections.push({...c.mcpConnections[0],id:'old-copy',enabled:false,token:'separate_token_123',audience:{organization:false,userIds:['bob'],chatIds:[]}});});
+ const view=f.manager.config(),values=view.mcpConnections.map(({credentialConfigured:_configured,credentialSource:_source,...v}:any)=>v);
+ assert.equal(loadConfig(f.file).mcpConnections!.length,2);
+ const saved=f.manager.save(view.revision,{mcpConnections:values});
+ assert.deepEqual(loadConfig(f.file).mcpConnections!.map(v=>({id:v.id,token:v.token,users:v.audience.userIds})),[{id:'linear',token,users:['alice']},{id:'old-copy',token:'separate_token_123',users:['bob']}]);
+ assert.doesNotThrow(()=>f.manager.prepareMcpOAuth(saved.revision,'old-copy',values[1]));
+ const removed=f.manager.save(saved.revision,{mcpConnections:[values[0]]});assert.equal(removed.mcpConnections.length,1);
+ assert.equal(loadConfig(f.file).mcpConnections![0].token,token);
+});
+
+test('endpoint identity preserves distinct environments and path semantics',async()=>{
+ const {duplicateMcpEndpoint}=await import('../src/mcp-endpoint-contract.js'),base={id:'first',url:'https://api.example/mcp'};
+ for(const url of ['https://staging.example/mcp','https://api.example/MCP','https://api.example/mcp/','https://api.example/mcp/readonly'])assert.equal(duplicateMcpEndpoint([base],{id:'second',url}),undefined);
+ assert.equal(duplicateMcpEndpoint([base],{id:'second',url:'https://API.EXAMPLE:443/./mcp'})?.id,'first');
+});

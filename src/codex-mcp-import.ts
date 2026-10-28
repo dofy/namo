@@ -1,3 +1,4 @@
+import {mcpEndpointKey,type McpEndpoint} from './mcp-endpoint-contract.js';
 import { createHmac, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -7,7 +8,7 @@ import { parse } from 'smol-toml';
 /** Only metadata from the personal Codex user config is exposed to the workbench. */
 export interface CodexMcpCandidate {
   id:string; transport:'remote'|'stdio'|'unsupported'; host?:string; importable:boolean;
-  requiresOwnAuth:boolean; reason?:'local_process'|'invalid_url'|'url_parameters'|'unknown_transport';
+  requiresOwnAuth:boolean; duplicateOf?:string; reason?:'local_process'|'invalid_url'|'url_parameters'|'unknown_transport'|'duplicate_endpoint'|'duplicate_id';
 }
 export interface CodexMcpCatalog {revision:string;entries:CodexMcpCandidate[]}
 const revisionKey=randomBytes(32);
@@ -38,9 +39,16 @@ function classify(id:string,value:unknown):CodexMcpCandidate {
   if(typeof value.command==='string')return {id,transport:'stdio',importable:false,requiresOwnAuth,reason:'local_process'};
   return {id,transport:'unsupported',importable:false,requiresOwnAuth,reason:'unknown_transport'};
 }
-export function listCodexMcp(path=personalCodexConfig()):CodexMcpCatalog {
-  const {revision,servers}=read(path);
-  return {revision,entries:Object.entries(servers).filter(([id])=>identifier.test(id)).slice(0,200).map(([id,value])=>classify(id,value)).sort((a,b)=>a.id.localeCompare(b.id))};
+export function listCodexMcp(path=personalCodexConfig(),existing:readonly McpEndpoint[]=[]):CodexMcpCatalog {
+  const {revision,servers}=read(path),ids=new Map(existing.map(value=>[value.id,value.id])),endpoints=new Map(existing.map(value=>[mcpEndpointKey(value.url),value.id]));
+  const entries=Object.entries(servers).filter(([id])=>identifier.test(id)).slice(0,200).map(([id,value])=>classify(id,value)).sort((a,b)=>a.id.localeCompare(b.id));
+  for(const entry of entries){
+    if(!entry.importable)continue;
+    const key=mcpEndpointKey(String((servers[entry.id] as Record<string,unknown>).url)),duplicateId=ids.get(entry.id.toLowerCase()),duplicateEndpoint=endpoints.get(key);
+    if(duplicateId||duplicateEndpoint){entry.importable=false;entry.duplicateOf=duplicateId??duplicateEndpoint;entry.reason=duplicateId?'duplicate_id':'duplicate_endpoint';}
+    else{ids.set(entry.id.toLowerCase(),entry.id);endpoints.set(key,entry.id);}
+  }
+  return {revision,entries};
 }
 /** Re-read and validate on import; never accept a browser-supplied URL or copy auth fields. */
 export function selectCodexMcp(id:string,revision:string,path=personalCodexConfig()):{id:string;url:string} {

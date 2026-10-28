@@ -31,3 +31,18 @@ test('management imports selected servers disabled without secrets and rejects s
  assert.throws(()=>manager.importCodexMcp(saved.revision,catalog.revision,['MyDocs']),/codex_mcp_duplicate/);
  writeFileSync(source,readFileSync(source,'utf8')+'\n# changed');assert.throws(()=>manager.importCodexMcp(saved.revision,catalog.revision,['other']),/codex_mcp_config_changed/);
 });
+
+test('import catalog disables existing and source-alias endpoints and import rejects duplicate batches atomically',async t=>{
+ const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js');
+ const {dir}=storeFixture(t,'namo-mcp-import-dedup-'),file=join(dir,'config.json'),source=join(dir,'codex.toml');
+ writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'test',appSecret:'dummy-secret',allowedUserIds:['alice']},codex:{home:join(dir,'home')},mcpConnections:[{id:'existing',type:'remote',url:'https://docs.example/mcp',enabled:false,audience:{organization:false,userIds:[],chatIds:[]},projects:[],token:''}]}));
+ writeFileSync(source,'[mcp_servers.alias]\nurl = "https://DOCS.EXAMPLE:443/mcp"\n[mcp_servers.a]\nurl = "https://other.example/mcp"\n[mcp_servers.b]\nurl = "https://OTHER.EXAMPLE:443/./mcp"\n');
+ const manager=new Management(file,{codexMcpConfig:source}),catalog=manager.codexMcpCatalog(),revision=manager.config().revision,before=readFileSync(file,'utf8');
+ const alias=catalog.entries.find(v=>v.id==='alias')!,b=catalog.entries.find(v=>v.id==='b')!;
+ assert.equal(alias.importable,false);assert.equal(alias.reason,'duplicate_endpoint');assert.equal(alias.duplicateOf,'existing');
+ assert.equal(b.importable,false);assert.equal(b.duplicateOf,'a');assert.equal(catalog.entries.find(v=>v.id==='a')?.importable,true);
+ assert.throws(()=>manager.importCodexMcp(revision,catalog.revision,['alias']),/mcp_duplicate_endpoint/);
+ assert.throws(()=>manager.importCodexMcp(revision,catalog.revision,['a','b']),/mcp_duplicate_endpoint/);
+ assert.equal(readFileSync(file,'utf8'),before);
+ const saved=manager.importCodexMcp(revision,catalog.revision,['a']);assert.equal(saved.mcpConnections.length,2);
+});
