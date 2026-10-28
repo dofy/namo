@@ -17,7 +17,9 @@ async function request<T>(path: string, body?: unknown, signal?: AbortSignal): P
 }
 export const api = {
   organization:()=>request<{tenantKey:string;name:string}>('/api/organization',{}),
-  startMcpOAuth:(revision:string,id:string)=>request<{url:string}>('/api/mcp-oauth-start',{revision,id}),
+  startMcpOAuth:(revision:string,id:string)=>request<{url:string;issuer:string}>('/api/mcp-oauth-start',{revision,id}),
+  codexMcp:()=>request<{revision:string;entries:{id:string;transport:'remote'|'stdio'|'unsupported';host?:string;importable:boolean;requiresOwnAuth:boolean;reason?:string}[]}>('/api/codex-mcp'),
+  importCodexMcp:(revision:string,sourceRevision:string,ids:string[])=>request<ConfigView>('/api/codex-mcp-import',{revision,sourceRevision,ids}),
   testMcp:(revision:string,id:string)=>request<{toolCount:number}>('/api/mcp-test',{revision,id}),
   saveMcp:(revision:string,mcpConnections:McpConnectionPatch[])=>request<ConfigView>('/api/config',{revision,patch:{mcpConnections}}),
   saveAccess:(revision:string,patch:ServiceAccessPatch)=>request<ConfigView>('/api/config',{revision,patch}),

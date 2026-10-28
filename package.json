@@ -21,7 +21,9 @@
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.76.0",
     "@modelcontextprotocol/sdk": "1.32.2",
-    "smol-toml": "1.9.1"
+    "ipaddr.js": "2.5.0",
+    "smol-toml": "1.9.1",
+    "undici": "8.12.3"
   },
   "devDependencies": {
     "@radix-ui/themes": "3.3.0",

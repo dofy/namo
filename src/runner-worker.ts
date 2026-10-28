@@ -118,7 +118,7 @@ async function main(): Promise<void> {
           const response=await mcpRead(store,file,task,args,abort.signal,undefined,config);
           if(args&&typeof args==='object'&&(args as Record<string,unknown>).operation==='call') {
             const failed=!!(response as {data?:{isError?:boolean}})?.data?.isError;
-            write(()=>runnerEvent(store,runId,failed?'mcp_linear_call_failed':'mcp_linear_call_completed'));
+            write(()=>runnerEvent(store,runId,`mcp_call_${failed?'failed':'completed'}`));
           }
           return response;
         }}:{}),

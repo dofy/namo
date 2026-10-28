@@ -1,3 +1,4 @@
+import { mcpApprovalCommand } from './mcp-write-approval.js';
 import { authorizationRevision } from './runtime-config.js';
 import { memoryProjects } from './memory-access.js';
 import { selectAgent, selectedPolicyHash, AgentRegistryError, type AgentSelection } from './agent-registry.js';
@@ -143,6 +144,7 @@ export class Engine {
   private handleControl(m: Incoming): boolean {
     if (m.envelope?.kind === 'material') return false;
     if(this.approvals?.handleControl(m))return true;
+    if(mcpApprovalCommand(this.store,m))return true;
     const knownUsers=this.config.feishu?.access?[m.senderId]:this.config.feishu?.allowedUserIds??[];
     const memoryReply=memoryCommand(this.store,m,knownUsers,this.tasks.binding(m)?.project??this.config.codex?.defaultProject??null,this.redact,memoryProjects(this.contextConfig(),m));
     if(memoryReply!==undefined){if(this.store.claim(m.key))this.store.finish(m.key,memoryReply);return true;}
@@ -210,6 +212,8 @@ export class Engine {
         '`/material 内容` 暂存材料\n`/run 要求` 处理暂存材料\n`/deliver N-编号 相对路径` 交付任务文件',
         '**个人设置与记忆 · 私聊**',
         '`/model` 查看或设置默认模型\n`/profile` 查看或修改个人档案\n`/memories` 查看记忆\n`/remember owner|project|chat 内容` 保存记忆\n`/memory-correct 编号 版本 内容` 修改记忆\n`/memory-disable 编号 版本` 停用记忆\n`/forget 编号 版本` 删除记忆\n`/handoff N-编号` 保存任务交接',
+        '**MCP 操作审批**',
+        '`/mcp-approve MA-编号 --confirm` 确认操作\n`/mcp-reject MA-编号` 拒绝操作\n`/mcp-status MA-编号` 查看状态',
         '**异常与受控推送**',
         '`/issues` 查看待核对异常\n`/issue 编号` 查看异常详情和处理方式\n`/push-request N-编号 remote refs/heads/分支` 申请受控推送\n`/push-status AP-编号` 查看审批状态\n`/push-approve AP-编号 --confirm` 确认并执行推送\n`/push-reject AP-编号` 拒绝推送',
         '也可引用等待中的问题直接回复。文本附件与合并转发会有界读取；等待补充不代表批准外部操作。本机运行 `namo ui` 管理配置与任务。'

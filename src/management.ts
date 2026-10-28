@@ -1,3 +1,4 @@
+import { listCodexMcp, selectCodexMcp, CodexMcpImportError } from './codex-mcp-import.js';
 import { serviceLogs, listApprovals, changeApproval } from './management-operations.js';
 import { ApprovalError } from './approvals.js';
 import { inspectOpenClawSource, MigrationError } from './migration.js';
@@ -25,8 +26,8 @@ import { listCodexModels } from './codex-connection.js';
 import { CodexUpdates } from './codex-updates.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
 import { Browse, BrowseError } from './browse.js';
-import { isOAuthReference, resolveLinearCredential } from './mcp-oauth.js';
-import { parseMcpConnections, publicMcpConnections, linearRead } from './mcp-connections.js';
+import { isOAuthReference, resolveMcpCredential } from './mcp-oauth.js';
+import { parseMcpConnections, publicMcpConnections, remoteRead } from './mcp-connections.js';
 import { parseGitHubAccessConfig, publicGitHubAccess } from './github-access.js';
 import { FeishuTransport } from './feishu.js';
 import { discoverLocalGh, type LocalGhConfig } from './github-local.js';
@@ -34,7 +35,7 @@ import { discoverLocalGh, type LocalGhConfig } from './github-local.js';
 export class ManagementError extends Error { constructor(message:string,readonly status=409){super(message);} }
 export interface ManagementDeps {
   status: typeof serviceStatus; action: typeof serviceAction; wait: typeof waitForService; diagnose: typeof doctor;
-  localGh: typeof discoverLocalGh;
+  localGh: typeof discoverLocalGh; codexMcpConfig?:string;
 }
 const defaults:ManagementDeps={status:serviceStatus,action:serviceAction,wait:waitForService,diagnose:doctor,localGh:discoverLocalGh};
 export class Management {
@@ -296,13 +297,23 @@ export class Management {
   async testMcp(revision:unknown,id:unknown):Promise<{toolCount:number}> {
     if(typeof revision!=='string'||typeof id!=='string'||this.source().revision!==revision)throw new ManagementError('mcp_config_changed');
     const connection=loadConfig(this.file).mcpConnections?.find(c=>c.id===id);
-    if(!connection?.enabled||!connection.token)throw new ManagementError('mcp_connection_not_enabled',400);
+    if(!connection?.enabled)throw new ManagementError('mcp_connection_not_enabled',400);
     try {
-      const signal=AbortSignal.timeout(30000),credential=await resolveLinearCredential(this.dataDir,connection.token,signal);
-      const result=await linearRead({...connection,token:credential.token},{operation:'list'},signal);
+      const signal=AbortSignal.timeout(30000),credential=await resolveMcpCredential(this.dataDir,connection.token,connection.url,signal,undefined,connection.oauthScope);
+      const result=await remoteRead({...connection,token:credential.token},{operation:'list'},signal);
       if(this.source().revision!==revision)throw new ManagementError('mcp_config_changed');
       return {toolCount:Array.isArray(result)?result.length:0};
     } catch(error) {if(error instanceof ManagementError)throw error;throw new ManagementError('mcp_connection_failed',400);}
+  }
+  codexMcpCatalog() {try{return listCodexMcp(this.deps.codexMcpConfig);}catch{throw new ManagementError('codex_mcp_config_invalid',400);}}
+  importCodexMcp(revision:unknown,sourceRevision:unknown,ids:unknown) {
+    if(typeof revision!=='string'||this.source().revision!==revision)throw new ManagementError('mcp_config_changed');
+    if(typeof sourceRevision!=='string'||!Array.isArray(ids)||!ids.length||ids.length>20||ids.some(id=>typeof id!=='string'))throw new ManagementError('codex_mcp_selection_invalid',400);
+    const current=parseMcpConnections(this.source().raw.mcpConnections),used=new Set(current.map(c=>c.id));
+    try {
+      const additions=ids.map(id=>{const selected=selectCodexMcp(id,sourceRevision,this.deps.codexMcpConfig),normalized=selected.id.toLowerCase();if(used.has(normalized))throw new ManagementError('codex_mcp_duplicate',400);used.add(normalized);return {id:normalized,type:'remote' as const,url:selected.url,enabled:false,audience:{organization:false,userIds:[],chatIds:[]},projects:[]};});
+      return this.save(revision,{mcpConnections:[...current.map(({token:_token,...value})=>value),...additions]});
+    } catch(error){if(error instanceof ManagementError)throw error;if(error instanceof CodexMcpImportError)throw new ManagementError(error.code,400);throw error;}
   }
   saveMcpOAuth(revision:string,id:string,reference:string):void {
     if(!isOAuthReference(reference))throw new ManagementError('mcp_oauth_invalid',400);
@@ -364,11 +375,13 @@ export class Management {
         if(!Array.isArray(patch.mcpConnections)||patch.mcpConnections.length>20)throw new ManagementError('mcp_invalid_config',400);
         const previous=parseMcpConnections(raw.mcpConnections);
         next.mcpConnections=patch.mcpConnections.map((entry:any)=>{
-          if(!entry||typeof entry!=='object'||Array.isArray(entry)||Object.keys(entry).some(k=>!['id','type','enabled','audience','projects','newToken','clearToken'].includes(k))
+          if(!entry||typeof entry!=='object'||Array.isArray(entry)||Object.keys(entry).some(k=>!['id','type','enabled','audience','projects','url','oauthScope','newToken','clearToken'].includes(k))
             ||entry.newToken!==undefined&&typeof entry.newToken!=='string'||entry.clearToken!==undefined&&typeof entry.clearToken!=='boolean'
             ||entry.clearToken&&entry.newToken||!internalOAuth&&typeof entry.newToken==='string'&&isOAuthReference(entry.newToken))throw new ManagementError('mcp_invalid_config',400);
           const prior=previous.find(v=>v.id===entry.id);
-          return {id:entry.id,type:entry.type,enabled:entry.enabled,audience:entry.audience,projects:entry.projects,
+          if(prior?.token&&(prior.type!==entry.type||prior.type==='remote'&&prior.url!==entry.url)&&!entry.clearToken&&!entry.newToken)throw new ManagementError('mcp_credential_target_changed',400);
+          if(prior?.token&&isOAuthReference(prior.token)&&(prior.oauthScope??'')!==(entry.oauthScope??'')&&!entry.clearToken&&!entry.newToken)throw new ManagementError('mcp_credential_target_changed',400);
+          return {id:entry.id,type:entry.type,enabled:entry.enabled,audience:entry.audience,projects:entry.projects,...(entry.type==='remote'?{url:entry.url,...(entry.oauthScope?{oauthScope:entry.oauthScope}:{})}:{}),
             token:entry.clearToken?'':entry.newToken||prior?.token||''};
         });
       }

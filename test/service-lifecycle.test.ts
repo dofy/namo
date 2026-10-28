@@ -77,10 +77,13 @@ createInterface({input:process.stdin}).on('line', line => {
     put(join(root, 'dist/scripts/smoke-codex.js'), 'export {};');
     put(join(root, 'bin/namo.js'), 'export {};');
     put(join(root, 'assets/logo.png'), 'fixture');
-    const toml = realpathSync(fileURLToPath(new URL('../../node_modules/smol-toml/', import.meta.url)));
-    cpSync(toml, join(root, 'node_modules/smol-toml'), { recursive: true });
-    const tomlVersion = JSON.parse(readFileSync(join(toml, 'package.json'), 'utf8')).version;
-    put(join(root, 'package.json'), JSON.stringify({ name: 'namo-service-fixture', version: '0.1.0', type: 'module', dependencies: { 'smol-toml': tomlVersion } }));
+    const dependencies:Record<string,string> = {};
+    for (const name of ['smol-toml','ipaddr.js','undici']) {
+      const dependency = realpathSync(fileURLToPath(new URL(`../../node_modules/${name}/`, import.meta.url)));
+      cpSync(dependency, join(root, 'node_modules', name), { recursive: true });
+      dependencies[name] = JSON.parse(readFileSync(join(dependency, 'package.json'), 'utf8')).version;
+    }
+    put(join(root, 'package.json'), JSON.stringify({ name: 'namo-service-fixture', version: '0.1.0', type: 'module', dependencies }));
     return import(pathToFileURL(join(root, 'dist/src/service.js')).href) as Promise<typeof Service>;
   };
   const service = await source('before');

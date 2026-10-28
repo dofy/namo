@@ -299,3 +299,12 @@ summary { cursor: pointer; font-size: 13px; color: #47657c; }
 .approval-record { padding-top: 20px; border-top: 1px solid #dce3e9; }
 @media (max-width: 700px) { .operations-info { grid-template-columns: 1fr; } }
 .reply-test-details { margin-top: 16px; overflow-wrap: anywhere; }
+
+/* Keep explanatory copy, controls and grouped sections distinct throughout the workbench. */
+:where(main, .rt-DialogContent) :where(p, label, summary) { line-height: 1.6; }
+:where(.form-section, .guide, .operations-panel) > p { margin-block: 10px; }
+:where(.form-section, .guide) > form { margin-top: 16px; }
+:where(.guide, details) > label { display: block; margin-block: 12px; }
+:where(.form-section, .guide) details > summary { padding-block: 4px; }
+:where(.form-section, .guide) details > summary + * { margin-top: 12px; }
+:where(.form-section, .guide) .rt-TextAreaRoot { min-width: 0; }

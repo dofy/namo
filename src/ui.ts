@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { Management, ManagementError } from './management.js';
 import { RecoveryError } from './recovery.js';
 import { uiRoutes } from './ui-contract.js';
-import { LinearOAuthFlow } from './mcp-oauth-flow.js';
+import { McpOAuthFlow } from './mcp-oauth-flow.js';
 import { BrowseError } from './browse.js';
 
 const assetRoot = new URL('../ui/', import.meta.url);
@@ -24,7 +24,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
   catch { throw new ManagementError(tr("ui.workbenchAssetsMissingSourceDevelopmentRunPnpm")); }
   let bootstrap=randomBytes(32).toString('hex');const bootstrapUntil=Date.now()+300000;
   let session='';let sessionUntil=0,attempts=0,busy=false,origin='',cookieName='';
-  const oauth=new LinearOAuthFlow(manager,()=>origin);
+  const oauth=new McpOAuthFlow(manager,()=>origin);
   async function body(req:IncomingMessage):Promise<any>{
     if(req.headers['content-type']!=='application/json')throw new ManagementError(tr("ui.requestMustUseJson"));
     let data='';for await(const chunk of req){data+=chunk;if(Buffer.byteLength(data)>65536)throw new ManagementError(tr("ui.requestTooLarge"));}
@@ -43,7 +43,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
     }
     if(req.method==='GET'&&path==='/oauth-complete'){
       const ok=new URL(req.url??'/',origin).searchParams.get('status')==='success';
-      return send(200,ok?'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Linear 授权完成</title><p>授权完成。请返回 Namo 管理界面并重新载入连接设置。</p></html>':'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Linear 授权未完成</title><p>授权未完成。请返回 Namo 管理界面重新操作。</p></html>','text/html');
+      return send(200,ok?'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>MCP 授权完成</title><p>授权完成。请返回 Namo 管理界面并重新载入连接设置。</p></html>':'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>MCP 授权未完成</title><p>授权未完成。请返回 Namo 管理界面重新操作。</p></html>','text/html');
     }
     if(req.headers['sec-fetch-site']==='cross-site')return send(403,{error:tr("ui.invalidRequestOrigin")});
     if(req.method==='GET'&&Object.values(uiRoutes).some(route=>route===path)) {
@@ -80,6 +80,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/logs')return send(200,manager.logs());
         if(path==='/api/approvals')return send(200,manager.approvals());
         if(path==='/api/state')return send(200,manager.state());
+        if(path==='/api/codex-mcp')return send(200,manager.codexMcpCatalog());
         if(path==='/api/models')return send(200,await manager.models());
         if(path==='/api/codex-update')return send(200,await manager.codexUpdate());
         if(path==='/api/tasks')return send(200,manager.browse('tasks',new URL(req.url!,origin).searchParams));
@@ -99,6 +100,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/memories')return send(200,manager.memory(input.action,input.ownerId,input.input));
         if(path==='/api/organization')return send(200,await manager.organization());
         if(path==='/api/mcp-oauth-start'){try{return send(200,await oauth.begin(input.revision,input.id));}catch{return send(400,{error:'mcp_oauth_failed'});}}
+        if(path==='/api/codex-mcp-import')return send(200,manager.importCodexMcp(input.revision,input.sourceRevision,input.ids));
         if(path==='/api/mcp-test')return send(200,await manager.testMcp(input.revision,input.id));
         if(path==='/api/config')return send(200,await manager.saveGitHub(input.revision,input.patch));
         if(path==='/api/apply')return send(200,await manager.apply(input.revision,input.confirmed===true));
