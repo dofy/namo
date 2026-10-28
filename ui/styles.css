@@ -310,7 +310,8 @@ summary { cursor: pointer; font-size: 13px; color: #47657c; }
 .mcp-scopes { margin-block: 18px; }
 .mcp-scopes code { overflow-wrap: anywhere; }
 
-.mcp-connection-row { display:flex; justify-content:space-between; align-items:center; gap:20px; padding-block:20px; border-bottom:1px solid #dce3e9; }
+.mcp-connection-row { display:flex; justify-content:space-between; align-items:center; gap:20px; padding-block:20px; }
+.mcp-connection-row + .mcp-connection-row { border-top:1px solid #dce3e9; }
 .mcp-connection-row > div:first-child { min-width:0; }
 .mcp-connection-row p { margin:8px 0 0; }
 .mcp-url { overflow-wrap:anywhere; }
