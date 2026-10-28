@@ -13,14 +13,15 @@ import { ConnectionsPage } from './pages/ConnectionsPage';
 import { MemoryProfilesPage } from './pages/MemoryProfilesPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { AssistantPage } from './pages/AssistantPage';
+import { ChangelogPage } from './pages/ChangelogPage';
 import { Icon, type IconName } from './Icon';
 
 type NavigationPage = Exclude<UiPage, 'profiles'>;
-const pageIcons: Record<NavigationPage, IconName> = { assistant: 'assistant', memory: 'memory', dashboard: 'dashboard', tasks: 'tasks', sessions: 'sessions', settings: 'settings', connections: 'connections' };
+const pageIcons: Record<NavigationPage, IconName> = { assistant: 'assistant', memory: 'memory', dashboard: 'dashboard', tasks: 'tasks', sessions: 'sessions', settings: 'settings', connections: 'connections', changelog: 'changelog' };
 const navigationGroups: { label: MessageKey; pages: NavigationPage[] }[] = [
   { label: "nav.workspace", pages: ['dashboard', 'tasks', 'sessions'] },
   { label: "nav.personalization", pages: ['assistant', 'memory'] },
-  { label: "nav.management", pages: ['settings', 'connections'] },
+  { label: "nav.management", pages: ['settings', 'connections', 'changelog'] },
 ];
 function currentRoute(): { page: NavigationPage; pathname: string; search: string } {
   const page = (Object.keys(uiRoutes) as UiPage[]).find(page => uiRoutes[page] === location.pathname) ?? 'dashboard';
@@ -28,14 +29,15 @@ function currentRoute(): { page: NavigationPage; pathname: string; search: strin
 }
 export function App({ initial, startupError }: { initial?: ManagementState; startupError?: string }) {
   const locale = useLocale(), languagePreference = useLanguagePreference();
-  const pages: Record<NavigationPage, string> = { assistant:tr("nav.assistantSettings"), memory:tr("nav.memoryProfiles"), dashboard: tr("nav.dashboard"), tasks: tr("nav.tasks"), sessions: tr("nav.sessions"), settings: tr("nav.projectPermissions"), connections: tr("nav.connections") };
+  const pages: Record<NavigationPage, string> = { assistant:tr("nav.assistantSettings"), memory:tr("nav.memoryProfiles"), dashboard: tr("nav.dashboard"), tasks: tr("nav.tasks"), sessions: tr("nav.sessions"), settings: tr("nav.projectPermissions"), connections: tr("nav.connections"), changelog:tr('changelog.title') };
   const navigation: Record<NavigationPage, string> = { ...pages, assistant:tr("nav.assistant"), settings:tr("nav.projects"), connections:tr("nav.connections") };
-  const descriptions: Record<NavigationPage, string> = { assistant:tr("app.configureAssistantIdentityPresentationPreferences"), memory:tr("app.manageMemoriesConversationsNamesLanguagesTimeZones"), dashboard: tr("app.activityItemsNeedAttention"), tasks: tr("app.findTasksFollowTheirProgressResults"), sessions: tr("app.pickUpWhereEachConversationLeftOff"), settings: tr("app.chooseWhereAgentWorksWhatCan"), connections: tr("app.manageCodexFeishuGithubConnections") };
+  const descriptions: Record<NavigationPage, string> = { assistant:tr("app.configureAssistantIdentityPresentationPreferences"), memory:tr("app.manageMemoriesConversationsNamesLanguagesTimeZones"), dashboard: tr("app.activityItemsNeedAttention"), tasks: tr("app.findTasksFollowTheirProgressResults"), sessions: tr("app.pickUpWhereEachConversationLeftOff"), settings: tr("app.chooseWhereAgentWorksWhatCan"), connections: tr("app.manageCodexFeishuGithubConnections"), changelog:tr('changelog.description') };
   const [state, setState] = useState(initial), [route, setRoute] = useState(currentRoute), [target, setTarget] = useState<DetailTarget | null>(null);
   const { page: view, pathname, search } = route;
   const memoryTab = pathname === uiRoutes.profiles || new URLSearchParams(search).get('tab') === 'profiles' ? 'profiles' : 'memory';
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(startupError ? { text: startupError, error: true } : null);
   const [refreshing, setRefreshing] = useState(false), [expired, setExpired] = useState(false);
+  const [versionOpen, setVersionOpen] = useState(false);
   const sequence = useRef(0), opener = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const restorePage = () => { setRoute(currentRoute()); setTarget(null); };
@@ -100,13 +102,14 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
           <Choice id="workbench-language" value={languagePreference} onChange={value => setLocale(value as LanguagePreference)} options={[{ value: 'system', label: tr("language.system") }, { value: 'en', label: 'English' }, { value: 'zh-CN', label: '简体中文' }]} />
         </div>
         <div className="sidebar-links">
-          <Popover.Root><Popover.Trigger><Button className="version-button" variant="ghost" color="gray" size="1" aria-label={tr("app.versionLabel", __NAMO_VERSION__)}>v{__NAMO_VERSION__}<Icon name="info" size={13} /></Button></Popover.Trigger>
+          <Popover.Root open={versionOpen} onOpenChange={setVersionOpen}><Popover.Trigger><Button className="version-button" variant="ghost" color="gray" size="1" aria-label={tr("app.versionLabel", __NAMO_VERSION__)}>v{__NAMO_VERSION__}<Icon name="info" size={13} /></Button></Popover.Trigger>
             <Popover.Content className="version-popover" size="2" aria-label={tr("app.versionInformation")}>
               <Heading as="h2" size="3">{tr("app.versionInformation")}</Heading>
               <dl><dt>{tr("app.workbenchVersion")}</dt><dd>v{__NAMO_VERSION__}</dd>
                 <dt>{tr("app.runningServiceRelease")}</dt><dd>{state?.service.running && state.service.release?.running ? state.service.release.running.slice(0,12) : tr("app.notReported")}</dd>
                 {state?.service.release?.installed && state.service.release.installed !== state.service.release.running && <><dt>{tr("app.installedServiceRelease")}</dt><dd>{state.service.release.installed.slice(0,12)}</dd></>}
               </dl><Text as="p" size="1" color="gray">{tr("app.localAccess")}</Text>
+              <Link href={uiRoutes.changelog} onClick={event => { navigate(event, 'changelog'); setVersionOpen(false); }}>{tr('changelog.view')}</Link>
             </Popover.Content></Popover.Root>
           <Link className="project-link" href={PROJECT_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub · dofy/namo"><Icon name="external" /><span>GitHub</span></Link>
         </div>
@@ -131,6 +134,7 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
         {(view === 'tasks' || view === 'sessions') && <section aria-label={view === 'tasks' ? tr("app.taskContent") : tr("app.sessionContent")}><TasksPage key={view} kind={view} state={state} onOpen={onOpen} navigate={go} search={search} enabled={!expired} /></section>}
         <section hidden={view !== 'settings'} aria-label={tr("app.projectsPermissionsContent")}><SettingsPage config={state.config} recoveryAvailable={state.recoveryAvailable && !expired} refresh={refresh} notify={notify} /></section>
         <section hidden={view !== 'connections'} aria-label={tr("app.agentFeishuContent")}><ConnectionsPage state={state} refresh={refresh} expired={expired} /></section>
+        {view === 'changelog' && <ChangelogPage />}
       </>}
     </main>
     <Details target={target} close={() => setTarget(null)} changed={refresh} notify={notify} restoreFocus={() => opener.current?.focus()} />

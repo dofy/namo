@@ -1,6 +1,6 @@
 import {
   Activity, BookUser, Bot, ChevronLeft, ChevronRight, CircleCheck, Info,
-  ClipboardCheck, ExternalLink, Funnel, LayoutDashboard, MessageSquare,
+  ClipboardCheck, ExternalLink, Funnel, LayoutDashboard, MessageSquare, ScrollText,
   Play, Plug, Plus, RotateCcw, RotateCw, Save, SlidersHorizontal, Square,
   Trash2, UserRound, X, Search, type LucideIcon,
 } from 'lucide-react';
@@ -17,6 +17,7 @@ const icons = {
   assistant: Bot,
   memory: BookUser,
   connections: Plug,
+  changelog: ScrollText,
   refresh: RotateCw,
   filter: Funnel,
   reset: RotateCcw,

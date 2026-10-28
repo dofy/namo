@@ -124,7 +124,7 @@ test('UI serves bundled assets with strict CSP and never exposes source files or
  const fallback=await fetch(ui.url+'/favicon.ico',{redirect:'manual'});assert.equal(fallback.status,302);assert.equal(fallback.headers.get('location'),'/favicon.png');
  for(const path of ['/assets/config.local.json','/assets/index.js.map','/assets/%2e%2e%2fconfig.local.json','/assets/missing.js','/assets/missing.woff2'])assert.equal((await fetch(ui.url+path)).status,404);
  assert.equal((await fetch(ui.url+'/src/management.ts')).status,401);assert.equal((await fetch(ui.url+'/api/state')).status,401);
- for(const path of ['/tasks','/sessions','/settings','/profiles','/connections']){
+ for(const path of ['/tasks','/sessions','/settings','/profiles','/connections','/changelog']){
   const page=await fetch(ui.url+path),content=await page.text();assert.equal(page.status,200);assert.match(page.headers.get('content-type')!,/text\/html/);
   const pageNonce=content.match(/name="namo-style-nonce" content="([A-Za-z0-9+/=]+)"/)?.[1];assert.ok(pageNonce);assert.ok(page.headers.get('content-security-policy')!.includes(`'nonce-${pageNonce}'`));
   assert.match(content,/type="module"/);assert.doesNotMatch(content,/__NAMO_STYLE_NONCE__|PRIVATE_TEST_SECRET|PRIVATE_EXTRA/);

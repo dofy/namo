@@ -1,6 +1,23 @@
 import type { MessageKey } from './en.js';
 
 export const chinese = {
+  "changelog.title": "更新日志",
+  "changelog.description": "查看 Namo 的功能变化。",
+  "changelog.view": "查看更新日志",
+  "changelog.currentVersion": "工作台版本",
+  "changelog.current": "当前版本",
+  "changelog.afterVersion": "v0.2.0 以来",
+  "changelog.release": "版本更新",
+  "changelog.changelogPage": "在工作台查看版本更新记录。",
+  "changelog.compactTasks": "飞书任务列表改为紧凑单行，状态颜色清晰，命令可复制。",
+  "changelog.modelSelection": "在飞书或工作台设置个人默认模型，新任务保留所选模型。",
+  "changelog.cliUpdates": "在工作台检查、升级和回退 Namo 管理的 Codex CLI，也可开启自动升级。",
+  "changelog.versionCommands": "在飞书使用 /version 或 /status 查看 Namo 和 Codex CLI 版本。",
+  "changelog.commandReplies": "优化飞书命令回复，按内容分区并提供可复制的示例。",
+  "changelog.memoryAndData": "在工作台管理自动记忆并查看提取状态。",
+  "changelog.initialBot": "连接飞书与官方 Codex，持久化处理任务和消息。",
+  "changelog.initialWorkbench": "通过本地工作台管理项目、连接、任务和个人档案。",
+  "changelog.initialSafety": "隔离 Codex 登录，恢复中断工作时不会自动重放模型执行。",
   "codexUpdate.title": "Codex CLI 更新",
   "codexUpdate.help": "Namo 独立管理官方 CLI，并保留上一版本用于回退。",
   "codexUpdate.current": "当前版本",

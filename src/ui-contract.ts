@@ -1,6 +1,6 @@
 import type { Audience, OrganizationAccess, ProjectAccess } from './access-contract.js';
 /** Browser-visible projections only. Never include configuration or auth secrets. */
-export const uiRoutes = { dashboard: '/', tasks: '/tasks', sessions: '/sessions', settings: '/settings', assistant: '/assistant', memory: '/memory', profiles: '/profiles', connections: '/connections' } as const;
+export const uiRoutes = { dashboard: '/', tasks: '/tasks', sessions: '/sessions', settings: '/settings', assistant: '/assistant', memory: '/memory', profiles: '/profiles', connections: '/connections', changelog: '/changelog' } as const;
 export type UiPage = keyof typeof uiRoutes;
 
 export interface CodexUpdateStatus {
