@@ -93,7 +93,7 @@ export class Store {
     const input = this.get(key);
     if (!input) throw new Error('inbox_missing');
     this.db.prepare('INSERT OR IGNORE INTO output_sources(inboxKey,kind,content) VALUES(?,?,?)').run(key, kind, content);
-    const route = JSON.stringify({ messageId: input.messageId, thread: !!input.envelope?.threadId });
+    const route = key.startsWith('schedule:') ? null : JSON.stringify({ messageId: input.messageId, thread: !!input.envelope?.threadId });
     for (const [part, chunk] of splitDisplay(content || '执行已结束，但没有返回正文。请查看任务状态和执行记录。').entries()) {
       this.db.prepare('INSERT OR IGNORE INTO outbox(inboxKey,chatId,kind,part,content,uuid,createdAt,route,mutableProgress) VALUES(?,?,?,?,?,?,?,?,?)')
         .run(key, input.chatId, kind, part, chunk, randomUUID(), Date.now(), route,kind==='progress'?1:0);

@@ -122,13 +122,13 @@ export function renderLaunchAgent(c: Config, label: string, cli: string, node: s
 <key>StandardErrorPath</key><string>${xml(join(c.dataDir, 'service.error.log'))}</string>
 </dict></plist>`;
 }
-export function releaseUpgradeBlockers(database: string): string[] {
+export function releaseUpgradeBlockers(database: string, allowSchema13Migration = false): string[] {
   if (!existsSync(database)) return [];
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(database, { readOnly: true });
     const schema = Number(db.prepare('PRAGMA user_version').get()?.user_version);
-    const compatible = schema === SCHEMA_VERSION;
+    const compatible = schema === SCHEMA_VERSION || (allowSchema13Migration && schema === 13 && SCHEMA_VERSION === 14);
     if (!compatible) return ['database-schema'];
     const checks: [string, string][] = [
       ['receiver-queue', "SELECT 1 FROM inbox WHERE state IN ('queued','running','waiting','awaiting_reply') LIMIT 1"],
@@ -238,10 +238,10 @@ export async function serviceAction(action: string, c: Config): Promise<Record<s
       const finishReceiver = acquireLock(c.dataDir);
       try {
         if (serviceStatus(c, false).registered) throw new Error(tr("service.serviceStopStateChangedReleaseNotSwitched"));
-        const blockers = releaseUpgradeBlockers(join(c.dataDir, 'bot.sqlite'));
+        const blockers = releaseUpgradeBlockers(join(c.dataDir, 'bot.sqlite'), true);
         if (blockers.length) throw new Error(tr("service.unsettledStateReleaseNotSwitched", blockers.join(', ')));
         upgradeBackup = await createUpgradeBackup(c, plist);
-        if (serviceStatus(c, false).registered || releaseUpgradeBlockers(join(c.dataDir, 'bot.sqlite')).length) throw new Error('upgrade_state_changed');
+        if (serviceStatus(c, false).registered || releaseUpgradeBlockers(join(c.dataDir, 'bot.sqlite'), true).length) throw new Error('upgrade_state_changed');
         const release = createRuntimeRelease(sourcePackageRoot(import.meta.url), join(c.dataDir, 'releases'));
         if (serviceStatus(c, false).registered) throw new Error(tr("service.serviceStopStateChangedReleaseNotSwitched"));
         const record = registration(c, label, release);

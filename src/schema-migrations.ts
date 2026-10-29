@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { CORE_SCHEMA, BUSINESS_SCHEMA } from './schema.js';
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 export function assertSchemaVersion(version: number): void {
   if (version > SCHEMA_VERSION) throw new Error('数据库版本较新，请使用对应版本的 Namo');
@@ -13,7 +13,7 @@ export function assertSchemaVersion(version: number): void {
 export function migrateSchema(db: DatabaseSync): void {
   const version = () => Number(db.prepare('PRAGMA user_version').get()?.user_version);
   const empty = () => !db.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get();
-  if (version() !== 0 || !empty()) assertSchemaVersion(version());
+  if (version() !== 13 && (version() !== 0 || !empty())) assertSchemaVersion(version());
   db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON');
   if (version() === SCHEMA_VERSION) return;
   db.exec('BEGIN IMMEDIATE');
@@ -21,6 +21,13 @@ export function migrateSchema(db: DatabaseSync): void {
     if (version() === 0 && empty()) {
       db.exec(CORE_SCHEMA + BUSINESS_SCHEMA);
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
+    } else if (version() === 13) {
+      db.exec(`CREATE TABLE schedules (
+        id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, chatKey TEXT NOT NULL, scopeKey TEXT NOT NULL,
+        sourceKey TEXT NOT NULL REFERENCES inbox(key), kind TEXT NOT NULL, content TEXT NOT NULL,
+        intervalMs INTEGER, nextAt INTEGER NOT NULL, state TEXT NOT NULL, binding TEXT,
+        createdAt INTEGER NOT NULL
+      ); CREATE INDEX schedules_due ON schedules(state,nextAt); PRAGMA user_version=14`);
     } else assertSchemaVersion(version());
     db.exec('COMMIT');
   } catch (error) {

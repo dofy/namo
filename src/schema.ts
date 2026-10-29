@@ -1,5 +1,12 @@
 /** Current development schema. Historical layouts are deliberately not supported. */
 export const CORE_SCHEMA = `
+CREATE TABLE schedules (
+  id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, chatKey TEXT NOT NULL, scopeKey TEXT NOT NULL,
+  sourceKey TEXT NOT NULL REFERENCES inbox(key), kind TEXT NOT NULL, content TEXT NOT NULL,
+  intervalMs INTEGER, nextAt INTEGER NOT NULL, state TEXT NOT NULL, binding TEXT,
+  createdAt INTEGER NOT NULL
+);
+CREATE INDEX schedules_due ON schedules(state,nextAt);
 CREATE TABLE inbox (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE,
   messageId TEXT NOT NULL, chatKey TEXT NOT NULL, chatId TEXT NOT NULL,

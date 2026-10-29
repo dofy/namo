@@ -35,7 +35,7 @@ Namo manages messages, queues, projects, sessions and execution boundaries. The 
 
 The workbench and CLI support **English and Simplified Chinese**. They follow the system language by default and fall back to English for unsupported languages. Task content, user input and execution logs retain their original language.
 
-PDF/Office/audio material interpretation, reminders, autonomous delegation and offline message backfill remain unsupported. See the [roadmap](docs/development-plan.md) for implemented capabilities and remaining acceptance checks; check the workbench for the running service version.
+PDF/Office/audio material interpretation, autonomous delegation and offline message backfill remain unsupported. Send `/schedule` in a private Feishu chat to manage scheduled reminders and tasks. See the [roadmap](docs/development-plan.md) for implemented capabilities and remaining acceptance checks; check the workbench for the running service version.
 
 Organization setup: open **Connections** in the workbench to configure organization access and choose a GitHub account and paired owner. Existing installations retain their access rules until an administrator changes them. See [organization access](docs/operations.md#配置与权限).
 

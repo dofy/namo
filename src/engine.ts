@@ -45,6 +45,7 @@ import { admitted, projectAllowed, executionPolicy } from './access.js';
 import { assertMcpDelivery, mcpRead } from './mcp-connections.js';
 import { assertReviewDelivery, readReview, reviewCoverageBrief } from './github-review.js';
 import { recordProgress } from './public-progress.js';
+import { Schedules } from './schedules.js';
 
 export interface DeliveryRoute { messageId: string; thread: boolean; }
 export interface Sender {
@@ -80,6 +81,7 @@ export class Engine {
   private approvals?: ApprovalService;
   private externalPolling?: Promise<unknown>;
   private nextExternalPoll = 0;
+  private nextSchedulePoll = 0;
   private autoMemories?: AutoMemories;
   private memoryRunning?: Promise<void>;
   private memoryAbort?: AbortController;
@@ -150,6 +152,8 @@ export class Engine {
     if (m.envelope?.kind === 'material') return false;
     if(this.approvals?.handleControl(m))return true;
     if(mcpApprovalCommand(this.store,m))return true;
+    const scheduleReply=new Schedules(this.store).command(m,()=>this.project(m));
+    if(scheduleReply!==undefined){if(this.store.claim(m.key))this.store.finish(m.key,scheduleReply);return true;}
     const knownUsers=this.config.feishu?.access?[m.senderId]:this.config.feishu?.allowedUserIds??[];
     const memoryReply=memoryCommand(this.store,m,knownUsers,this.tasks.binding(m)?.project??this.config.codex?.defaultProject??null,this.redact,memoryProjects(this.contextConfig(),m));
     if(memoryReply!==undefined){if(this.store.claim(m.key))this.store.finish(m.key,memoryReply);return true;}
@@ -215,6 +219,8 @@ export class Engine {
         '`/session [W-编号]` 查看或切换工作线\n`/new` 或 `/reset` 开始新工作线\n`/project` 查看或切换项目\n`/status` 查看服务与任务状态\n`/version` 查看版本',
         '**材料与文件**',
         '`/material 内容` 暂存材料\n`/run 要求` 处理暂存材料\n`/deliver N-编号 相对路径` 交付任务文件',
+        '**定时提醒与任务 · 私聊**',
+        '`/schedule` 查看创建和管理方法',
         '**个人设置与记忆 · 私聊**',
         '`/model` 查看或设置默认模型\n`/profile` 查看或修改个人档案\n`/memories` 查看记忆\n`/remember owner|project|chat 内容` 保存记忆\n`/memory-correct 编号 版本 内容` 修改记忆\n`/memory-disable 编号 版本` 停用记忆\n`/forget 编号 版本` 删除记忆\n`/handoff N-编号` 保存任务交接',
         '**MCP 操作审批**',
@@ -354,6 +360,28 @@ export class Engine {
     try {
       for(const active of this.active.values()) if(this.store.get(active.key)?.cancelRequested) active.abort.abort();
       this.tasks.expireMaterials();
+      if(Date.now()>=this.nextSchedulePoll){
+        const now=Date.now(); this.nextSchedulePoll=now+1000;
+        this.store.transaction(()=>{if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
+        new Schedules(this.store).due(now,(schedule,source)=>{
+          let allowed=false;
+          try {
+            const current=this.contextConfig();
+            allowed=admitted(current.feishu,source.senderId,source.chatId,source.envelope?.tenantKey)
+              && (!this.config.file || authorizationRevision(loadConfig(this.config.file))===authorizationRevision(this.config as Config))
+              && (schedule.kind==='reminder' || JSON.stringify(this.project(source))===schedule.binding);
+          } catch { allowed=false; }
+          if(!allowed){this.store.db.prepare("UPDATE schedules SET state='paused' WHERE id=?").run(schedule.id);return;}
+          const uncertain=this.store.db.prepare("SELECT 1 FROM inbox i LEFT JOIN tasks t ON t.id=i.taskId WHERE i.key LIKE ? AND (i.state IN ('delivery_unknown','delivery_failed') OR i.error='interrupted' OR t.state IN ('interrupted','lost')) LIMIT 1").get(`schedule:${schedule.id}:%`);
+          if(uncertain){this.store.db.prepare("UPDATE schedules SET state='paused' WHERE id=?").run(schedule.id);return;}
+          const pending=this.store.db.prepare("SELECT 1 FROM inbox WHERE key LIKE ? AND state IN ('queued','running','waiting','awaiting_reply') LIMIT 1").get(`schedule:${schedule.id}:%`);
+          if(pending)return;
+          const m:Incoming={...source,key:`schedule:${schedule.id}:${schedule.nextAt}`,text:schedule.content,createdAt:now};
+          if(!this.store.enqueue(m))return;
+          if(schedule.kind==='reminder'){this.store.claim(m.key);this.store.finish(m.key,`⏰ 定时提醒 · ${schedule.id}\n${schedule.content}`);}
+          else this.route(this.store.get(m.key)!);
+        });});
+      }
       if(!this.externalPolling&&Date.now()>=this.nextExternalPoll){
         this.nextExternalPoll=Date.now()+30_000;
         this.externalPolling=Promise.resolve().then(()=>{
@@ -575,6 +603,11 @@ export class Engine {
       });
       if (!output) return;
       if (this.config.file) {
+        const scheduled=this.store.get(output.inboxKey);
+        if(output.inboxKey.startsWith('schedule:') && scheduled) try {
+          const current=loadConfig(this.config.file);
+          if(authorizationRevision(current)!==authorizationRevision(this.config as Config) || !admitted(current.feishu,scheduled.senderId,scheduled.chatId,scheduled.envelope?.tenantKey)) throw new Error('access_changed');
+        } catch {this.store.deliveryFailed(output.id,false,'access_changed');continue;}
         const taskId=this.store.get(output.inboxKey)?.taskId, task=taskId?this.tasks.get(taskId):undefined;
         if (task) try {
           const current=loadConfig(this.config.file), message=this.store.get(task.inboxKey)!;

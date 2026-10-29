@@ -122,6 +122,15 @@ test('upgrade guard accounts for queue, runner, wait, outbox, and maintenance st
   const old = join(temp, 'old.sqlite');
   const oldDb = new DatabaseSync(old); oldDb.exec('PRAGMA user_version=5'); oldDb.close();
   assert.deepEqual(releaseUpgradeBlockers(old), ['database-schema']);
+  const migratable = join(temp, 'v13.sqlite');
+  const v13 = new DatabaseSync(migratable);
+  v13.exec(`CREATE TABLE inbox(state TEXT); CREATE TABLE runner_jobs(state TEXT); CREATE TABLE task_waits(state TEXT);
+    CREATE TABLE outbox(state TEXT); CREATE TABLE settings(key TEXT); PRAGMA user_version=13;`);
+  assert.deepEqual(releaseUpgradeBlockers(migratable), ['database-schema']);
+  assert.deepEqual(releaseUpgradeBlockers(migratable, true), []);
+  v13.exec("INSERT INTO runner_jobs VALUES('running')");
+  assert.deepEqual(releaseUpgradeBlockers(migratable, true), ['runner']);
+  v13.close();
 });
 
 test('service bootstrap validates pinned identity before loading application or dependency code on every restart', t => {

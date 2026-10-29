@@ -2,7 +2,7 @@
 
 Namo 负责身份、权限、任务调度和交付，官方 Codex app-server 负责推理与工具执行。当前只支持 Codex；其他 Agent 仅保留内部扩展接口。
 
-技术栈：TypeScript、Node.js 24.15+、SQLite、飞书官方 SDK；本地 UI 使用 React、Radix Themes、Lucide 和 Vite。当前 schema 为 13：表与索引集中在 [schema.ts](../src/schema.ts)，初始化和版本检查集中在 [schema-migrations.ts](../src/schema-migrations.ts)。
+技术栈：TypeScript、Node.js 24.15+、SQLite、飞书官方 SDK；本地 UI 使用 React、Radix Themes、Lucide 和 Vite。当前 schema 为 14：表与索引集中在 [schema.ts](../src/schema.ts)，初始化和版本检查集中在 [schema-migrations.ts](../src/schema-migrations.ts)。
 
 ## 主链路
 
@@ -45,7 +45,7 @@ flowchart LR
 
 **数据与恢复。** SQLite 保存 inbox、task、run、wait、outbox 和审计。取消、回答、恢复以事务顺序决定归属；心跳过期不转移执行权，失联进程及后代核对完成前保留目录占位。模型完成、平台接受、用户收件是三类事实，不能相互推断。
 
-开发期采用新的 v13 基线，不再维护 v0–12 的兼容转换。空库在一个事务中初始化，失败整体回滚；旧库明确拒绝写入，UI 和升级入口同样阻止不兼容版本，绝不自动删库。重建步骤见[运维指南](operations.md)。
+开发期采用 v13 基线，不再维护 v0–12 的兼容转换。v13 可在停机备份后事务迁移到 v14。空库在一个事务中初始化，失败整体回滚；不兼容旧库明确拒绝写入，绝不自动删库。重建步骤见[运维指南](operations.md)。
 
 | 数据域 | 独立表与约束 |
 | --- | --- |
