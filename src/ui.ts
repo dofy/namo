@@ -9,6 +9,7 @@ import { RecoveryError } from './recovery.js';
 import { uiRoutes } from './ui-contract.js';
 import { McpOAuthFlow } from './mcp-oauth-flow.js';
 import { BrowseError } from './browse.js';
+import { THEME_COOKIE, parseThemePreference } from './theme-contract.js';
 
 const assetRoot = new URL('../ui/', import.meta.url);
 // Radix Themes' Table/Select do not forward a nonce to their viewport styles.
@@ -20,15 +21,19 @@ const viewportStyleHashes = [
 
 const equal=(a:string,b:string)=>Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 /** All displayed strings come from the bundled locale catalog, never callback input. */
-function oauthResultPage(ok:boolean,reason:string,nonce:string):string {
-  const title=tr(ok?'mcp.resultSuccessTitle':'mcp.resultFailureTitle');
-  const body=ok?tr('mcp.resultSuccess'):reason;
-  return `<!doctype html><html lang="${currentLocale()}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} · Namo</title>
+function oauthResultPage(state:'preparing'|'success'|'failed',reason:string,nonce:string,theme:'auto'|'light'|'dark'):string {
+  const preparing=state==='preparing',ok=state==='success';
+  const title=tr(preparing?'mcp.opening':ok?'mcp.resultSuccessTitle':'mcp.resultFailureTitle');
+  const body=preparing?tr('mcp.openingHelp'):ok?tr('mcp.resultSuccess'):reason;
+  return `<!doctype html><html lang="${currentLocale()}" data-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} · Namo</title>
 <style nonce="${nonce}">
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#f6f8fa;color:#22252a;font:15px/1.65 system-ui,-apple-system,"PingFang SC",sans-serif;display:grid;place-items:center;padding:24px}
-main{width:min(100%,520px)}.brand{display:flex;align-items:center;gap:12px;margin-bottom:24px;color:#637180;font-size:13px}.brand img{width:40px;height:44px;object-fit:contain}.brand strong{display:block;color:#22252a;font-size:18px;line-height:1.2}
-.panel{background:#fff;border:1px solid #dce3e9;border-radius:14px;padding:32px;box-shadow:0 12px 40px #202c3810}.icon{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;font-size:24px;font-weight:700;background:${ok?'#e3f4ec':'#fff0e5'};color:${ok?'#258356':'#ae550d'}}h1{font-size:23px;line-height:1.3;margin:20px 0 10px}p{margin:0;color:#526270;overflow-wrap:anywhere}.foot{margin-top:24px;padding-top:20px;border-top:1px solid #e6ebef;font-size:13px;color:#637180}@media(max-width:480px){.panel{padding:24px}}
-</style></head><body><main><div class="brand"><img src="/logo.png" alt=""><div><strong>Namo</strong>MCP</div></div><section class="panel"><div class="icon" aria-hidden="true">${ok?'✓':'!'}</div><h1>${title}</h1><p>${body}</p><p class="foot">${tr('mcp.resultFootnote')}</p></section></main></body></html>`;
+:root{--canvas:#f6f8fa;--surface:#fff;--border:#dce3e9;--text:#22252a;--muted:#526270;--soft:#e6ebef;--status-bg:${ok?'#e3f4ec':'#fff0e5'};--status-text:${ok?'#258356':'#ae550d'}}
+html[data-theme="dark"]{color-scheme:dark;--canvas:#11171c;--surface:#1b232a;--border:#394751;--text:#eef1f3;--muted:#aebac3;--soft:#303b44;--status-bg:${ok?'#1c3a2d':'#49321f'};--status-text:${ok?'#84d0af':'#ffb36b'}}
+@media(prefers-color-scheme:dark){html[data-theme="auto"]{color-scheme:dark;--canvas:#11171c;--surface:#1b232a;--border:#394751;--text:#eef1f3;--muted:#aebac3;--soft:#303b44;--status-bg:${ok?'#1c3a2d':'#49321f'};--status-text:${ok?'#84d0af':'#ffb36b'}}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--canvas);color:var(--text);font:15px/1.65 system-ui,-apple-system,"PingFang SC",sans-serif;display:grid;place-items:center;padding:24px}
+main{width:min(100%,520px)}.brand{display:flex;align-items:center;gap:12px;margin-bottom:24px;color:var(--muted);font-size:13px}.brand img{width:40px;height:44px;object-fit:contain}.brand strong{display:block;color:var(--text);font-size:18px;line-height:1.2}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:32px;box-shadow:0 12px 40px #202c3810}.icon{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;font-size:24px;font-weight:700;background:var(--status-bg);color:var(--status-text)}.spinner{width:20px;height:20px;border:2px solid #f5c695;border-top-color:var(--status-text);border-radius:50%;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.spinner{animation:none}}h1{font-size:23px;line-height:1.3;margin:20px 0 10px}p{margin:0;color:var(--muted);overflow-wrap:anywhere}.foot{margin-top:24px;padding-top:20px;border-top:1px solid var(--soft);font-size:13px;color:var(--muted)}@media(max-width:480px){.panel{padding:24px}}
+</style></head><body><main><div class="brand"><img src="/logo.png" alt=""><div><strong>Namo</strong>MCP</div></div><section class="panel"${preparing?' role="status"':''}><div class="icon" aria-hidden="true">${preparing?'<span class="spinner"></span>':ok?'✓':'!'}</div><h1>${title}</h1><p>${body}</p>${preparing?'':`<p class="foot">${tr('mcp.resultFootnote')}</p>`}</section></main></body></html>`;
 }
 export async function startUi(manager:Management):Promise<{url:string;entryUrl:string;close:()=>Promise<void>}> {
   try { readFileSync(new URL('index.html',assetRoot)); }
@@ -48,9 +53,15 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
     if(req.headers.host!==origin.slice('http://'.length))return send(403,{error:tr("ui.invalidRequestOrigin")});
     let path:string;
     try{path=new URL(req.url??'/',origin).pathname;}catch{return send(400,{error:tr("ui.invalidRequestPath")});}
+    const themeCookie=(req.headers.cookie??'').split(';').map(part=>part.trim()).find(part=>part.startsWith(`${THEME_COOKIE}=`))?.slice(THEME_COOKIE.length+1);
+    const theme=parseThemePreference(themeCookie);
     if(req.method==='GET'&&path==='/api/mcp-oauth/callback'){
       let ok=false;try{ok=await oauth.finish(new URL(req.url??'/',origin).searchParams);}catch{/* Invalid or expired callback; never expose raw OAuth errors. */}
       res.writeHead(303,{'Location':ok?'/oauth-complete?status=success':'/oauth-complete?status=failed&reason='+encodeURIComponent(oauth.failure)});return res.end();
+    }
+    if(req.method==='GET'&&path==='/oauth-preparing') {
+      const locale=parseLocale(new URL(req.url??'/',origin).searchParams.get('lang')??undefined)??currentLocale();
+      return withLocale(locale,()=>send(200,oauthResultPage('preparing','',styleNonce,theme),'text/html'));
     }
     if(req.method==='GET'&&path==='/oauth-complete'){
       const parameters=new URL(req.url??'/',origin).searchParams;
@@ -58,11 +69,11 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
       const reasons:Record<string,string>={mcp_oauth_invalid_scope:tr('mcp.resultInvalidScope'),mcp_oauth_access_denied:tr('mcp.resultDenied'),mcp_oauth_invalid_grant:tr('mcp.resultInvalidGrant'),mcp_oauth_scope:tr('mcp.resultScopeMismatch'),mcp_oauth_callback_invalid:tr('mcp.resultInvalidCallback'),mcp_oauth_invalid_client:tr('mcp.resultInvalidClient'),mcp_config_changed:tr('mcp.resultConfigChanged'),mcp_oauth_expired:tr('mcp.resultExpired')};
       const key=parameters.get('reason')??'';
       const reason=Object.hasOwn(reasons,key)?reasons[key]:tr('mcp.resultDefaultError');
-      return send(200,oauthResultPage(ok,reason,styleNonce),'text/html');
+      return send(200,oauthResultPage(ok?'success':'failed',reason,styleNonce,theme),'text/html');
     }
     if(req.headers['sec-fetch-site']==='cross-site')return send(403,{error:tr("ui.invalidRequestOrigin")});
     if(req.method==='GET'&&Object.values(uiRoutes).some(route=>route===path)) {
-      try{return send(200,readFileSync(new URL('index.html',assetRoot),'utf8').replace('__NAMO_STYLE_NONCE__',styleNonce),'text/html');}
+      try{return send(200,readFileSync(new URL('index.html',assetRoot),'utf8').replace('__NAMO_STYLE_NONCE__',styleNonce).replace('<html lang="en">',`<html lang="en" data-theme="${theme}">`),'text/html');}
       catch{return send(503,{error:tr("ui.workbenchBuildingRefreshShortly")});}
     }
     // Only Vite's public JS/CSS/font files are served. Never expose arbitrary paths,

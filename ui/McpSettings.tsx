@@ -8,7 +8,7 @@ import {ConfirmButton,EditorCloseButton,Field,Notice} from './components';
 import {useEditorExit} from './useEditorExit';
 import {McpScopes} from './McpScopes';
 import {api,message} from './api';
-import {t as tr} from './i18n';
+import {getLocale,t as tr} from './i18n';
 
 type Draft=McpConnectionPatch;
 type Editor={originalId:string;revision:string;draft:Draft};
@@ -39,7 +39,7 @@ export function McpSettings({config,refresh,expired}:{config:ConfigView;refresh:
  const save=async()=>{if(!editor||!draft)return;setBusy(true);setError('');try{validate();const values=config.mcpConnections.filter(c=>c.id!==editor.originalId).map(patch);await api.saveMcp(editor.revision,[...values,draft]);setEditor(null);setNotice(tr('mcp.saved'));await refresh();}catch(e){setError(errorMessage(e));}finally{setBusy(false);}};
  const authorize=async()=>{
   if(!editor||!draft)return;let popup:Window|null=null;
-  try{validate();popup=window.open('about:blank','_blank');if(popup){popup.opener=null;popup.document.body.textContent=tr('mcp.opening');}}catch(e){setError(errorMessage(e));return;}
+  try{validate();popup=window.open(`/oauth-preparing?lang=${encodeURIComponent(getLocale())}`,'_blank');if(popup)popup.opener=null;}catch(e){setError(errorMessage(e));return;}
   setBusy(true);setError('');setAuthLink('');
   try{const {newToken:_token,clearToken:_clear,...definition}=draft;const result=await api.startMcpOAuth(editor.revision,editor.originalId,definition),url=new URL(result.url);
    if(url.protocol!=='https:'||url.username||url.password)throw new Error('mcp_oauth_failed');

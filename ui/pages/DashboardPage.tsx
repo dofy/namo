@@ -29,10 +29,10 @@ export function DashboardPage({ state, navigate, onOpen, enabled }: { state: Man
         <div className="section-title"><SectionHeading icon="activity" id="activity-heading" title={tr("dashboard.tasksOverSevenDays")} /><Text size="2" color="gray">{tr("dashboard.periodTotal")} {data.daily.reduce((sum, day) => sum + day.count, 0)}  {tr("dashboard.taskCountSuffix")}</Text></div>
         <svg className="activity-chart" viewBox="0 0 560 170" role="img" aria-labelledby="activity-title activity-description">
           <title id="activity-title">{tr("dashboard.tasksCreatedEachDayOverLastSeven")}</title><desc id="activity-description">{data.daily.map(day => tr("dashboard.dailyTaskCount", day.date, day.count)).join('；')}</desc>
-          <line x1="0" y1="132" x2="560" y2="132" stroke="#dce3e9" />
+          <line x1="0" y1="132" x2="560" y2="132" stroke="var(--namo-border)" />
           {data.daily.map((day, index) => {
             const height = day.count / max * 98, x = index * 80 + 20;
-            return <g key={day.date}><rect x={x} y={132 - Math.max(2, height)} width="40" height={Math.max(2, height)} rx="4" fill={day.count ? index === 6 ? '#f58a24' : '#f7c18b' : '#e7ecf0'} /><text x={x + 20} y={120 - height} textAnchor="middle" className="chart-count">{day.count}</text><text x={x + 20} y="158" textAnchor="middle" className="chart-label">{day.date.slice(5).replace('-', '/')}</text></g>;
+            return <g key={day.date}><rect x={x} y={132 - Math.max(2, height)} width="40" height={Math.max(2, height)} rx="4" fill={day.count ? index === 6 ? '#f58a24' : 'var(--namo-chart-bar)' : 'var(--namo-border-soft)'} /><text x={x + 20} y={120 - height} textAnchor="middle" className="chart-count">{day.count}</text><text x={x + 20} y="158" textAnchor="middle" className="chart-label">{day.date.slice(5).replace('-', '/')}</text></g>;
           })}
         </svg>
         <div className="period-stats"><div><span>{tr("dashboard.sevenDaySuccessRate")}</span><strong>{data.successRate == null ? '—' : `${(data.successRate * 100).toLocaleString(getLocale(), { maximumFractionDigits: 1 })}%`}</strong></div><div><span>{tr("dashboard.averageCompletionTime")}</span><strong>{duration(data.averageDurationMs)}</strong></div><div><span>{tr("dashboard.sevenDayActiveUsers")}</span><strong>{data.activeUsers}  {tr("dashboard.users")}</strong></div></div>

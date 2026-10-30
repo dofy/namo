@@ -17,6 +17,7 @@ import { AssistantPage } from './pages/AssistantPage';
 import { ChangelogPage } from './pages/ChangelogPage';
 import { ModelCatalogProvider } from './components/ModelSelect';
 import { Icon, type IconName } from './Icon';
+import { ThemeSwitch } from './ThemeSwitch';
 
 type NavigationPage = Exclude<UiPage, 'profiles'>;
 const pageIcons: Record<NavigationPage, IconName> = { assistant: 'assistant', memory: 'memory', dashboard: 'dashboard', tasks: 'tasks', schedules: 'schedules', sessions: 'sessions', settings: 'settings', connections: 'connections', changelog: 'changelog' };
@@ -99,6 +100,7 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
       <div className="sidebar-foot"><div className="service-status"><span className={`dot ${state?.service.ready ? 'ready' : ''}`} />
         <Text weight="medium" size="2">{expired || !state ? tr("app.notAuthorized") : state.service.ready ? tr("app.feishuConnected") : state.service.running ? tr("app.connectionNotReady") : tr("app.serviceStopped")}</Text>
         {state && state.config.application !== 'applied' && <Text as="p" size="1" color="gray">{application[state.config.application]}</Text>}</div>
+        <ThemeSwitch />
         <div className="language-control">
           <label className="sr-only" htmlFor="workbench-language">Language / 语言</label>
           <Choice id="workbench-language" value={languagePreference} onChange={value => setLocale(value as LanguagePreference)} options={[{ value: 'system', label: tr("language.system") }, { value: 'en', label: 'English' }, { value: 'zh-CN', label: '简体中文' }]} />

@@ -1,5 +1,9 @@
 // Stable message IDs. Copy edits must not rename keys. Keep placeholders aligned with zh-CN.
 export const english = {
+  "theme.title": "Appearance",
+  "theme.auto": "Auto",
+  "theme.light": "Light",
+  "theme.dark": "Dark",
   "mcp.connectionDetails": "Connection details",
   "mcp.connectionDetailsHelp": "Identify the service and choose whether tasks can use it.",
   "mcp.authorizationTitle": "Authorization",
@@ -84,6 +88,7 @@ export const english = {
   "editor.discard": "Discard changes",
   "mcp.retryAuthorization": "Edit and retry",
   "mcp.opening": "Preparing authorization…",
+  "mcp.openingHelp": "Keep this tab open. It will continue to the service's sign-in page when ready.",
 
   "mcp.authorizationSaved": "Authorization saved",
   "mcp.connectionEnabled": "Configured: enabled for tasks",

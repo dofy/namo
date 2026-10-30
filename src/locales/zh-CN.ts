@@ -1,6 +1,10 @@
 import type { MessageKey } from './en.js';
 
 export const chinese = {
+  "theme.title": "外观",
+  "theme.auto": "自动",
+  "theme.light": "浅色",
+  "theme.dark": "深色",
   "mcp.connectionDetails": "连接信息",
   "mcp.connectionDetailsHelp": "填写服务信息，并选择是否允许任务使用。",
   "mcp.authorizationTitle": "登录授权",
@@ -85,6 +89,7 @@ export const chinese = {
   "editor.discard": "放弃修改",
   "mcp.retryAuthorization": "返回修改并重试",
   "mcp.opening": "正在准备登录授权…",
+  "mcp.openingHelp": "请保持此标签页打开，准备完成后将前往服务的登录授权页面。",
 
   "mcp.authorizationSaved": "已保存授权",
   "mcp.connectionEnabled": "已配置：任务中启用",

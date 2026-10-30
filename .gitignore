@@ -8,5 +8,7 @@ data/
 .DS_Store
 work/
 output/playwright/
+output/namo-reminder-auth.png
+output/lark-send-auth.png
 .playwright-mcp/
 .playwright-cli/

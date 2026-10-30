@@ -410,8 +410,17 @@ test('scheduled task list is authenticated, paginated, redacted and read-only',a
 
 test('MCP authorization result pages are localized, nonce-styled and do not reflect input',async t=>{
  const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());
+ const shell=await (await fetch(ui.url+'/',{headers:{Cookie:'namo_ui_theme=dark'}})).text();assert.match(shell,/<html lang="en" data-theme="dark">/);
  for(const language of ['zh-CN','en']){
   const headers={'Accept-Language':language};
+  const preparing=await fetch(ui.url+'/oauth-preparing',{headers});const waiting=await preparing.text();
+  assert.equal(preparing.status,200);assert.match(waiting,language==='en'?/Preparing authorization/:/正在准备登录授权/);
+  const waitingNonce=/style nonce="([^"]+)"/.exec(waiting)?.[1];assert.ok(waitingNonce);assert.ok(preparing.headers.get('content-security-policy')?.includes(`'nonce-${waitingNonce}'`));
+  assert.match(waiting,/role="status"/);assert.match(waiting,/prefers-reduced-motion/);assert.doesNotMatch(waiting,/<script/);
+  const selectedLanguage=await (await fetch(ui.url+'/oauth-preparing?lang=zh-CN',{headers:{'Accept-Language':'en'}})).text();
+  assert.match(selectedLanguage,/正在准备登录授权/);
+  const dark=await (await fetch(ui.url+'/oauth-preparing',{headers:{Cookie:'namo_ui_theme=dark'}})).text();assert.match(dark,/data-theme="dark"/);
+  const automatic=await (await fetch(ui.url+'/oauth-preparing',{headers:{Cookie:'namo_ui_theme=invalid'}})).text();assert.match(automatic,/data-theme="auto"/);
   const response=await fetch(ui.url+'/oauth-complete?status=success',{headers});const html=await response.text();
   assert.match(html,language==='en'?/Authorization complete/:/授权完成/);
   const nonce=/style nonce="([^"]+)"/.exec(html)?.[1];assert.ok(nonce);assert.ok(response.headers.get('content-security-policy')?.includes(`'nonce-${nonce}'`));

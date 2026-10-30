@@ -14,6 +14,7 @@ import './styles.css';
 import { App } from './App';
 import { api, message } from './api';
 import { Notice } from './components';
+import { useAppearance } from './theme';
 
 // Radix's scroll-lock stylesheet reads get-nonce's standard global. Authorize
 // that stylesheet without enabling arbitrary inline scripts or styles.
@@ -24,14 +25,18 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean
   static getDerivedStateFromError() { return { failed: true }; }
   render() { return this.state.failed ? <main className="startup-error"><Notice error>{tr("app.pageCouldNotLoadRefreshCloseWorkbench")}</Notice></main> : this.props.children; }
 }
+function AppTheme({children}:{children:ReactNode}) {
+  const appearance=useAppearance();
+  return <Theme accentColor="orange" grayColor="slate" radius="medium" appearance={appearance}>{children}</Theme>;
+}
 // Exchange the single-use bootstrap before React mounts, including StrictMode's
 // extra development effect cycle. Never persist the token or put it in logs.
 async function boot() {
   let code = location.hash.slice(1); history.replaceState(null, '', location.pathname + location.search);
   let initial, startupError;
   try { if (code) await api.session(code); initial = await api.state(); } catch (e) { startupError = message(e); } finally { code = ''; }
-  createRoot(document.getElementById('root')!).render(<StrictMode><Theme accentColor="orange" grayColor="slate" radius="medium" appearance="light">
+  createRoot(document.getElementById('root')!).render(<StrictMode><AppTheme>
     <ErrorBoundary><App initial={initial} startupError={startupError} /></ErrorBoundary>
-  </Theme></StrictMode>);
+  </AppTheme></StrictMode>);
 }
 void boot();
