@@ -139,7 +139,7 @@ export function AssistantPage({ settings, editable, unavailableReason, save, res
             <Field label={c.role} htmlFor="assistant-role"><TextField.Root id="assistant-role" value={draft.role} maxLength={160}
               onChange={event => change({ role: event.target.value })} /><Text size="1" color="gray">{c.roleHint}</Text></Field>
           </div>
-          <Field label={c.personality} htmlFor="assistant-personality"><TextArea id="assistant-personality" value={draft.personality} maxLength={1000} rows={3}
+          <Field label={c.personality} htmlFor="assistant-personality"><TextArea id="assistant-personality" value={draft.personality} maxLength={1000} rows={9}
             onChange={event => change({ personality: event.target.value })} /><Text size="1" color="gray">{c.personalityHint}</Text></Field>
         </section>
         <section className="assistant-section" aria-labelledby="assistant-style-title">
