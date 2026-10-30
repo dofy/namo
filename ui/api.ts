@@ -1,6 +1,6 @@
 import type { ApprovalAction, ApprovalList, ApprovalView, McpConnectionPatch, CodexUpdateStatus, ServiceLog, MigrationInspection, ServiceAccessPatch } from '../src/ui-contract';
 import { t as tr, getLocale } from './i18n';
-import type { ApplyResult, AssistantView, AssistantValues, BrowseOptions, ConfigValues, ConfigView, GitHubConfigPatch, Dashboard, Diagnostic, Issue, ManagementState, MemoryMutation, MemoryViewState, PageResult, ProfileValues, ResolutionAction, SessionSummary, TaskDetail, TaskList, UserProfile } from '../src/ui-contract';
+import type { ApplyResult, AssistantView, AssistantValues, BrowseOptions, ConfigValues, ConfigView, GitHubConfigPatch, Dashboard, Diagnostic, Issue, ManagementState, MemoryMutation, MemoryViewState, PageResult, ProfileValues, ResolutionAction, ScheduleListItem, SessionSummary, TaskDetail, TaskList, UserProfile } from '../src/ui-contract';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -38,6 +38,7 @@ export const api = {
   changeCodexUpdate: (configRevision: string, action: 'check' | 'upgrade' | 'automatic' | 'rollback', enabled?: boolean) =>
     request<CodexUpdateStatus>('/api/codex-update', { action, configRevision, ...(enabled === undefined ? {} : { enabled }) }),
   tasks: (query: string, signal?: AbortSignal) => request<TaskList>(`/api/tasks?${query}`, undefined, signal),
+  schedules: (query: string, signal?: AbortSignal) => request<PageResult<ScheduleListItem>>(`/api/schedules?${query}`, undefined, signal),
   sessions: (query: string, signal?: AbortSignal) => request<PageResult<SessionSummary>>(`/api/sessions?${query}`, undefined, signal),
   dashboard: (signal?: AbortSignal) => request<Dashboard>('/api/dashboard', undefined, signal),
   browseOptions: (signal?: AbortSignal) => request<BrowseOptions>('/api/browse-options', undefined, signal),

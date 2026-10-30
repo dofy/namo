@@ -1,6 +1,6 @@
 import type { Audience, OrganizationAccess, ProjectAccess } from './access-contract.js';
 /** Browser-visible projections only. Never include configuration or auth secrets. */
-export const uiRoutes = { dashboard: '/', tasks: '/tasks', sessions: '/sessions', settings: '/settings', assistant: '/assistant', memory: '/memory', profiles: '/profiles', connections: '/connections', changelog: '/changelog' } as const;
+export const uiRoutes = { dashboard: '/', tasks: '/tasks', schedules: '/schedules', sessions: '/sessions', settings: '/settings', assistant: '/assistant', memory: '/memory', profiles: '/profiles', connections: '/connections', changelog: '/changelog' } as const;
 export type UiPage = keyof typeof uiRoutes;
 
 export interface CodexUpdateStatus {
@@ -61,6 +61,10 @@ export interface BrowseOptions {
   users: { id: string; name: string }[]; projects: string[];
 }
 export interface PageResult<T> { items: T[]; total: number; page: number; pageSize: number; pages: number }
+export interface ScheduleListItem {
+  id:string; ownerId:string; ownerName:string; kind:'reminder'|'task'; content:string;
+  intervalMs:number|null; nextAt:number; state:'active'|'paused'|'completed'; createdAt:number;
+}
 export interface TaskList extends PageResult<TaskListItem> { session: SessionSummary | null }
 export interface Dashboard {
   generatedAt: number; timeZone: string; today: number; weekStart: number;

@@ -1,5 +1,5 @@
 import {
-  AtSign, PanelsTopLeft, Smile, Activity, BookUser, Bot, ChevronLeft, ChevronRight, CircleCheck, Info,
+  AtSign, PanelsTopLeft, Smile, Activity, BookUser, Bot, CalendarClock, ChevronLeft, ChevronRight, CircleCheck, Info,
   ClipboardCheck, ExternalLink, Funnel, LayoutDashboard, MessageSquare, ScrollText,
   Play, Plug, Plus, RotateCcw, RotateCw, Save, SlidersHorizontal, Square,
   Trash2, UserRound, X, Search, type LucideIcon,
@@ -14,6 +14,7 @@ const icons = {
   external: ExternalLink,
   dashboard: LayoutDashboard,
   tasks: ClipboardCheck,
+  schedules: CalendarClock,
   sessions: MessageSquare,
   settings: SlidersHorizontal,
   profiles: UserRound,

@@ -388,3 +388,22 @@ test('CLI update controls require local authentication, exact origin, and curren
  assert.equal((await post({action:'exec',configRevision:revision},cookie)).status,409);
  assert.equal((await post({action:'automatic',enabled:false,configRevision:revision},cookie)).status,200);
 });
+
+test('scheduled task list is authenticated, paginated, redacted and read-only',async t=>{
+ const f=fixture(t);assert.deepEqual(f.manager.browse('schedules'),{items:[],total:0,page:1,pageSize:25,pages:1});
+ const s=new Store(join(f.data,'bot.sqlite'));
+ s.enqueue({key:'schedule-source',messageId:'msg',chatKey:'chat',chatId:'chat',senderId:'alice',text:'create'});
+ for(let n=0;n<54;n++)s.db.prepare('INSERT INTO schedules VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(`S-${String(n).padStart(12,'0')}`,'alice','chat','chat','schedule-source',n%2?'task':'reminder',`item ${n} PRIVATE_TEST_SECRET_7381`,n%2?86400000:null,200000+n,n===53?'deleted':n===52?'paused':'active',null,100000+n);
+ s.close();
+ const ui=await startUi(f.manager);t.after(()=>ui.close());
+ assert.equal((await fetch(ui.url+'/api/schedules')).status,401);
+ const login=await fetch(ui.url+'/api/session',{method:'POST',headers:{Origin:ui.url,'Content-Type':'application/json'},body:JSON.stringify({code:new URL(ui.entryUrl).hash.slice(1)})});
+ const headers={Cookie:login.headers.get('set-cookie')!};
+ const first=await (await fetch(ui.url+'/api/schedules?page=1&pageSize=25',{headers})).json() as any;
+ assert.equal(first.total,53);assert.equal(first.items.length,25);assert.equal(first.items[0].state,'paused');
+ assert.doesNotMatch(JSON.stringify(first),/PRIVATE_TEST_SECRET_7381|sourceKey|chatKey|binding/);
+ const third=await (await fetch(ui.url+'/api/schedules?page=3&pageSize=25',{headers})).json() as any;
+ assert.equal(third.items.length,3);assert.equal(new Set([...first.items,...third.items].map((x:any)=>x.id)).size,28);
+ assert.equal((await fetch(ui.url+'/api/schedules?pageSize=101',{headers})).status,400);
+ const after=new Store(join(f.data,'bot.sqlite'),true);assert.equal(after.db.prepare("SELECT COUNT(*) n FROM schedules WHERE state='paused'").get()?.n,1);after.close();
+});

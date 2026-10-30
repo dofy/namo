@@ -1,7 +1,7 @@
 import { t as tr } from './locale.js';
 import type { SQLInputValue } from 'node:sqlite';
 import type { Store } from './store.js';
-import type { BrowseOptions, Dashboard, PageResult, SessionSummary, TaskList, TaskListItem } from './ui-contract.js';
+import type { BrowseOptions, Dashboard, PageResult, ScheduleListItem, SessionSummary, TaskList, TaskListItem } from './ui-contract.js';
 
 export class BrowseError extends Error {}
 type Kind = 'tasks' | 'sessions';
@@ -65,6 +65,15 @@ const sessionsCte = `WITH message_activity AS (
 /** Read-only projections. Each public operation runs inside Management's read snapshot. */
 export class Browse {
   private names = new Map<string, string>();
+  schedules(params:URLSearchParams):PageResult<ScheduleListItem> {
+    const rawPage=params.get('page')??'1', rawSize=params.get('pageSize')??'25';
+    if(params.getAll('page').length>1||params.getAll('pageSize').length>1||!/^\d+$/.test(rawPage)||!/^\d+$/.test(rawSize)
+      ||Number(rawPage)<1||Number(rawPage)>1_000_000||![25,50,100].includes(Number(rawSize))) throw new BrowseError(tr('browse.invalidPaginationParameters'));
+    const pageSize=Number(rawSize),total=Number(this.store.db.prepare("SELECT COUNT(*) n FROM schedules WHERE state!='deleted'").get()?.n);
+    const pages=Math.max(1,Math.ceil(total/pageSize)),page=Math.min(Number(rawPage),pages);
+    const rows=this.store.db.prepare("SELECT id,ownerId,kind,content,intervalMs,nextAt,state,createdAt FROM schedules WHERE state!='deleted' ORDER BY createdAt DESC,id DESC LIMIT ? OFFSET ?").all(pageSize,(page-1)*pageSize);
+    return {total,page,pageSize,pages,items:rows.map(row=>({...row,content:this.redact(String(row.content)),ownerName:this.names.get(String(row.ownerId))??''}) as unknown as ScheduleListItem)};
+  }
   constructor(private store: Store, identity: { appId: string; channel: string }, private redact: (s: string) => string) {
     const account = store.db.prepare("SELECT value FROM settings WHERE key='account'").get()?.value;
     if ((!account || account === identity.appId) && store.db.prepare("SELECT 1 FROM sqlite_master WHERE name='user_profiles' AND type='table'").get()) {

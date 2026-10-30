@@ -236,7 +236,7 @@ export class Management {
     const {raw}=this.source(),f=raw.feishu??{};
     return new Browse(s,{appId:f.appId??'',channel:f.domain??'feishu'},this.redactor());
   }
-  browse(kind:'tasks'|'sessions'|'dashboard'|'options',params=new URLSearchParams()):unknown {
+  browse(kind:'tasks'|'schedules'|'sessions'|'dashboard'|'options',params=new URLSearchParams()):unknown {
     const result=this.read(s=>{
       const schema=Number(s.db.prepare('PRAGMA user_version').get()?.user_version);
       if(schema!==SCHEMA_VERSION)throw new BrowseError(tr("management.databaseSchemaUnsupported"));
@@ -245,7 +245,7 @@ export class Management {
       s.db.exec('BEGIN');
       try{
         const view=this.projections(s);
-        const value=kind==='tasks'?view.tasks(params):kind==='sessions'?view.sessions(params):kind==='dashboard'?view.dashboard():view.options();
+        const value=kind==='tasks'?view.tasks(params):kind==='schedules'?view.schedules(params):kind==='sessions'?view.sessions(params):kind==='dashboard'?view.dashboard():view.options();
         s.db.exec('COMMIT');return value;
       }catch(e){s.db.exec('ROLLBACK');throw e;}
     });

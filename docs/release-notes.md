@@ -1,5 +1,15 @@
 # Release notes
 
+## 0.4.0 — 2026-10-30
+
+- Create and manage one-time reminders and daily or weekly tasks in a Feishu
+  private chat. The local workbench lists schedules and their states, frequency,
+  owners and next trigger times; changes are made through Feishu commands.
+- Triggers use the existing durable task and delivery queues, recheck access,
+  coalesce missed occurrences and avoid replaying uncertain deliveries.
+- Stopped upgrades migrate the existing database from schema 13 to 14 after a
+  verified backup. Cross-schema rollback is not supported.
+
 ## 0.3.2 — 2026-10-28
 
 - Service and personal model settings share an accessible dropdown with explicit

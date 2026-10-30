@@ -248,6 +248,18 @@ summary { cursor: pointer; font-size: 13px; color: #47657c; }
 .browse-table table { min-width: 830px; width: 100%; }
 .browse-table .rt-TableCell { padding-top: 16px; padding-bottom: 16px; }
 .browse-table .summary-cell { width: 32%; min-width: 230px; max-width: 330px; }
+.schedule-content { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-weight: 500; }
+.schedule-mobile { display: none; }
+@media (max-width: 700px) {
+  .schedule-table { display: none; }
+  .schedule-mobile { display: grid; gap: 12px; }
+  .schedule-mobile-card { padding: 14px; border: 1px solid var(--gray-a5); border-radius: 8px; background: var(--color-panel-solid); }
+  .schedule-mobile-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .schedule-mobile-heading .rt-Badge { flex: none; }
+  .schedule-mobile-card dl { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; margin: 12px 0 0; font-size: 13px; }
+  .schedule-mobile-card dt { color: var(--gray-10); }
+  .schedule-mobile-card dd { margin: 0; min-width: 0; }
+}
 .compact-table table { min-width: 700px; }
 .compact-table .summary-cell { width: 40%; }
 .session-latest { display: block; margin-top: 7px; font-weight: 400; font-size: 12px; color: #637180; max-width: 290px; overflow: hidden; text-overflow: ellipsis; }

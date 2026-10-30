@@ -87,6 +87,7 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
         if(path==='/api/models')return send(200,await manager.models());
         if(path==='/api/codex-update')return send(200,await manager.codexUpdate());
         if(path==='/api/tasks')return send(200,manager.browse('tasks',new URL(req.url!,origin).searchParams));
+        if(path==='/api/schedules')return send(200,manager.browse('schedules',new URL(req.url!,origin).searchParams));
         if(path==='/api/sessions')return send(200,manager.browse('sessions',new URL(req.url!,origin).searchParams));
         if(path==='/api/dashboard')return send(200,manager.browse('dashboard'));
         if(path==='/api/browse-options')return send(200,manager.browse('options'));
