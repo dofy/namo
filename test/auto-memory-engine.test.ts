@@ -66,6 +66,14 @@ test('accepted conversation automatically queues extraction with verified owner,
   assert.deepEqual(f.fatal, []);
 });
 
+test('background memory extraction waits when the daily model turn limit is exhausted',async t=>{
+ let extracts=0;const f=fixture(t,{async run(r){r.onThread('thread');r.onTurn('turn');return {text:'done',threadId:'thread',turnId:'turn'};},async extractMemory(){extracts++;return {memories:[]};}});
+ f.config.codex.dailyTurnLimit=1;f.engine.accept(message('limited'));f.engine.start();await waitFor(()=>f.store.get('limited')?.state==='replied');
+ forceDue(f.store);await f.engine.pump();assert.equal(extracts,0);assert.equal(jobs(f.store)[0].value.state,'pending');
+ f.store.db.prepare("UPDATE settings SET value='0' WHERE key LIKE 'daily-turns:%'").run();await f.engine.pump();
+ await waitFor(()=>extracts===1);assert.deepEqual(f.fatal,[]);
+});
+
 test('extraction failure never changes a succeeded task or reruns its main model', async t => {
   let mainCalls = 0, extractionCalls = 0;
   const f = fixture(t, {

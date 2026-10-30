@@ -64,6 +64,16 @@ test('upgrade activates a validated private binary, survives reconstruction and 
   assert.equal((await reopened.status()).previousVersion, '0.200.0');
 });
 
+test('x86_64 managed releases survive reopening and rollback', async t => {
+  const f=fixture(t);
+  const updater=new CodexUpdates(f.config,{...f.deps,latest:async()=>({version:'0.200.0',target:'x86_64-apple-darwin',url:'https://releases.openai.com/codex/releases/0.200.0/codex-package-x86_64-apple-darwin.tar.gz',sha256:'a'.repeat(64)})});
+  await updater.action('upgrade');await updater.settled();
+  assert.match(resolveCodexBinary(f.original,f.home),/x86_64/);
+  assert.equal((await new CodexUpdates(f.config,f.deps).status()).currentVersion,'0.200.0');
+  await updater.action('rollback');await updater.settled();
+  assert.equal(resolveCodexBinary(f.original,f.home),f.original);
+});
+
 test('failed candidate compatibility checks preserve the active release and report a bounded error', async t => {
   const f = fixture(t);
   await f.updater.action('upgrade'); await f.updater.settled();
@@ -89,6 +99,20 @@ test('automatic updates defer while tasks are queued and continue when the queue
   assert.equal((await f.updater.status()).currentVersion, '0.200.0'); assert.equal(f.state.installs, 1);
 });
 
+test('manual upgrade and rollback deferred while busy resume with automatic updates disabled',async t=>{
+  const f=fixture(t);
+  const busy=(key:string)=>f.store.enqueue({key,messageId:key,chatKey:'chat',chatId:'chat',senderId:'user',text:'task'});
+  const finish=(key:string)=>{f.store.claim(key);f.store.finish(key,'done');const output=f.store.nextOutput()!;f.store.sending(output.id);f.store.sent(output.id,'reply');};
+  busy('upgrade-busy');await f.updater.action('upgrade');await f.updater.settled();
+  assert.equal((await f.updater.status()).state,'deferred');assert.equal((await f.updater.status()).automatic,false);
+  finish('upgrade-busy');await f.updater.tick();await f.updater.settled();
+  assert.equal((await f.updater.status()).currentVersion,'0.200.0');
+  busy('rollback-busy');await f.updater.action('rollback');await f.updater.settled();
+  assert.equal((await f.updater.status()).state,'deferred');
+  finish('rollback-busy');const reopened=new CodexUpdates(f.config,f.deps);await reopened.tick();await reopened.settled();
+  assert.equal(resolveCodexBinary(f.original,f.home),f.original);
+});
+
 test('a task arriving during installation prevents selecting the candidate', async t => {
   const f = fixture(t);
   const updater = new CodexUpdates(f.config, { ...f.deps, install: async (release, destination) => {
@@ -99,6 +123,18 @@ test('a task arriving during installation prevents selecting the candidate', asy
   await updater.action('upgrade'); await updater.settled();
   assert.equal((await updater.status()).state, 'deferred');
   assert.equal(resolveCodexBinary(f.original, f.home), f.original);
+  assert.ok(installationState(f.original,f.home).candidate);
+  f.store.claim('arrived');f.store.finish('arrived','done');const output=f.store.nextOutput()!;f.store.sending(output.id);f.store.sent(output.id,'reply');
+  const reopened=new CodexUpdates(f.config,f.deps);await reopened.tick();await reopened.settled();
+  assert.equal((await reopened.status()).currentVersion,'0.200.0');assert.equal(f.state.installs,1);
+  assert.equal(installationState(f.original,f.home).candidate,null);
+});
+
+test('repeated identical automatic failures back off and stop after five attempts',async t=>{
+ const f=fixture(t),updater=new CodexUpdates(f.config,{...f.deps,probe:async()=>{throw Error('failure');}});
+ await updater.action('automatic',true);
+ for(let i=0;i<5;i++){await updater.tick();await updater.settled();assert.equal(installationState(f.original,f.home).failureCount,i+1);f.state.now+=3_600_000*2**i;}
+ const checks=f.state.checks;f.state.now+=86_400_000*10;await updater.tick();await updater.settled();assert.equal(f.state.checks,checks);
 });
 
 test('configuration changes during download prevent switching to a previously approved candidate', async t => {

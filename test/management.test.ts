@@ -22,6 +22,15 @@ function fixture(t:any,deps:any={}){
  t.after(()=>rmSync(dir,{recursive:true,force:true}));return {dir,data,project,file,raw,manager};
 }
 
+test('missing concurrency defaults to three without changing existing explicit values or the config file',t=>{
+ const f=fixture(t);
+ assert.equal(f.manager.config().values.concurrency,1);
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));delete raw.concurrency;
+ writeFileSync(f.file,JSON.stringify(raw));const before=readFileSync(f.file,'utf8');
+ assert.equal(f.manager.config().values.concurrency,3);
+ assert.equal(readFileSync(f.file,'utf8'),before);
+});
+
 test('model defaults are confirmed only for the matching running configuration', t=>{
  let running=true;
  const f=fixture(t,{status:()=>({running,pid:process.pid})});

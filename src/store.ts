@@ -63,7 +63,9 @@ export class Store {
   next(excluded: string[]): Inbox | undefined {
     const rows = this.db.prepare(`SELECT i.* FROM inbox i WHERE i.state='queued'
       AND NOT EXISTS (SELECT 1 FROM inbox p WHERE p.chatKey=i.chatKey AND p.seq<i.seq
-        AND p.state IN ('queued','running','waiting','awaiting_reply')) ORDER BY i.seq LIMIT 100`).all() as unknown as Inbox[];
+        AND p.state IN ('queued','running','waiting','awaiting_reply')
+        AND (COALESCE(CASE WHEN json_valid(i.envelope) THEN json_extract(i.envelope,'$.chatType') END,'')!='group' OR
+          (p.senderId=i.senderId AND COALESCE(CASE WHEN json_valid(p.envelope) THEN json_extract(p.envelope,'$.scopeKey') END,p.chatKey)=COALESCE(CASE WHEN json_valid(i.envelope) THEN json_extract(i.envelope,'$.scopeKey') END,i.chatKey)))) ORDER BY i.seq LIMIT 100`).all() as unknown as Inbox[];
     return this.decode(rows.find(r => !excluded.includes(r.chatKey)));
   }
   claim(key: string): boolean { return this.db.prepare("UPDATE inbox SET state='running' WHERE key=? AND state='queued'").run(key).changes === 1; }

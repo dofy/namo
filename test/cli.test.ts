@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { initialConfig, onboard, type InitDeps } from '../src/onboarding.js';
+test('new installations enable progress cards without altering legacy defaults',()=>{
+ assert.equal(initialConfig('/tmp/namo-config-test/config.json').feishu.cards,true);
+});
 import { loadConfig } from '../src/config.js';
 import { atomicJson, readJson, ConfigEditor, configFile } from '../src/paths.js';
 import { renderLaunchAgent } from '../src/service.js';

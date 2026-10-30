@@ -11,6 +11,7 @@ import { Engine, SendError, type DeliveryRoute, type Sender } from '../src/engin
 import type { Runtime } from '../src/runtime.js';
 import { Store, type Incoming } from '../src/store.js';
 import { Tasks, type Task } from '../src/tasks.js';
+import { normalizeEvent } from '../src/feishu.js';
 
 
 
@@ -305,4 +306,22 @@ test('expanded material reaches the runtime prompt and remains explicitly untrus
   assert.equal(parsed.material_context[0].nodes[0].text, 'ROADMAP_MATERIAL_SENTINEL');
   assert.equal(parsed.material_context[0].nodes[0].untrusted, true);
   assert.doesNotMatch(prompt, /material[^\n]{0,80}(?:grants?|authori[sz]ed)/i);
+});
+
+test('a group merged-forward without mention can be staged by its sender and used in a later request',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-group-forward-')),store=new Store(join(dir,'db'));let prompt='';
+ const runtime:Runtime={async run(r){prompt=r.prompt;return {text:'done',threadId:'thread',turnId:'turn'};}};
+ const sender:Sender={async send(_chat,_text,uuid){return uuid;},materials:{async readMessage(){return [
+  {messageId:'forward',chatId:'group',type:'merge_forward'},
+  {messageId:'child',parentMessageId:'forward',chatId:'group',type:'text',body:JSON.stringify({text:'FORWARDED_REFERENCE'})},
+ ];},async readResource(){throw Error('unexpected');}}};
+ const feishu={appId:'app',appSecret:'fixture',allowedUserIds:['alice'],allowedChatIds:[],requireMention:true,domain:'feishu' as const};
+ const engine=new Engine(store,runtime,sender,{dataDir:dir,concurrency:1,feishu});
+ t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+ const base={sender:{sender_type:'user',sender_id:{open_id:'alice'}},message:{message_id:'forward',chat_id:'group',chat_type:'group',message_type:'merge_forward',content:'{}'}};
+ const forwarded=normalizeEvent(base,feishu,'bot')!;assert.ok(forwarded);engine.start();engine.accept(forwarded);
+ assert.equal(store.get(forwarded.key)?.state,'material');
+ const request=normalizeEvent({...base,message:{...base.message,message_id:'request',message_type:'text',content:JSON.stringify({text:'@bot /run summarize'}),mentions:[{key:'@bot',id:{open_id:'bot'}}]}},feishu,'bot')!;
+ engine.accept(request);await waitFor(()=>store.get(request.key)?.state==='replied');
+ assert.match(prompt,/FORWARDED_REFERENCE/);assert.match(prompt,/untrusted reference/);
 });

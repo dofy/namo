@@ -15,6 +15,9 @@ const errorKeys: Record<string, MessageKey> = {
   update_unsupported: 'codexUpdate.unsupported',
   update_download_failed: 'codexUpdate.downloadFailed',
   update_checksum_failed: 'codexUpdate.checksumFailed',
+  codex_download_failed: 'codexUpdate.downloadFailed',
+  codex_download_timeout: 'codexUpdate.downloadFailed',
+  codex_checksum_mismatch: 'codexUpdate.checksumFailed',
   update_probe_failed: 'codexUpdate.probeFailed',
 };
 const errorKey = (code: string, fallback: MessageKey) => Object.hasOwn(errorKeys, code) ? errorKeys[code] : fallback;
@@ -24,7 +27,7 @@ function errorText(error: unknown): string {
   return tr(errorKey(code, 'codexUpdate.requestFailed'));
 }
 
-export function CodexUpdatePanel({ configRevision, disabled }: { configRevision: string; disabled: boolean }) {
+export function CodexUpdatePanel({ configRevision, disabled, pendingApplication=false }: { configRevision: string; disabled: boolean; pendingApplication?:boolean }) {
   const [status, setStatus] = useState<CodexUpdateStatus | null>(null);
   const [pending, setPending] = useState<Action | null>(null);
   const [error, setError] = useState('');
@@ -89,6 +92,7 @@ export function CodexUpdatePanel({ configRevision, disabled }: { configRevision:
       {status && <Badge color={status.managed ? 'green' : 'gray'}>{tr(status.managed ? 'codexUpdate.managed' : 'codexUpdate.external')}</Badge>}
     </div>
     <Text as="p" size="2" color="gray">{tr('codexUpdate.help')}</Text>
+    {pendingApplication&&status?.automatic&&<Notice>{tr('codexUpdate.pendingApplication')}</Notice>}
     {error && <Notice error>{error}</Notice>}
     {status?.error && <Notice error>{tr(errorKey(status.error, 'codexUpdate.failed'))}</Notice>}
     {status && !status.supported && <Notice>{tr('codexUpdate.unsupported')}</Notice>}

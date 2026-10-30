@@ -111,6 +111,17 @@ test('saving presentation settings does not cancel an organization worker; revoc
   assert.equal(f.calls(), 1); assert.equal(f.job().result, null);
 });
 
+test('an unrelated organization grant change does not interrupt or withhold a running task',async t=>{
+ const f=fixture(t),input=organization(f),receiver=f.receiver();receiver.start();receiver.accept(input);
+ await wait(()=>f.calls()===1);
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));raw.codex.projectAccess.one.userIds.push('bob');
+ writeFileSync(f.file,JSON.stringify(raw));
+ const heartbeat=f.job().updatedAt;await wait(()=>f.job().state!=='running'||f.job().updatedAt>heartbeat+400);
+ assert.equal(f.job().state,'running');writeFileSync(join(f.project,'release'),'release');
+ await wait(()=>f.store.get(input.key)?.state==='replied');
+ assert.ok(f.deliveries.some(text=>text.includes('saved answer')));
+});
+
 test('environment credentials reach only the trusted worker, including after a presentation save', async t => {
   const f = fixture(t), name = 'NAMO_GITHUB_RUNNER_TEST';
   const previous = process.env[name]; process.env[name] = 'runner-test-credential';
@@ -149,6 +160,17 @@ test('switching out of organization mode cannot deliver a saved result to a now-
   const next = f.receiver(); next.start();
   await wait(() => !!f.store.db.prepare("SELECT 1 FROM outbox WHERE kind='result' AND state='failed' AND error='access_changed'").get());
   assert.equal(f.deliveries.filter(text => text.includes('saved answer')).length, 0); assert.equal(f.calls(), 1);
+});
+
+test('a withheld result emits only a generic notice to an admitted user',async t=>{
+ const f=fixture(t),input=organization(f),receiver=f.receiver();receiver.start();receiver.accept(input);
+ await wait(()=>f.calls()===1);await receiver.stop();writeFileSync(join(f.project,'release'),'release');
+ await wait(()=>f.job().state==='completed');
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));raw.codex.projectAccess.one.userIds=[];writeFileSync(f.file,JSON.stringify(raw));
+ const next=f.receiver();next.start();
+ await wait(()=>f.deliveries.some(text=>text.includes('结果未交付')));
+ assert.equal(f.deliveries.some(text=>text.includes('saved answer')),false);
+ assert.equal(f.store.db.prepare("SELECT state FROM outbox WHERE kind='result'").get()?.state,'failed');
 });
 
 test('detached worker finishes offline with delayed feedback; restart consumes one saved result and evidence', async t => {

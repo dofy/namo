@@ -28,7 +28,7 @@ export function parseReviewArguments(raw: unknown): Pick<GitHubTarget,'owner'|'r
   if (!m || ['.','..'].includes(m[2]) || Number(m[3])>2147483647) throw new Error('github_review_invalid_url');
   return {owner:m[1],repo:m[2],pullNumber:Number(m[3])};
 }
-interface ReadReceipt { target: GitHubTarget; scope?: string; context:{taskId:string;ownerId:string;chatId:string} }
+interface ReadReceipt { target: GitHubTarget; scope?: string; scopeVersion?:2; context:{taskId:string;ownerId:string;chatId:string} }
 interface Coverage {repository:string;pullNumber:number;headSha:string;baseSha:string;totalFiles:number;next:{baseSha:string;headSha:string;index:number;offset:number}|null; completedFiles:number; incompleteFiles:number; fileListLimited:boolean}
 const key = (workstream:string) => `github-review:${workstream}`;
 const coverageKey = (taskId:string) => `github-review-coverage:${taskId}`;
@@ -52,13 +52,13 @@ export async function readReview(store:Store, file:string, task:Task, args:unkno
   const result=await adapter(store,config).readPullRequest(target,context,Date.now()+30_000,cursor as {baseSha:string;headSha:string;index:number;offset:number}|undefined,source);
   const current=loadConfig(file);
   if (signal.aborted || current.feishu.appId!==config.feishu.appId || !admitted(current.feishu,m.senderId,m.chatId,m.envelope?.tenantKey)
-    || adapter(store,current).authorize({...target,headSha:result.snapshot.headSha},context)!==result.scope) throw new Error('github_access_changed');
+    || adapter(store,current).authorizeStable({...target,headSha:result.snapshot.headSha},context)!==result.scope) throw new Error('github_access_changed');
   store.transaction(()=>{
     const saved=store.db.prepare('SELECT value FROM settings WHERE key=?').get(key(task.workstreamId));
     const reads:ReadReceipt[]=saved?JSON.parse(String(saved.value)):[];
     if (!reads.some(r=>r.context.taskId===context.taskId && r.target.owner===target.owner && r.target.repo===target.repo && r.target.pullNumber===target.pullNumber && r.target.headSha===result.snapshot.headSha && r.scope===result.scope)) {
       if (reads.length>=20) throw new Error('github_review_session_limit');
-      reads.push({target:{...target,headSha:result.snapshot.headSha},context,scope:result.scope});
+      reads.push({target:{...target,headSha:result.snapshot.headSha},context,scope:result.scope,scopeVersion:2});
     }
     store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key(task.workstreamId),JSON.stringify(reads));
     if (source) return;
@@ -87,9 +87,13 @@ export function assertReviewDelivery(store:Store,config:Config,task:Task):void {
   if (!saved) return;
   const m=store.get(task.inboxKey)!;
   if (!admitted(config.feishu,m.senderId,m.chatId,m.envelope?.tenantKey)) throw new Error('github_access_changed');
-  for (const read of JSON.parse(String(saved.value)) as ReadReceipt[]) {
-    if (adapter(store,config).authorize(read.target,read.context)!==read.scope) throw new Error('github_access_changed');
+  const reads=JSON.parse(String(saved.value)) as ReadReceipt[];let migrated=false;
+  for (const read of reads) {
+    const access=adapter(store,config);
+    if ((read.scopeVersion===2?access.authorizeStable(read.target,read.context):access.authorize(read.target,read.context))!==read.scope) throw new Error('github_access_changed');
+    if(read.scopeVersion!==2){read.scope=access.authorizeStable(read.target,read.context);read.scopeVersion=2;migrated=true;}
   }
+  if(migrated)store.db.prepare('UPDATE settings SET value=? WHERE key=? AND value=?').run(JSON.stringify(reads),key(task.workstreamId),String(saved.value));
 }
 
 export function parseReviewContext(raw:unknown):ReviewContext|undefined {

@@ -25,6 +25,8 @@ export function OperationsPanel({state, expired}: {state: ManagementState; expir
       <div><dt>{tr('operations.schema')}</dt><dd>{state.database.schema}</dd></div>
       <div className="operations-wide"><dt>{tr('operations.configFile')}</dt><dd><Code variant="ghost">{state.config.file}</Code></dd></div>
     </dl>
+    {state.service.running&&<Text as="p" size="2" color={state.service.restartRecommended?'orange':'gray'}>{tr('operations.liveUpdates',state.service.liveUpgradeCount??0)}{state.service.restartRecommended?` ${tr('operations.restartRecommended')}`:''}</Text>}
+    {state.database.usage&&<Text as="p" size="2" color="gray">{tr('operations.dailyTurns',state.database.usage.day,state.database.usage.turns,state.database.usage.limit||tr('operations.noTurnLimit'))}</Text>}
     <Flex gap="3" wrap="wrap" align="center"><Text size="2">{tr('operations.queue')}</Text>
       {(state.database.queue?.states??[]).map(row=><Text key={row.state} size="2"><StatusBadge state={row.state}/> {row.count}</Text>)}
       {!state.database.queue?.states.length&&<Text size="2" color="gray">{tr('operations.emptyQueue')}</Text>}

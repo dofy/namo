@@ -8,7 +8,7 @@ import { Engine, SendError, type Sender } from '../src/engine.js';
 import { RuntimeError, type RunRequest, type RunResult, type Runtime, type WaitRequest } from '../src/runtime.js';
 import { Store, type Incoming } from '../src/store.js';
 import { Tasks } from '../src/tasks.js';
-import { WaitInputError, Waits } from '../src/waits.js';
+import { HUMAN_WAIT_TIMEOUT_MS, WaitInputError, Waits } from '../src/waits.js';
 import { Cards } from '../src/cards.js';
 
 const until = (condition: () => boolean, timeoutMs = 6000) => waitFor(condition, timeoutMs);
@@ -95,6 +95,41 @@ test('waiting releases global and cwd slots but remains a FIFO barrier for the s
   assert.deepEqual(starts, ['waiting', 'other-chat']);
   assert.equal(f.tasks.get(f.store.get('waiting')!.taskId!)?.state, 'waiting');
   assert.equal(f.tasks.get(f.store.get('same-chat')!.taskId!)?.state, 'queued');
+});
+
+test('a group wait blocks only the same person and topic',async t=>{
+ const starts:string[]=[],runtime:Runtime={async run(r){const key=JSON.parse(r.prompt).messages[0].message_id;starts.push(key);
+  if(key==='waiting-group')return waitingResult(r,1);r.onThread(`thread-${key}`);r.onTurn(`turn-${key}`);return {text:'done',threadId:`thread-${key}`,turnId:`turn-${key}`};}};
+ const f=fixture(t,runtime,undefined,1),engine=f.makeEngine();
+ const group=(key:string,owner:string,scope:string)=>{const m=message(key,'work',{chat:'group',owner,scope});m.envelope!.chatType='group';return m;};
+ engine.accept(group('waiting-group','alice','topic-a'));engine.accept(group('same-person','alice','topic-a'));
+ engine.accept(group('other-person','bob','topic-a'));engine.accept(group('other-topic','alice','topic-b'));engine.start();
+ await until(()=>f.store.get('other-person')?.state==='replied'&&f.store.get('other-topic')?.state==='replied');
+ assert.deepEqual(starts,['waiting-group','other-person','other-topic']);
+ assert.equal(f.tasks.get(f.store.get('same-person')!.taskId!)?.state,'queued');
+});
+
+test('different members in a group may run concurrently in isolated directories',async t=>{
+ const dir=realpathSync(mkdtempSync(join(tmpdir(),'namo-group-slots-'))),store=new Store(join(dir,'db'));const starts:string[]=[];
+ let release!:()=>void;const gate=new Promise<void>(r=>{release=r;});
+ const engine=new Engine(store,{async run(r){starts.push(r.cwd);await gate;r.onThread(`thread-${starts.length}`);r.onTurn('turn');return {text:'done',threadId:'thread',turnId:'turn'};}},
+  {async send(_chat,_text,uuid){return uuid;}},{dataDir:dir,concurrency:2,feishu:{progressUpdates:false,reactions:false}});
+ t.after(async()=>{release();await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+ for(const owner of ['alice','bob']){const m=message(owner,'work',{chat:'group',owner,scope:'topic'});m.envelope!.chatType='group';engine.accept(m);}
+ engine.start();await until(()=>starts.length===2);assert.notEqual(starts[0],starts[1]);release();
+ await until(()=>store.get('alice')?.state==='replied'&&store.get('bob')?.state==='replied');
+});
+
+test('daily turn limit leaves excess work queued and resumes it when capacity returns',async t=>{
+ const dir=realpathSync(mkdtempSync(join(tmpdir(),'namo-turn-limit-'))),store=new Store(join(dir,'db'));let calls=0;
+ const engine=new Engine(store,{async run(r){calls++;r.onThread(`thread-${calls}`);r.onTurn('turn');return {text:'done',threadId:'thread',turnId:'turn'};}},
+  {async send(_chat,_text,uuid){return uuid;}},{dataDir:dir,concurrency:1,codex:{bin:'codex',home:join(dir,'home'),sandbox:'read-only',timeoutMs:10000,dailyTurnLimit:1},feishu:{progressUpdates:false,reactions:false}});
+ t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+ engine.accept(message('first'));engine.accept(message('second','next',{chat:'other'}));engine.start();
+ await until(()=>!!store.db.prepare("SELECT 1 FROM outbox WHERE kind LIKE 'quota:%'").get());
+ assert.equal(calls,1);assert.equal(store.get('second')?.state,'queued');
+ store.db.prepare("UPDATE settings SET value='0' WHERE key LIKE 'daily-turns:%'").run();await engine.pump();
+ await until(()=>store.get('second')?.state==='replied');assert.equal(calls,2);
 });
 
 test('resume enforces owner, chat and topic, rejects stale quotes, and supports multiple cycles on the original thread', async t => {
@@ -232,6 +267,21 @@ test('answer and cancel are serialized, and neither a late answer nor an unresol
   f.tasks.start(f.tasks.get(next.id)!);
   assert.equal(f.store.db.prepare('SELECT dispatch FROM task_messages WHERE inboxKey=?').get(revision.key)?.dispatch, 'accepted',
     'resuming must preserve the prior runner receipt rather than rewrite it as a newly applied input');
+});
+
+test('human waits expire durably without resuming the model and late replies are rejected',t=>{
+ const f=fixture(t,{async run(){throw Error('not used');}}),engine=f.makeEngine();engine.accept(message('expire'));
+ const task=f.tasks.get(f.store.get('expire')!.taskId!)!,run=f.tasks.start(task);f.tasks.saveRun(run,'thread','turn');
+ const waits=new Waits(f.store),request={threadId:'thread',turnId:'turn',callId:'call',question:'answer?'};
+ const id=waits.request(task.id,run,request);waits.park(task,run,{id,...request});const created=waits.get(id)!.createdAt;
+ waits.expire(created);
+ waits.expire(created+HUMAN_WAIT_TIMEOUT_MS-1);assert.equal(waits.get(id)?.state,'open');
+ waits.expire(created+HUMAN_WAIT_TIMEOUT_MS);waits.expire(created+HUMAN_WAIT_TIMEOUT_MS+1);
+ assert.equal(waits.get(id)?.state,'expired');assert.equal(f.tasks.get(task.id)?.error,'wait_expired');
+ assert.equal(f.store.db.prepare("SELECT COUNT(*) n FROM outbox WHERE inboxKey=? AND kind='result'").get(task.inboxKey)?.n,1);
+ const late=message('expired-answer','late');f.store.enqueue(late);
+ assert.throws(()=>waits.answer(waits.get(id)!,late,late.text),WaitInputError);
+ assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM task_runs WHERE taskId=?').get(task.id)?.n,1);
 });
 
 function waitChoicesFixture(t: any, choices?: string[]) {

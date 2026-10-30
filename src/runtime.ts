@@ -68,6 +68,8 @@ export class CodexRuntime implements Runtime {
     let stopRequestListening = () => {};
     let abort: () => void = () => {};
     let completed = false;
+    const turnLifetime = new AbortController();
+    const toolSignal = AbortSignal.any([r.signal, turnLifetime.signal]);
     try {
       if (rpc.process.pid) r.onProcess?.(rpc.process.pid);
       const agents = join(r.cwd, 'AGENTS.md');
@@ -126,6 +128,7 @@ export class CodexRuntime implements Runtime {
         const fail = (code: string, detail?: string, stop = true) => {
           if (completed) return;
           completed = true;
+          turnLifetime.abort(code);
           if (stop) rpc.stop();
           reject(new RuntimeError(code, detail));
         };
@@ -241,7 +244,7 @@ export class CodexRuntime implements Runtime {
               rpc.respondError(id,-32602,'mcp_invalid_call'); return;
             }
             reviewActive=true;
-            void r.onMcp(params.arguments).then(value=>{
+            void r.onMcp(params.arguments,toolSignal).then(value=>{
               if(!completed)rpc.respond(id,{success:true,contentItems:[{type:'inputText',text:JSON.stringify(value)}]});
             }).catch(error=>{
               const code=error instanceof Error&&/^mcp_[a-z_]+$/.test(error.message)?error.message:'mcp_connection_failed';
@@ -254,7 +257,7 @@ export class CodexRuntime implements Runtime {
               rpc.respondError(id,-32602,'github_api_invalid_call'); return;
             }
             reviewActive=true;
-            void r.onGitHub(params.arguments).then(value=>{
+            void r.onGitHub(params.arguments,toolSignal).then(value=>{
               if(!completed)rpc.respond(id,{success:true,contentItems:[{type:'inputText',text:JSON.stringify(value)}]});
             }).catch(error=>{
               const code=error instanceof Error&&/^github_[a-z_]+$/.test(error.message)?error.message:'github_api_unavailable';
@@ -367,6 +370,7 @@ export class CodexRuntime implements Runtime {
       if (r.signal.aborted) abort();
       return await completion;
     } finally {
+      turnLifetime.abort('turn_finished');
       clearTimeout(timer); r.signal.removeEventListener('abort', abort); stopListening(); stopRequestListening();
       await rpc.close();
     }

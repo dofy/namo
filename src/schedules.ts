@@ -10,26 +10,44 @@ interface Schedule {
 const HELP = '**定时任务**\n`/schedule list` 查看\n`/schedule add reminder|task once|daily|weekly 2026-11-01T09:00+08:00 内容` 创建\n`/schedule pause|resume|delete S-编号` 管理\n时间必须含 UTC 偏移；daily 和 weekly 按固定间隔重复。仅支持私聊，服务停止时不会运行；恢复后合并错过的触发。';
 export class Schedules {
   constructor(private store:Store) {}
+  private displayTime(row:Schedule):string {
+    const text=this.store.get(row.sourceKey)?.text??'',match=/^\/schedule\s+add\s+(?:reminder|task)\s+(?:once|daily|weekly)\s+\S*?(Z|[+-]\d{2}:\d{2})(?:\s|$)/.exec(text.trim());
+    if(!match||match[1]==='Z')return new Date(row.nextAt).toISOString();
+    const offset=match[1],minutes=(Number(offset.slice(1,3))*60+Number(offset.slice(4,6)))*(offset[0]==='-'?-1:1);
+    if(!Number.isFinite(minutes)||Math.abs(minutes)>1439)return new Date(row.nextAt).toISOString();
+    return new Date(row.nextAt+minutes*60_000).toISOString().replace(/Z$/,offset);
+  }
   command(m:Incoming, binding:()=>unknown, now=Date.now()):string | undefined {
     if (!/^\/schedule(?:\s|$)/.test(m.text.trim())) return;
     if (m.envelope?.chatType !== 'p2p' || !['text','post'].includes(m.envelope.type) || m.envelope.parentId || m.envelope.rootId || m.envelope.materials.length || m.envelope.limitations.length) return '请在机器人私聊中单独发送定时任务命令。';
     const text=m.text.trim();
     if (/^\/schedule(?:\s+list)?$/.test(text)) {
       const rows=this.store.db.prepare('SELECT * FROM schedules WHERE ownerId=? AND chatKey=? AND scopeKey=? AND state!=\'deleted\' ORDER BY createdAt DESC LIMIT 100').all(m.senderId,m.chatKey,scopeOf(m)) as unknown as Schedule[];
-      return rows.length ? rows.map(r=>`${r.id} · ${r.state} · ${r.kind} · ${new Date(r.nextAt).toISOString()} · ${r.content}\n\`/schedule pause ${r.id}\` · \`/schedule resume ${r.id}\` · \`/schedule delete ${r.id}\``).join('\n\n') : `暂无定时任务。\n${HELP}`;
+      return rows.length ? rows.map(r=>{const row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`schedule-status:${r.id}`);let detail='';
+        if(row){try{const status=JSON.parse(String(row.value));detail=[status.reason?`暂停原因：${status.reason}`:'',status.skipped?`跳过 ${status.skipped} 次触发`: ''].filter(Boolean).join(' · ');}catch{}}
+        return `${r.id} · ${r.state} · ${r.kind} · ${this.displayTime(r)} · ${r.content}${detail?`\n${detail}`:''}\n\`/schedule pause ${r.id}\` · \`/schedule resume ${r.id}\` · \`/schedule delete ${r.id}\``;}).join('\n\n') : `暂无定时任务。\n${HELP}`;
     }
     const change=/^\/schedule\s+(pause|resume|delete)\s+(S-[A-Fa-f0-9]{12})$/.exec(text);
     if(change) {
       const row=this.store.db.prepare("SELECT * FROM schedules WHERE id=? AND ownerId=? AND chatKey=? AND scopeKey=? AND state!='deleted'").get(change[2].toUpperCase(),m.senderId,m.chatKey,scopeOf(m)) as unknown as Schedule|undefined;
       if(!row)return '未找到属于本人的定时任务。';
       if(change[1]==='resume' && row.state==='completed')return '一次性任务已触发，请新建任务。';
+      let nextBinding=row.binding,rebound=false;
+      if(change[1]==='resume' && row.state==='paused' && row.kind==='task') {
+        try {
+          const previous=JSON.parse(row.binding??'null'),current=binding() as {project?:unknown;cwd?:unknown};
+          if(!previous||!current||typeof previous.cwd!=='string'||typeof current.cwd!=='string'||previous.project!==current.project||previous.cwd!==current.cwd)return '请先切换回该定时任务原来的项目，再恢复；原绑定和任务均已保留。';
+          nextBinding=JSON.stringify(current);rebound=nextBinding!==row.binding;
+        } catch {return '当前项目或权限不可用，定时任务仍保持暂停。';}
+      }
       let next=row.nextAt;
       if(change[1]==='resume' && next<=now) {
-        if (!row.intervalMs) return '一次性任务的时间已过，请新建任务。';
-        next += (Math.floor((now-next)/row.intervalMs)+1)*row.intervalMs;
+        if (!row.intervalMs) next=now+1;
+        else next += (Math.floor((now-next)/row.intervalMs)+1)*row.intervalMs;
       }
-      this.store.db.prepare('UPDATE schedules SET state=?,nextAt=? WHERE id=?').run(change[1]==='pause'?'paused':change[1]==='resume'?'active':'deleted',next,row.id);
-      return `${row.id} 已${change[1]==='pause'?'暂停':change[1]==='resume'?'恢复':'删除'}；已入队或正在执行的任务不会自动撤销。`;
+      this.store.db.prepare('UPDATE schedules SET state=?,nextAt=?,binding=? WHERE id=?').run(change[1]==='pause'?'paused':change[1]==='resume'?'active':'deleted',next,nextBinding,row.id);
+      if(change[1]==='resume') {const key=`schedule-status:${row.id}`,saved=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key);if(saved){const status=JSON.parse(String(saved.value));delete status.reason;this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(status),key);}}
+      return `${row.id} 已${change[1]==='pause'?'暂停':change[1]==='resume'?'恢复':'删除'}${rebound?'，已按当前项目权限重新绑定':''}；已入队或正在执行的任务不会自动撤销。`;
     }
     const add=/^\/schedule\s+add\s+(reminder|task)\s+(once|daily|weekly)\s+(\S+)\s+([\s\S]+)$/.exec(text);
     if(!add)return HELP;
@@ -54,13 +72,14 @@ export class Schedules {
     this.store.db.prepare('INSERT INTO schedules VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(id,m.senderId,m.chatKey,scopeOf(m),m.key,add[1],content,interval,next,'active',frozen,now);
     return `已创建 ${id} · ${add[1]==='reminder'?'提醒':'任务'} · ${add[2]}\n首次：${time}（${new Date(next).toISOString()}）\n内容：${content}\n服务需保持运行；错过多次时只补一次。`;
   }
-  due(now:number, dispatch:(s:Schedule,source:Incoming)=>void):void {
+  due(now:number, dispatch:(s:Schedule,source:Incoming)=>void|false):void {
     this.store.transaction(()=>{
       const rows=this.store.db.prepare("SELECT * FROM schedules WHERE state='active' AND nextAt<=? ORDER BY nextAt LIMIT 50").all(now) as unknown as Schedule[];
       for(const row of rows) {
         const source=this.store.get(row.sourceKey);
         if(!source){this.store.db.prepare("UPDATE schedules SET state='paused' WHERE id=?").run(row.id);continue;}
-        dispatch(row,source);
+        // A temporarily unavailable runtime must not consume the occurrence.
+        if(dispatch(row,source)===false) continue;
         const next=row.intervalMs ? row.nextAt+(Math.floor((now-row.nextAt)/row.intervalMs)+1)*row.intervalMs : row.nextAt;
         this.store.db.prepare("UPDATE schedules SET nextAt=?, state=CASE WHEN state='active' AND intervalMs IS NULL THEN 'completed' ELSE state END WHERE id=?").run(next,row.id);
       }

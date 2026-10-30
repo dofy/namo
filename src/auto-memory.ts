@@ -131,7 +131,7 @@ export class AutoMemories {
         if (!this.owns(job!)) return;
         if (this.input(job!).messages.length!==input.messages.length) { this.complete(job!,0,candidates.accepted.length+candidates.rejected);return; }
         const memory = new Memories(this.store, this.options.redact);
-        let accepted = 0;
+        let accepted = 0,capacity=false;
         for (const candidate of candidates.accepted) {
           const evidence = candidate.evidence;
           const observedAt = Math.max(...evidence.map(ref => this.store.get(job!.inboxKeys.find(key => this.store.get(key)?.messageId === ref.messageId)!)?.createdAt ?? job!.createdAt));
@@ -145,9 +145,10 @@ export class AutoMemories {
             if (saved) accepted++;
           } catch (error) {
             if (!(error instanceof MemoryError) || !['invalid', 'forbidden', 'conflict', 'capacity'].includes(error.code)) throw error;
+            if(error.code==='capacity')capacity=true;
           }
         }
-        this.complete(job!, accepted, candidates.rejected + candidates.accepted.length - accepted);
+        this.complete(job!, accepted, candidates.rejected + candidates.accepted.length - accepted,capacity);
       });
     } catch (error) {
       if (job) this.store.transaction(() => {
@@ -268,9 +269,9 @@ export class AutoMemories {
     return current?.state === 'running' && current.lease === job.lease;
   }
   private write(job: Job): void { memoryJobs(this.store.db).save(job); }
-  private complete(job: Job, accepted: number, rejected: number): void {
+  private complete(job: Job, accepted: number, rejected: number,capacity=false): void {
     if (!this.owns(job)) return;
     job.state = 'completed'; job.accepted = accepted; job.rejected = rejected; job.lease = null; job.leaseUntil = 0;
-    delete job.error; this.write(job);
+    if(capacity)job.error='capacity';else delete job.error; this.write(job);
   }
 }

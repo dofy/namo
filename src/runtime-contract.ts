@@ -15,8 +15,8 @@ export interface RunRequest {
   onReady?: (controls: RunControls) => void;
   onWait?: (request: WaitRequest) => string;
   onReview?: (arguments_: unknown) => Promise<unknown>;
-  onGitHub?: (arguments_: unknown) => Promise<unknown>;
-  onMcp?: (arguments_: unknown) => Promise<unknown>;
+  onGitHub?: (arguments_: unknown, signal: AbortSignal) => Promise<unknown>;
+  onMcp?: (arguments_: unknown, signal: AbortSignal) => Promise<unknown>;
   onEvidence?: (item: EvidenceItem) => void;
   onActivity?: (phase: ActivityPhase) => void;
   onProgress?: (event: PublicProgressEvent) => void;
@@ -34,7 +34,7 @@ export interface Runtime {
   /** Durable runtimes own their evidence and survive receiver detachment. */
   persistent?: boolean;
   run(request: RunRequest): Promise<RunResult>;
-  reservations?(): { runId: string; chatKey: string; cwd: string }[];
+  reservations?(): { runId: string; chatKey: string; cwd: string; slotKey?: string }[];
   extractMemory?(input: AutoMemoryInput, signal: AbortSignal): Promise<unknown>;
 }
 export class RuntimeError extends Error {

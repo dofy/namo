@@ -30,8 +30,8 @@ export interface ConfigValues {
   progressIntervalMs?: number;
   progressHeartbeatMs?: number;
 }
-export interface McpConnectionView { id:string; type:'remote'; url:string; oauthScope?:string; enabled:boolean; audience:Audience; projects:string[]; credentialConfigured:boolean; credentialSource?:'oauth' }
-export interface McpConnectionPatch { id:string; type:'remote'; url:string; oauthScope?:string; enabled:boolean; audience:Audience; projects:string[]; newToken?:string; clearToken?:boolean }
+export interface McpConnectionView { id:string; type:'remote'; url:string; oauthScope?:string; ownerUserId?:string; enabled:boolean; audience:Audience; projects:string[]; credentialConfigured:boolean; credentialSource?:'oauth' }
+export interface McpConnectionPatch { id:string; type:'remote'; url:string; oauthScope?:string; ownerUserId?:string; enabled:boolean; audience:Audience; projects:string[]; newToken?:string; clearToken?:boolean }
 export interface ConfigView {
   revision: string;
   mcpConnections: McpConnectionView[];
@@ -107,7 +107,7 @@ export interface MemoryViewState {
   limits:{entryChars:number;ownerEntries:number;ownerChars:number;scopeEntries:number;scopeChars:number};
   extraction: MemoryExtractionView;
 }
-export type MemoryExtractionError = 'extraction_failed' | 'timeout' | 'connection_failed' | 'invalid_output' | 'tool_rejected';
+export type MemoryExtractionError = 'extraction_failed' | 'timeout' | 'connection_failed' | 'invalid_output' | 'tool_rejected' | 'capacity';
 export interface MemoryExtractionJob {
   id:string; project:string|null; state:'pending'|'running'|'completed'|'failed'; createdAt:number;
   attempts:number; dueAt:number; leaseUntil:number; accepted:number|null; rejected:number|null;
@@ -124,11 +124,11 @@ export type MemoryMutation =
   | {action:'disable'|'delete'|'activate';ownerId:string;id:string;version:number};
 export interface ManagementState {
   assistant?: AssistantView;
-  service: { running?: boolean; ready?: boolean; connection?: string; installed?: boolean; registered?: boolean; mode?: string; pid?: number;
+  service: { running?: boolean; ready?: boolean; connection?: string; installed?: boolean; registered?: boolean; mode?: string; pid?: number; liveUpgradeCount?:number; restartRecommended?:boolean;
     release?: { installed?: string; running?: string; matches?: boolean; verified?: boolean } };
   config: ConfigView;
   database: {
-    schema: number; tasks: TaskSummary[]; issues: Issue[]; queue?: { states: { state: string; count: number }[] };
+    schema: number; tasks: TaskSummary[]; issues: Issue[]; queue?: { states: { state: string; count: number }[] }; usage?:{day:string;turns:number;limit:number};
     workstreams: { id: string; project: string | null; createdAt: number }[];
   };
   recoveryAvailable: boolean;

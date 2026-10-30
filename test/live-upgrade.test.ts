@@ -7,7 +7,7 @@ import { Store } from '../src/store.js';
 import { Engine } from '../src/engine.js';
 import { RuntimeError, type Runtime, type RunResult } from '../src/runtime.js';
 import { RuntimeHost, type HostedRuntime } from '../src/runtime-host.js';
-import { activeRuntimeId, assertLiveCompatible, loadLiveFactory, requestLiveUpgrade, watchLiveUpgrades } from '../src/live-upgrade.js';
+import { activeRuntimeId, assertLiveCompatible, confirmLiveTrial, loadLiveFactory, requestLiveUpgrade, watchLiveUpgrades } from '../src/live-upgrade.js';
 import { createRuntimeRelease, verifyRuntimeRelease } from '../src/release.js';
 import { atomicJson } from '../src/paths.js';
 import { initialConfig } from '../src/onboarding.js';
@@ -80,6 +80,16 @@ test('unsettled shutdown fails closed while continuing durable acceptance', asyn
   assert.equal(starts, 1); await assert.rejects(host.replace(factory, () => {}), /busy/);
 });
 
+test('a failure after pointer commit marks the host unavailable and retains arrivals',async t=>{
+ const {store}=fixture(t);const base=():HostedRuntime=>({accept:m=>store.enqueue(m),acceptCard:()=>({toast:{type:'info',content:''}}),start:()=>{},resume:()=>{},stop:async()=>{}});
+ const broken=():HostedRuntime=>({...base(),resume:()=>{throw Error('resume_failed');}});
+ const host=new RuntimeHost(base);host.start();let committed=false;
+ await assert.rejects(host.replace(broken,()=>{committed=true;}),/resume_failed/);
+ assert.equal(committed,true);assert.equal(host.available,false);
+ assert.equal(host.accept(input('retained-after-failure')),true);assert.equal(store.get('retained-after-failure')?.state,'queued');
+ await host.stop();
+});
+
 test('an active persistent worker is reattached without starting another model turn', async t => {
   const { dir, store } = fixture(t); let launches = 0, observations = 0, complete!: () => void;
   const result = new Promise<RunResult>(resolve => { complete = () => resolve({ text: 'finished', threadId: 't', turnId: 'u' }); });
@@ -106,6 +116,18 @@ test('an active persistent worker is reattached without starting another model t
   complete(); await until(() => store.get('active')?.state === 'replied');
   assert.equal(store.db.prepare('SELECT COUNT(*) n FROM task_runs').get()?.n, 1);
   await host.stop();
+});
+
+test('receiver switch requeues a claim that never created a runner reservation',async t=>{
+ const {dir,store}=fixture(t);let attempted=0,dispatched=0;
+ const runtime:Runtime={persistent:true,async run(r){attempted++;if(attempted===1)return new Promise((_resolve,reject)=>{
+  const stop=()=>reject(new RuntimeError('receiver_detached'));r.signal.addEventListener('abort',stop,{once:true});if(r.signal.aborted)stop();
+ });dispatched++;r.onThread('thread');r.onTurn('turn');return {text:'done',threadId:'thread',turnId:'turn'};}};
+ const make=()=>new Engine(store,runtime,{async send(_chat,_text,id){return id;}},{dataDir:dir,concurrency:1,codex:{bin:'codex',home:join(dir,'home'),sandbox:'read-only',timeoutMs:10000,dailyTurnLimit:1}});
+ const host=new RuntimeHost(make);host.start();host.accept(input('undispatched'));await until(()=>attempted===1);
+ await host.replace(make,()=>{});await until(()=>store.get('undispatched')?.state==='replied');
+ assert.equal(dispatched,1);assert.equal(store.db.prepare("SELECT COUNT(*) n FROM task_runs WHERE state='not_started'").get()?.n,1);
+ await host.stop();
 });
 
 test('deferred receipts survive a process restart and regain feedback without a second acceptance', async t => {
@@ -153,7 +175,7 @@ test('verified runtime updates preserve the receiver pin and recover the active 
   put(join(source, 'dist/src/live-runtime.js'), `export const liveRuntimeAbi=1,schemaVersion=${Number(store.db.prepare('PRAGMA user_version').get()?.user_version)};
     export function createLiveRuntime(o){return {accept:m=>o.store.enqueue(m),acceptCard:()=>({toast:{type:'info',content:''}}),start:()=>o.log('new_runtime'),resume:()=>{},stop:async()=>{}};}`);
   const hostRelease = createRuntimeRelease(source, join(dir, 'releases'));
-  put(join(source, 'dist/src/engine.js'), '// engine changed');
+  put(join(source, 'dist/src/presentation.js'), '// presentation changed');
   const target = createRuntimeRelease(source, join(dir, 'releases'));
   assertLiveCompatible(verifyRuntimeRelease(hostRelease.root), verifyRuntimeRelease(target.root));
   const logs: string[] = [], options = { store, config, sender: { async send() { return 'id'; } }, redact: (s: string) => s, log: (event: string) => { logs.push(event); }, onFatal: () => {} };
@@ -163,13 +185,25 @@ test('verified runtime updates preserve the receiver pin and recover the active 
   try {
     const receipt = await requestLiveUpgrade(config, hostRelease.id, hostRelease.id, target.id, 10_000);
     assert.equal(receipt.state, 'succeeded'); assert.equal(health.releaseId, target.id);
-    assert.equal(activeRuntimeId(dir, hostRelease.id), target.id);
+    assert.equal(activeRuntimeId(dir, hostRelease.id), hostRelease.id);
     assert.equal(logs.filter(x => x === 'new_runtime').length, 2);
     assert.equal(typeof await loadLiveFactory(hostRelease, target, options), 'function');
+    put(join(source, 'dist/src/engine.js'), '// incompatible durable state writer');
+    const incompatibleState=createRuntimeRelease(source,join(dir,'releases'));
+    await assert.rejects(loadLiveFactory(hostRelease,incompatibleState,options),/requires_receiver_restart/);
     put(join(source, 'dist/src/feishu.js'), '// incompatible receiver');
     const incompatible = createRuntimeRelease(source, join(dir, 'releases'));
     await assert.rejects(loadLiveFactory(hostRelease, incompatible, options), /requires_receiver_restart/);
-    assert.equal(activeRuntimeId(dir, hostRelease.id), target.id);
+    assert.equal(activeRuntimeId(dir, hostRelease.id), hostRelease.id);
     assert.equal(JSON.parse(readFileSync(join(dir, 'active-runtime.json'), 'utf8')).hostId, hostRelease.id);
+    await stopWatch();
+    const restarted=watchLiveUpgrades(config,hostRelease,hostRelease.id,host,options,()=>{});
+    try {await assert.rejects(requestLiveUpgrade(config,hostRelease.id,hostRelease.id,target.id,10_000),/live_upgrade_trial_interrupted/);}
+    finally {await restarted();}
+    assert.equal(logs.filter(x=>x==='new_runtime').length,2);
+    assert.equal(activeRuntimeId(dir,hostRelease.id),hostRelease.id);
+    atomicJson(join(dir,'active-runtime.json'),{format:1,hostId:hostRelease.id,id:target.id,trial:true,previous:hostRelease.id});
+    assert.equal(confirmLiveTrial(dir,hostRelease.id,target.id),true);
+    assert.equal(activeRuntimeId(dir,hostRelease.id),target.id);
   } finally { await stopWatch(); await host.stop(); }
 });

@@ -10,6 +10,7 @@ export class Feedback {
   private progressBusy = false;
   private reactionBusy = false;
   private finalizers = 0;
+  private readRetryAt = new Map<number,number>();
   constructor(private store: Store, private sender: Sender, private canAccess:(task:Task)=>boolean=()=>true) {}
   accepted(key: string): void {this.store.db.prepare('INSERT OR IGNORE INTO message_feedback(inboxKey,updatedAt) VALUES(?,?)').run(key,Date.now());}
   recover(): void {
@@ -63,11 +64,11 @@ export class Feedback {
       const last=this.store.db.prepare('SELECT * FROM progress_updates WHERE outboxId=? ORDER BY version DESC LIMIT 1').get(row.outputId);
       if(last&&['unknown','failed','sending'].includes(String(last.state))){
         if(last.state==='unknown'&&!last.checked&&this.sender.readCard){
-          this.store.db.prepare('UPDATE progress_updates SET checked=1 WHERE id=?').run(last.id);
-          try {const actual=await this.sender.readCard(String(row.platformId)); if(actual===last.content){
+          const updateId=Number(last.id),now=Date.now();if((this.readRetryAt.get(updateId)??0)>now)continue;
+          try {const actual=await this.sender.readCard(String(row.platformId));this.readRetryAt.delete(updateId);this.store.db.prepare('UPDATE progress_updates SET checked=1 WHERE id=?').run(last.id);if(actual===last.content){
             this.store.db.prepare("UPDATE progress_updates SET state='sent',error=NULL WHERE id=?").run(last.id);
             continue; // Recompute the current task state on the next pass.
-          }}catch{/* Remains visibly unconfirmed; never blindly replay. */}
+          }}catch{this.readRetryAt.set(updateId,now+30_000);continue; /* Only the read is retried; the uncertain patch is never replayed. */}
         }
         if(last.state!=='sending')this.retire(Number(row.outputId));
         continue;

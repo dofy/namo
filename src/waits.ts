@@ -9,6 +9,7 @@ export interface TaskWait extends WaitResult {
   settledAt?: number; replyInboxKey?: string; replyVersion?: number;
 }
 export class WaitInputError extends Error {}
+export const HUMAN_WAIT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 export function linkedExternalWait(store: Store, taskWaitId: string): string | undefined {
   const value = store.db.prepare('SELECT externalWaitId FROM external_wait_links WHERE taskWaitId=?').get(taskWaitId)?.externalWaitId;
@@ -84,10 +85,11 @@ export class Waits {
       const external = linkedExternalWait(this.store, w.id);
       this.store.addOutput(task.inboxKey, `wait:${w.id}`, external
         ? `${w.question}\n\n系统会只读核对固定的 PR HEAD；普通回复、引用、按钮或 /resume 都不会跳过条件。等待期间不会继续执行；/cancel ${task.id} 可停止任务。`
-        : `${w.question}${w.choices ? '\n选项：' + w.choices.join(' / ') : ''}\n\n请引用这条消息回复，或发送：\n/resume ${w.id} 你的回答\n等待期间不会继续执行；/cancel ${task.id} 可停止任务。`);
+        : `${w.question}${w.choices ? '\n选项：' + w.choices.join(' / ') : ''}\n\n请引用这条消息回复，或发送：\n/resume ${w.id} 你的回答\n等待最长 24 小时，超时后任务结束；/cancel ${task.id} 可停止任务。`);
     });
   }
   answer(w: TaskWait, m: Incoming, reply: string): void {
+    this.expire();
     this.store.transaction(() => {
       const current = this.get(w.id);
       const t = this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(w.taskId) as unknown as Task | undefined;
@@ -101,6 +103,26 @@ export class Waits {
       if (t.inputVersion >= 100) throw new WaitInputError('本任务已达到输入版本上限，请先取消，再明确发起后续任务。');
       if (this.store.db.prepare('SELECT state FROM task_runs WHERE id=?').get(w.runId)?.state !== 'waiting') throw new WaitInputError('上一轮执行尚未确认结束，未恢复任务。');
       this.settle(current, t, m.key);
+    });
+  }
+  expire(now=Date.now()):void {
+    this.store.transaction(()=>{
+      // Existing waits get a full grace period after this feature is first
+      // enabled, rather than expiring immediately after an upgrade.
+      this.store.db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES('human-wait-expiry-enabled-at',?)").run(String(now));
+      const enabledAt=Number(this.store.db.prepare("SELECT value FROM settings WHERE key='human-wait-expiry-enabled-at'").get()?.value);
+      if(!Number.isSafeInteger(enabledAt)||enabledAt>now-HUMAN_WAIT_TIMEOUT_MS)return;
+      const rows=this.store.db.prepare(`SELECT w.id,w.taskId,t.inboxKey FROM task_waits w JOIN tasks t ON t.id=w.taskId
+        WHERE w.state='open' AND t.state='waiting' AND w.createdAt<=?
+        AND NOT EXISTS(SELECT 1 FROM external_wait_links e WHERE e.taskWaitId=w.id)`).all(now-HUMAN_WAIT_TIMEOUT_MS);
+      for(const row of rows){
+        const id=String(row.id),taskId=String(row.taskId),key=String(row.inboxKey);
+        this.store.db.prepare("UPDATE task_waits SET state='expired',settledAt=? WHERE id=? AND state='open'").run(now,id);
+        this.store.db.prepare("UPDATE tasks SET state='failed',error='wait_expired',finishedAt=? WHERE id=? AND state='waiting'").run(now,taskId);
+        this.store.db.prepare("UPDATE inbox SET state='awaiting_reply',error='wait_expired',finishedAt=? WHERE key=? AND state='waiting'").run(now,key);
+        this.suppress(id);
+        this.store.addOutput(key,'result','等待回复已超过 24 小时，任务已结束，未自动继续。此前执行过的操作不会自动撤销；如需继续，请重新发起任务。');
+      }
     });
   }
   close(taskId: string, cancelled: boolean): void {

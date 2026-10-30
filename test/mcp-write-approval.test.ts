@@ -32,9 +32,26 @@ test('rejection, cancellation and permission changes prevent dispatch',async t=>
  const id=f.approval();f.command(`/mcp-approve ${id} --confirm`);valid=false;
  await assert.rejects(waiting,/mcp_approval_changed/);assert.match(f.command(`/mcp-status ${id}`),/已取消/);
 });
+test('an approved operation cannot dispatch after the owning turn is cancelled',async t=>{
+ const f=fixture(t),controller=new AbortController();
+ const waiting=awaitMcpApproval(f.store,f.task,'remote','https://example.com/mcp','remove',{},'scope',controller.signal,()=>true);
+ const id=f.approval();f.command(`/mcp-approve ${id} --confirm`);controller.abort('turn_timeout');
+ await assert.rejects(waiting,/mcp_approval_expired/);
+ assert.match(f.command(`/mcp-status ${id}`),/已取消/);
+});
 test('interrupted execution is shown as unknown and is never approved again',async t=>{
  const f=fixture(t),waiting=awaitMcpApproval(f.store,f.task,'remote','https://example.com/mcp','update',{},'scope',new AbortController().signal,()=>true);
  const id=f.approval();f.command(`/mcp-approve ${id} --confirm`);await waiting;
  f.store.db.prepare("UPDATE tasks SET state='failed' WHERE id=?").run(f.task.id);
  assert.match(f.command(`/mcp-status ${id}`),/结果不明/);assert.match(f.command(`/mcp-approve ${id} --confirm`),/不能重复/);
+});
+test('a repeated operation warns when a previous dispatch has an unknown outcome',async t=>{
+ const f=fixture(t),signal=new AbortController().signal;
+ const first=awaitMcpApproval(f.store,f.task,'remote','https://example.com/mcp','update',{a:1,b:2},'scope',signal,()=>true);
+ const id=f.approval();f.command(`/mcp-approve ${id} --confirm`);(await first)('unknown');
+ const second=awaitMcpApproval(f.store,f.task,'remote','https://example.com/mcp','update',{b:2,a:1},'scope',signal,()=>true);
+ const rows=f.store.db.prepare("SELECT key FROM settings WHERE key LIKE 'mcp-approval:%'").all();
+ const next=rows.map(r=>String(r.key).slice('mcp-approval:'.length)).find(x=>x!==id)!;
+ const notice=String(f.store.db.prepare('SELECT content FROM outbox WHERE kind=?').get(`mcp-approval:${next}`)?.content);
+ assert.match(notice,/此前相同操作的结果不明/);f.command(`/mcp-reject ${next}`);await assert.rejects(second,/mcp_approval_rejected/);
 });

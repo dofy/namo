@@ -32,6 +32,8 @@ export function authorizationRevision(c: Config): string {
     users: c.feishu.allowedUserIds, chats: c.feishu.allowedChatIds,
     projects: c.codex.projects, projectAccess: c.codex.projectAccess,
     sandbox: c.codex.sandbox, network: c.codex.networkAccess, commits: c.codex.allowLocalCommits,
-    read: c.codex.readPaths, deny: c.codex.denyPaths, github, mcpConnections:c.mcpConnections,
+    // MCP has its own call and delivery authorization checks. Including all
+    // connections here aborts unrelated work when a disabled connection changes.
+    read: c.codex.readPaths, deny: c.codex.denyPaths, github,
   }));
 }

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeEvent, type FeishuEvent } from '../src/feishu.js';
 import { parseConfig, validateFeishu, type Config } from '../src/config.js';
-import { audienceAllows, executionPolicy, projectAllowed } from '../src/access.js';
+import { audienceAllows, executionPolicy, projectAllowed, taskAuthorizationValid } from '../src/access.js';
 import { ScopedGitHubAdapter, parseGitHubAccessConfig } from '../src/github-access.js';
 import { Store, type Incoming } from '../src/store.js';
 import { Tasks, policyHash } from '../src/tasks.js';
@@ -18,6 +18,7 @@ import { Memories } from '../src/memory.js';
 import { memoryProjects } from '../src/memory-access.js';
 import { memoryCommand } from '../src/memory-commands.js';
 import { buildTaskRunPrompt } from '../src/task-context.js';
+import { setUserModel, userModel } from '../src/model-preferences.js';
 
 const f:Config['feishu']={appId:'app',appSecret:'fake',domain:'feishu',allowedUserIds:['legacy'],allowedChatIds:[],requireMention:true,access:{mode:'organization',tenantKey:'tenant'}};
 const event=(user='alice',tenant='tenant'):FeishuEvent=>({sender:{sender_type:'user',tenant_key:tenant,sender_id:{open_id:user}},message:{message_id:`message-${user}`,chat_id:'group',chat_type:'group',message_type:'text',content:'{"text":"@bot review PR"}',mentions:[{key:'@bot',id:{open_id:'bot'}}]}});
@@ -27,12 +28,27 @@ const github={source:'gh' as const,localGh:{executable:'/usr/bin/gh',configDir:'
 const target={owner:'org',repo:'private',pullNumber:1,headSha:'a'.repeat(40)};
 function fixture(t:any){const { dir, store } = storeFixture(t, 'namo-org-');return{dir,store};}
 
+test('task reauthorization ignores unrelated grants but rejects revocation and changes to its execution policy',t=>{
+ const {dir}=fixture(t),c=parseConfig({dataDir:dir,feishu:f,codex:{projects:{app:dir},defaultProject:'app',projectAccess:{app:{organization:false,userIds:[],chatIds:['group'],permission:'read-only'}}}},join(dir,'config.json'));
+ const cwd=c.codex.projects!.app;const other=structuredClone(c);other.codex.projects!.other=cwd;other.codex.projectAccess!.other={organization:true,userIds:[],chatIds:[],permission:'read-only'};
+ assert.equal(taskAuthorizationValid(c,other,member(),'app',cwd),true);
+ const revoked=structuredClone(other);revoked.codex.projectAccess!.app.chatIds=[];
+ assert.equal(taskAuthorizationValid(c,revoked,member(),'app',cwd),false);
+ const changed=structuredClone(other);changed.codex.projectAccess!.app.permission='workspace-write';
+ assert.equal(taskAuthorizationValid(c,changed,member(),'app',cwd),true);
+ assert.equal(taskAuthorizationValid(changed,c,member(),'app',cwd),false);
+ const tenant=structuredClone(other);tenant.feishu.access!.tenantKey='other';
+ assert.equal(taskAuthorizationValid(c,tenant,member(),'app',cwd),false);
+});
+
 test('organization admits unpaired members, rejects outsiders/missing tenant/bots and still requires group mentions',()=>{
   assert.ok(member());assert.equal(member().envelope?.tenantKey,'tenant');
   assert.equal(normalizeEvent(event('x','other'),f,'bot'),undefined);
   const missing=event();delete missing.sender!.tenant_key;assert.equal(normalizeEvent(missing,f,'bot'),undefined);
   const bot=event();bot.sender!.sender_type='app';assert.equal(normalizeEvent(bot,f,'bot'),undefined);
   const silent=event();silent.message!.mentions=[];assert.equal(normalizeEvent(silent,f,'bot'),undefined);
+  const forwarded=event();forwarded.message!.mentions=[];forwarded.message!.message_type='merge_forward';forwarded.message!.content='{}';
+  const material=normalizeEvent(forwarded,f,'bot');assert.equal(material?.envelope?.kind,'material');assert.equal(material?.envelope?.materials[0]?.type,'merge_forward');
   assert.equal(normalizeEvent(event(),{...f,allowedChatIds:['other']},'bot'),undefined);
   assert.equal(normalizeEvent(event(),{...f,access:undefined},'bot'),undefined);
   validateFeishu(parseConfig({feishu:{...f,allowedUserIds:[]}},'/tmp/namo-test/config.json'));
@@ -68,6 +84,18 @@ test('two organization members in one group get separate workspaces and model se
   const rows=store.db.prepare('SELECT ownerId,cwd,workstreamId FROM tasks ORDER BY ownerId').all();
   assert.equal(rows.length,2);assert.notEqual(rows[0].cwd,rows[1].cwd);assert.notEqual(rows[0].workstreamId,rows[1].workstreamId);
   assert.equal(new Tasks(store).owned(String(store.db.prepare('SELECT id FROM tasks WHERE ownerId=?').get('alice')!.id),member('bob')),undefined);
+});
+test('organization model allowlist rejects arbitrary selections and group tasks use the service default',t=>{
+ const {dir,store}=fixture(t),file=join(dir,'config.json');
+ const raw={dataDir:dir,feishu:f,codex:{model:'service-model',allowedModels:['allowed-model']}};writeFileSync(file,JSON.stringify(raw));
+ const c=parseConfig(raw,file),engine=new Engine(store,{async run(){throw Error('not started');}},{async send(){return 'id';}},c);
+ const identity={channel:'feishu' as const,appId:'app',userId:'alice'};setUserModel(store,identity,'old-model');
+ const dm={...member(),key:'model-denied',messageId:'model-denied',chatId:'dm',chatKey:'app:dm',text:'/model arbitrary',envelope:{...member().envelope!,chatType:'p2p' as const,scopeKey:'app:dm'}};
+ engine.accept(dm);assert.equal(userModel(store,identity),'old-model');
+ assert.match(String(store.db.prepare("SELECT content FROM outbox WHERE inboxKey='model-denied' AND kind='result'").get()?.content),/未在服务允许列表/);
+ engine.accept({...dm,key:'model-allowed',messageId:'model-allowed',text:'/model allowed-model'});assert.equal(userModel(store,identity),'allowed-model');
+ const group=member();engine.accept(group);const task=new Tasks(store).get(store.get(group.key)!.taskId!)!;
+ assert.equal(new Tasks(store).model(task.id),'service-model');
 });
 test('revoked repository grants block cached review delivery',t=>{
   const{dir,store}=fixture(t);store.enqueue(member());const task=new Tasks(store).create(store.get(member().key)!,{cwd:dir,policyHash:'test'});

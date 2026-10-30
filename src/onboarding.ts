@@ -26,8 +26,8 @@ const defaults: InitDeps = { probe: probeAgent, login: loginAgent, connection: c
   install: async c => { await serviceAction('install', c); return { ready: await waitForService(c) }; } };
 export interface InitResult { configured: boolean; verified: boolean; serviceInstalled: boolean; serviceReady: boolean; }
 export function initialConfig(file: string): any {
-  return { version: 1, agent: 'codex', dataDir: join(dirname(file), 'data'), concurrency: 1,
-    feishu: { appId: '', appSecret: '', appSecretEnv: 'FEISHU_APP_SECRET', allowedUserIds: [], allowedChatIds: [], requireMention: true, domain: 'feishu' },
+  return { version: 1, agent: 'codex', dataDir: join(dirname(file), 'data'), concurrency: 3,
+    feishu: { appId: '', appSecret: '', appSecretEnv: 'FEISHU_APP_SECRET', allowedUserIds: [], allowedChatIds: [], requireMention: true, cards:true, domain: 'feishu' },
     codex: { bin: 'codex', home: join(dirname(file), 'data', 'codex-home'), sandbox: 'read-only', timeoutMs: 600_000,
       projects: {}, networkAccess: false, readPaths: toolchainPaths(), denyPaths: [], allowLocalCommits: false } };
 }

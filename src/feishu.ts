@@ -25,7 +25,9 @@ export function normalizeEvent(event: FeishuEvent, config: Config['feishu'], bot
   if (!admitted(config,senderId,m.chat_id,event.sender?.tenant_key)) return;
   if (config.access && !['p2p','group'].includes(m.chat_type??'')) return;
   const mentioned = m.mentions?.filter(x => x.id?.open_id === botId) ?? [];
-  if (m.chat_type !== 'p2p' && config.requireMention && !mentioned.length) return;
+  // A standalone merged-forward cannot carry an @ mention. Keep it as
+  // sender-scoped material; it never starts a model turn on its own.
+  if (m.chat_type !== 'p2p' && config.requireMention && !mentioned.length && m.message_type!=='merge_forward') return;
   let text = '';
   const materials: Material[] = [];
   const limitations: string[] = [];

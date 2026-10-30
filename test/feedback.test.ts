@@ -125,6 +125,15 @@ test('an uncertain patch is reconciled once and never blindly retried after reco
   assert.equal(f.store.db.prepare('SELECT state,checked FROM progress_updates').get()?.checked,1);
 });
 
+test('a failed readback can be retried without resending an uncertain progress patch',async t=>{
+ const f=fixture(t),run=f.tasks.start(f.task);recordActivity(f.store,run,'command');sentProgress(f);let updates=0,reads=0;
+ const sender={async send(){return 'unused';},async updateCard(){updates++;throw Error('timeout');},async readCard(){reads++;if(reads===1)throw Error('read failed');return String(f.store.db.prepare('SELECT content FROM progress_updates').get()?.content);}};
+ const feedback=new Feedback(f.store,sender);await feedback.tick({cadenceMs:0});await feedback.tick({cadenceMs:0});
+ assert.equal(f.store.db.prepare('SELECT checked FROM progress_updates').get()?.checked,0);assert.equal(updates,1);
+ const restarted=new Feedback(f.store,sender);await restarted.tick({cadenceMs:0});
+ assert.equal(f.store.db.prepare('SELECT state FROM progress_updates').get()?.state,'sent');assert.equal(reads,2);assert.equal(updates,1);
+});
+
 test('runner receipts and stale heartbeats never claim normal execution after it has ended or become uncertain',t=>{
   const f=fixture(t),run=f.tasks.start(f.task);recordActivity(f.store,run,'command');
   f.store.db.prepare(`INSERT INTO runner_jobs(runId,owner,state,createdAt,updatedAt,configRevision,prompt)

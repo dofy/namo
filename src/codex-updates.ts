@@ -78,7 +78,7 @@ export class CodexUpdates {
       state:s.state,updateAvailable:!!s.latestVersion&&newerVersion(s.latestVersion,currentVersion),managed:!!s.active?.directory,
       previousVersion:s.previous?.version??null,error:s.error};
   }
-  async action(action: string, enabled?: boolean): Promise<CodexUpdateStatus> {
+  async action(action: string, enabled?: boolean, automaticAttempt=false): Promise<CodexUpdateStatus> {
     if(this.closed)throw Error('update_cancelled');
     this.unchanged(this.revision);
     if (!['check','upgrade','automatic','rollback'].includes(action)) throw Error('update_action_invalid');
@@ -88,18 +88,21 @@ export class CodexUpdates {
     let state: CodexInstallation;
     try {
       state=this.read();
-      if (action==='automatic') { this.write({...state,automatic:enabled!,...(enabled?{attemptedAt:null}: {})}); release(); return this.status(); }
+      if (action==='automatic') { this.write({...state,automatic:enabled!,...(enabled?{attemptedAt:null,failureCount:0}: {})}); release(); return this.status(); }
       if (action==='rollback'&&!state.previous) throw Error('update_no_previous');
       this.unchanged(this.revision);
       const revision=this.revision;
+      const priorError=automaticAttempt?state.error:null,priorFailures=automaticAttempt?(state.failureCount??0):0;
       state={...state,state:action==='check'?'checking':'installing',ownerPid:process.pid,error:null,attemptedAt:this.deps.now(),
+        pendingAction:null, ...(automaticAttempt?{}:{failureCount:0}),
         ...(action==='rollback'?{automatic:false}:{})};
       this.write(state);
       this.controller=new AbortController();
       this.running=this.perform(action,state,revision).catch(error=>{
         // Never publish child output, fetch errors, paths or credentials.
         const code=error instanceof Error && /^[a-z_]{1,80}$/.test(error.message)?error.message:'update_failed';
-        this.write({...this.read(),state:'failed',ownerPid:null,error:code});
+        const previous=this.read(),count=priorError===code?priorFailures+1:1;
+        this.write({...previous,state:'failed',ownerPid:null,error:code,failureCount:Math.min(count,5)});
       }).finally(()=>{release();this.running=undefined;this.controller=undefined;});
       void this.running.catch(()=>{});
       // A status read may execute --version; it must not keep the operation lock on failure.
@@ -124,19 +127,29 @@ export class CodexUpdates {
       await this.deps.probe({...c,bin},this.controller?.signal);
       this.unchanged(revision);
       const switched=whileCodexIdle(this.config,()=>this.write({...state,active:previous.directory?previous:null,
-        previous:state.active,state:'idle',ownerPid:null,error:null,automatic:false}));
-      if(switched.busy)this.write({...state,state:'deferred',ownerPid:null});
+        previous:state.active,state:'idle',ownerPid:null,error:null,automatic:false,failureCount:0}));
+      if(switched.busy)this.write({...state,state:'deferred',ownerPid:null,pendingAction:'rollback'});
       return;
     }
     const latest=await this.deps.latest({signal:this.controller?.signal});
     this.unchanged(revision);
     state={...state,latestVersion:latest.version,checkedAt:this.deps.now()};
     this.write(state);
-    if (action==='check'||!newerVersion(latest.version,current)) { this.write({...state,state:'idle',ownerPid:null}); return; }
-    if (whileCodexIdle(this.config,()=>{}).busy) { this.write({...state,state:'deferred',ownerPid:null}); return; }
+    if (action==='check'||!newerVersion(latest.version,current)) { this.write({...state,state:'idle',ownerPid:null,failureCount:0,error:null}); return; }
+    if (whileCodexIdle(this.config,()=>{}).busy) { this.write({...state,state:'deferred',ownerPid:null,pendingAction:'upgrade'}); return; }
+    const candidate=state.candidate;
+    if(candidate && candidate.version===latest.version && candidate.target===latest.target && candidate.sha256===latest.sha256 && candidate.configRevision===revision){
+      const bin=installedBinary(c.home,candidate);
+      if(await this.deps.version(bin,c.home)!==candidate.version)throw Error('update_candidate_changed');
+      await this.deps.probe({...c,bin},this.controller?.signal);this.unchanged(revision);
+      const switched=whileCodexIdle(this.config,()=>this.write({...state,active:{version:candidate.version,directory:candidate.directory},candidate:null,
+        previous:state.active??(current?{version:current,directory:null}:null),state:'idle',ownerPid:null,error:null,failureCount:0}));
+      if(switched.busy)this.write({...state,state:'deferred',ownerPid:null,pendingAction:'upgrade'});
+      return;
+    }
     const parent=join(installationRoot(c.home),'releases'); mkdirSync(parent,{recursive:true,mode:0o700});
     const destination=join(parent,`${latest.version}-${latest.target}-${randomUUID()}`);
-    let activated=false;
+    let activated=false,retained=false;
     try {
       const bin=await this.deps.install(latest,destination,{signal:this.controller?.signal});
       this.unchanged(revision);
@@ -145,25 +158,27 @@ export class CodexUpdates {
       this.unchanged(revision);
       const active={version:latest.version,directory:basename(destination)};
       const switched=whileCodexIdle(this.config,()=>{
-        this.write({...state,active,previous:state.active??(current?{version:current,directory:null}:null),state:'idle',ownerPid:null,error:null});
+        // Retain the directory even if an atomic state write reports an
+        // ambiguous failure after rename; the active pointer may reference it.
         activated=true;
+        this.write({...state,active,candidate:null,previous:state.active??(current?{version:current,directory:null}:null),state:'idle',ownerPid:null,error:null,failureCount:0});
       });
-      if(switched.busy)this.write({...state,state:'deferred',ownerPid:null});
+      if(switched.busy){retained=true;this.write({...state,state:'deferred',ownerPid:null,pendingAction:'upgrade',candidate:{...active,target:latest.target,sha256:latest.sha256,configRevision:revision}});}
     } finally {
       // Only this operation's unpublished directory can be removed; old selected versions are retained.
-      if(!activated)rmSync(destination,{recursive:true,force:true});
+      if(!activated&&!retained)rmSync(destination,{recursive:true,force:true});
     }
   }
   async settled(): Promise<void> { await this.running; }
   async close(): Promise<void> { this.closed=true;this.controller?.abort();await this.running; }
   async tick(): Promise<void> {
     if(this.running)return;
-    const s=this.read(); if(!s.automatic)return;
+    const s=this.read(); if(!s.automatic && !(s.state==='deferred' && s.pendingAction))return;
     const now=this.deps.now();
     if(s.state==='deferred') { if(whileCodexIdle(this.config,()=>{}).busy)return; }
-    else if(s.state==='failed') { if(s.attemptedAt && now-s.attemptedAt<RETRY)return; }
+    else if(s.state==='failed') { if((s.failureCount??0)>=5)return; if(s.attemptedAt && now-s.attemptedAt<RETRY*2**Math.max(0,(s.failureCount??1)-1))return; }
     else if(s.attemptedAt!==null && s.checkedAt && now-s.checkedAt<DAY)return;
-    try { await this.action('upgrade'); } catch(error) { if(!(error instanceof Error)||error.message!=='update_busy')throw error; }
+    try { await this.action(s.state==='deferred' && s.pendingAction ? s.pendingAction : 'upgrade',undefined,true); } catch(error) { if(!(error instanceof Error)||error.message!=='update_busy')throw error; }
   }
 }
 

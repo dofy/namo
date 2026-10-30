@@ -1,12 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store, type Incoming } from '../src/store.js';
 import { Engine } from '../src/engine.js';
 import { Schedules } from '../src/schedules.js';
 import { waitFor } from './helpers.js';
+import { Tasks } from '../src/tasks.js';
+import { loadConfig } from '../src/config.js';
 
 function message(key:string,text:string,senderId='user'):Incoming {return {key,messageId:key,chatKey:'chat',chatId:'chat',senderId,text,envelope:{version:1,type:'text',kind:'instruction',chatType:'p2p',scopeKey:'chat',materials:[],limitations:[]}};}
 
@@ -19,6 +21,7 @@ test('schedules are owned, scoped, durable and missed occurrences are coalesced'
  const first=Date.parse('2030-01-01T01:00Z'); let count=0;
  schedules.due(first+3*86400000,()=>{count++;}); schedules.due(first+3*86400000,()=>{count++;});assert.equal(count,1);
  assert.equal(store.db.prepare('SELECT nextAt FROM schedules WHERE id=?').get(id)?.nextAt,first+4*86400000);
+ assert.match(schedules.command(message('list','/schedule list'),()=>({}),now)!,/2030-01-05T09:00:00\.000\+08:00/);
  assert.match(schedules.command(message('pause',`/schedule pause ${id}`),()=>({}),now)!,/暂停/);
  schedules.due(first+5*86400000,()=>{count++;});assert.equal(count,1);
  assert.match(schedules.command(message('resume',`/schedule resume ${id}`),()=>({}),first+5*86400000)!,/恢复/);
@@ -26,8 +29,8 @@ test('schedules are owned, scoped, durable and missed occurrences are coalesced'
 });
 
 test('due reminders and tasks use durable outbox and ordinary task engine',async t=>{
- const dir=mkdtempSync(join(tmpdir(),'namo-schedule-')),store=new Store(join(dir,'db'));let calls=0;const sent:string[]=[];
- const engine=new Engine(store,{async run(){calls++;return {text:'task done',threadId:'t',turnId:'r'};}},{async send(_c,text,uuid,route){assert.equal(route,undefined);sent.push(text);return uuid;}},{dataDir:dir,concurrency:1,feishu:{allowedUserIds:['user'],allowedChatIds:[],progressUpdates:false,reactions:false}});
+ const dir=mkdtempSync(join(tmpdir(),'namo-schedule-')),store=new Store(join(dir,'db'));let calls=0,prompt='';const sent:string[]=[];
+ const engine=new Engine(store,{async run(request){calls++;prompt=request.prompt;return {text:'task done',threadId:'t',turnId:'r'};}},{async send(_c,text,uuid,route){assert.equal(route,undefined);sent.push(text);return uuid;}},{dataDir:dir,concurrency:1,feishu:{allowedUserIds:['user'],allowedChatIds:[],progressUpdates:false,reactions:false}});
  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
  for(const [key,kind] of [['a','reminder'],['b','task']]){
   const m=message(key,`/schedule add ${kind} once 2030-01-01T09:00+08:00 hello ${kind}`);store.enqueue(m);assert.match(new Schedules(store).command(m,()=>({}),Date.parse('2029-01-01'))!,/已创建/);
@@ -38,7 +41,22 @@ test('due reminders and tasks use durable outbox and ordinary task engine',async
  store.db.prepare("UPDATE schedules SET nextAt=? WHERE kind='reminder'").run(Date.now()-1);
  store.db.prepare("UPDATE inbox SET state='replied' WHERE key IN ('a','b')").run();
  engine.start();await waitFor(()=>sent.includes('task done')&&sent.some(x=>x.includes('定时提醒')),5000);
- assert.equal(calls,1);assert.equal(store.db.prepare("SELECT COUNT(*) n FROM schedules WHERE state='completed'").get()?.n,2);
+ assert.equal(calls,1);assert.match(prompt,/No person is present/);assert.equal(store.db.prepare("SELECT COUNT(*) n FROM schedules WHERE state='completed'").get()?.n,2);
+});
+
+test('schedule tasks keep their own workstream and do not consume a user conversation or materials',t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-schedule-')),store=new Store(join(dir,'db'));t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true});});
+ const source=message('create','/schedule add task daily 2030-01-01T09:00+08:00 scheduled');store.enqueue(source);
+ const reply=new Schedules(store).command(source,()=>({}),Date.parse('2029-01-01'))!,id=/S-[A-F0-9]{12}/.exec(reply)![0];
+ const tasks=new Tasks(store),project={cwd:dir,policyHash:'test'},user=message('user','ordinary');store.enqueue(user);
+ const ordinary=tasks.create(store.get('user')!,project);
+ const material=message('material','staged');store.enqueue(material);tasks.material(store.get('material')!,project);
+ const run=(at:number)=>{const key=`schedule:${id}:${at}`,m=message(key,'scheduled');store.enqueue(m);return tasks.create(store.get(key)!,project);};
+ const first=run(1),second=run(2);
+ assert.notEqual(first.workstreamId,ordinary.workstreamId);assert.equal(first.workstreamId,second.workstreamId);
+ assert.equal(tasks.binding(store.get('user')!)?.id,ordinary.workstreamId);
+ assert.equal(store.get('material')?.state,'material');
+ assert.doesNotMatch(tasks.prompt(first),/staged/);
 });
 
 test('version 13 upgrades in place and keeps existing rows', t=>{
@@ -73,10 +91,62 @@ test('trigger and schedule cursor roll back together on persistence failure',t=>
  let calls=0;s.due(due,()=>{calls++;});assert.equal(calls,1);
 });
 
+test('deferred dispatch retains the occurrence until it can be accepted',t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-schedule-')),store=new Store(join(dir,'db'));t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true});});
+ const source=message('origin','/schedule add reminder once 2030-01-01T09:00+08:00 hello');store.enqueue(source);
+ const schedules=new Schedules(store);schedules.command(source,()=>({}),Date.parse('2029-01-01'));
+ const due=Date.parse('2030-01-01T01:00Z');schedules.due(due,()=>false);
+ assert.equal(store.db.prepare('SELECT state FROM schedules').get()?.state,'active');
+ assert.equal(store.db.prepare('SELECT nextAt FROM schedules').get()?.nextAt,due);
+ let count=0;schedules.due(due,()=>{count++;});assert.equal(count,1);
+ assert.equal(store.db.prepare('SELECT state FROM schedules').get()?.state,'completed');
+});
+
 test('revoked user cannot trigger a saved reminder after restart',async t=>{
  const dir=mkdtempSync(join(tmpdir(),'namo-schedule-')),store=new Store(join(dir,'db'));const source=message('origin','/schedule add reminder daily 2030-01-01T09:00+08:00 hello');store.enqueue(source);
  new Schedules(store).command(source,()=>({}),Date.parse('2029-01-01'));store.db.prepare("UPDATE schedules SET nextAt=?").run(Date.now()-1);store.db.prepare("UPDATE inbox SET state='replied'").run();
  let sent=0;const engine=new Engine(store,{async run(){throw new Error('unexpected');}},{async send(){sent++;return 'id';}},{dataDir:dir,concurrency:1,feishu:{allowedUserIds:[],allowedChatIds:[]}});
  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});engine.start();
  await waitFor(()=>store.db.prepare('SELECT state FROM schedules').get()?.state==='paused',3000);assert.equal(sent,0);
+});
+
+test('a schedule paused by changed binding records a reason and notifies its owner',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-schedule-')),store=new Store(join(dir,'db')),sent:string[]=[];
+ const source=message('origin','/schedule add task once 2030-01-01T09:00+08:00 work');store.enqueue(source);
+ const reply=new Schedules(store).command(source,()=>({cwd:dir,policyHash:'old'}),Date.parse('2029-01-01'))!,id=/S-[A-F0-9]{12}/.exec(reply)![0];
+ store.db.prepare('UPDATE schedules SET nextAt=? WHERE id=?').run(Date.now()-1,id);store.db.prepare("UPDATE inbox SET state='replied' WHERE key='origin'").run();
+ const engine=new Engine(store,{async run(){throw Error('unexpected');}},{async send(_chat,text,uuid){sent.push(text);return uuid;}},{dataDir:dir,concurrency:1,feishu:{allowedUserIds:['user'],allowedChatIds:[],progressUpdates:false,reactions:false}});
+ t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});engine.start();
+ await waitFor(()=>sent.some(text=>text.includes('已暂停')),3000);
+ assert.match(new Schedules(store).command(message('list','/schedule list'),()=>({}))!,/暂停原因：项目或权限绑定已变化/);
+ assert.match(new Schedules(store).command(message('wrong',`/schedule resume ${id}`),()=>({cwd:'/different',policyHash:'new'}))!,/切换回/);
+ assert.equal(store.db.prepare('SELECT state FROM schedules WHERE id=?').get(id)?.state,'paused');
+ assert.match(new Schedules(store).command(message('resume',`/schedule resume ${id}`),()=>({cwd:dir,policyHash:'new'}))!,/重新绑定/);
+ assert.ok(Number(store.db.prepare('SELECT nextAt FROM schedules WHERE id=?').get(id)?.nextAt)>Date.now()-100);
+});
+
+test('overlapping schedule triggers are counted for the owner',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-schedule-')),store=new Store(join(dir,'db'));
+ const source=message('origin','/schedule add reminder daily 2030-01-01T09:00+08:00 hello');store.enqueue(source);
+ const reply=new Schedules(store).command(source,()=>({}),Date.parse('2029-01-01'))!,id=/S-[A-F0-9]{12}/.exec(reply)![0];
+ store.db.prepare('UPDATE schedules SET nextAt=? WHERE id=?').run(Date.now()-1,id);store.db.prepare("UPDATE inbox SET state='replied' WHERE key='origin'").run();
+ const key=`schedule:${id}:1`;store.enqueue(message(key,'pending'));store.db.prepare("UPDATE inbox SET state='waiting' WHERE key=?").run(key);
+ const engine=new Engine(store,{async run(){throw Error('unexpected');}},{async send(_c,_t,uuid){return uuid;}},{dataDir:dir,concurrency:1,feishu:{allowedUserIds:['user'],allowedChatIds:[],progressUpdates:false,reactions:false}});
+ t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});engine.start();
+ await waitFor(()=>!!store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`schedule-status:${id}`),3000);
+ assert.match(new Schedules(store).command(message('list','/schedule list'),()=>({}))!,/跳过 1 次触发/);
+});
+
+test('an unrelated saved authorization change does not pause an authorized scheduled task',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-schedule-')),file=join(dir,'config.json');
+ const raw={dataDir:dir,feishu:{appId:'app',appSecret:'fixture',allowedUserIds:['user']},codex:{}};writeFileSync(file,JSON.stringify(raw));
+ const config=loadConfig(file),store=new Store(join(dir,'db'));let calls=0;
+ const engine=new Engine(store,{async run(){calls++;return {text:'done',threadId:'t',turnId:'r'};}},{async send(_c,_t,id){return id;}},config);
+ t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+ const source=message('create','/schedule add task once 2030-01-01T09:00+08:00 work');store.enqueue(source);
+ const project=(engine as unknown as {project(m:Incoming):unknown}).project(source);
+ new Schedules(store).command(source,()=>project,Date.parse('2029-01-01'));
+ store.db.prepare('UPDATE schedules SET nextAt=?').run(Date.now()-1);store.db.prepare("UPDATE inbox SET state='replied' WHERE key='create'").run();
+ raw.feishu.allowedUserIds.push('other');writeFileSync(file,JSON.stringify(raw));engine.start();
+ await waitFor(()=>calls===1,4000);assert.equal(store.db.prepare('SELECT state FROM schedules').get()?.state,'completed');
 });

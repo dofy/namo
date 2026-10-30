@@ -82,7 +82,12 @@ export class Tasks {
   create(m: Inbox, project: ProjectBinding, reference?: Task, selection?: AgentSelection, model?: string | null): Task {
     selection ??= project.agentSelection;
     return this.store.transaction(() => {
-      let w = reference ? this.store.db.prepare('SELECT * FROM workstreams WHERE id=?').get(reference.workstreamId) as unknown as Workstream : this.binding(m);
+      const scheduleId=/^schedule:(S-[A-F0-9]{12}):\d+$/.exec(m.key)?.[1];
+      const scheduled=scheduleId && this.store.db.prepare('SELECT 1 FROM schedules WHERE id=? AND ownerId=? AND chatKey=? AND scopeKey=?').get(scheduleId,m.senderId,m.chatKey,scopeOf(m));
+      const scheduleKey=scheduled?`schedule-workstream:${scheduleId}`:undefined;
+      const saved=scheduleKey?this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(scheduleKey):undefined;
+      let w = saved ? this.store.db.prepare('SELECT * FROM workstreams WHERE id=? AND ownerId=? AND chatKey=? AND scopeKey=?').get(saved.value,m.senderId,m.chatKey,scopeOf(m)) as unknown as Workstream|undefined
+        : scheduleKey ? undefined : reference ? this.store.db.prepare('SELECT * FROM workstreams WHERE id=?').get(reference.workstreamId) as unknown as Workstream : this.binding(m);
       if (!w || w.cwd !== project.cwd || w.policyHash !== project.policyHash) {
         const wid = id('W');
         this.store.db.prepare('INSERT INTO workstreams VALUES(?,?,?,?,?,?,?,?)')
@@ -91,7 +96,7 @@ export class Tasks {
         // Adopt a legacy thread only for an unambiguous owner and the same scope/cwd.
         const prior = this.store.db.prepare('SELECT 1 FROM workstreams WHERE chatKey=? AND id!=? LIMIT 1').get(m.chatKey, wid);
         const others = this.store.db.prepare('SELECT 1 FROM inbox WHERE chatKey=? AND senderId!=? LIMIT 1').get(m.chatKey, m.senderId);
-        if (!prior && !others && scopeOf(m) === m.chatKey && (!selection || selection.profileId === 'codex')) {
+        if (!scheduleKey && !prior && !others && scopeOf(m) === m.chatKey && (!selection || selection.profileId === 'codex')) {
           this.store.bindWorkspace(m.chatKey, project.cwd);
           const old = this.store.thread(m.chatKey);
           if (old) this.store.saveThread(sessionKey(wid), old);
@@ -101,7 +106,8 @@ export class Tasks {
       if (previous && selection && JSON.stringify(previous) !== JSON.stringify(selection)) throw new RuntimeError('agent_binding_changed');
       selection ??= previous;
       if (selection) this.store.db.prepare('INSERT OR IGNORE INTO execution_bindings(subjectId,selection) VALUES(?,?)').run(w.id, JSON.stringify(selection));
-      this.bind(m, w);
+      if(scheduleKey) this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(scheduleKey,w.id);
+      else this.bind(m, w);
       const tid = id('N');
       this.store.db.prepare(`INSERT INTO tasks(id,inboxKey,workstreamId,ownerId,chatKey,scopeKey,project,cwd,policyHash)
         VALUES(?,?,?,?,?,?,?,?,?)`).run(tid, m.key, w.id, m.senderId, m.chatKey, scopeOf(m), project.project ?? null, project.cwd, project.policyHash);
@@ -109,7 +115,7 @@ export class Tasks {
       if (model !== undefined) this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(`task-model:${tid}`, JSON.stringify(model));
       this.store.db.prepare("INSERT INTO task_messages(taskId,inboxKey,role,version) VALUES(?,?,'instruction',1)").run(tid, m.key);
       this.store.db.prepare('UPDATE inbox SET taskId=? WHERE key=?').run(tid, m.key);
-      const materials = this.store.db.prepare(`SELECT key FROM inbox WHERE state='material' AND chatKey=? AND senderId=? AND materialUntil>=? ORDER BY seq`)
+      const materials = scheduleKey ? [] : this.store.db.prepare(`SELECT key FROM inbox WHERE state='material' AND chatKey=? AND senderId=? AND materialUntil>=? ORDER BY seq`)
         .all(m.chatKey, m.senderId, Date.now()) as { key: string }[];
       for (const material of materials) {
         const item = this.store.get(material.key)!;
@@ -159,7 +165,9 @@ export class Tasks {
   dispatch(key: string, state: string): void { this.store.db.prepare("UPDATE task_messages SET dispatch=? WHERE inboxKey=? AND role='revision'").run(state, key); }
   candidates(): Task[] {
     return this.store.db.prepare(`SELECT t.* FROM tasks t JOIN inbox i ON i.key=t.inboxKey WHERE t.state='queued' AND i.state='queued'
-      AND NOT EXISTS(SELECT 1 FROM inbox p WHERE p.chatKey=i.chatKey AND p.seq<i.seq AND p.state IN ('queued','running','waiting','awaiting_reply'))
+      AND NOT EXISTS(SELECT 1 FROM inbox p WHERE p.chatKey=i.chatKey AND p.seq<i.seq AND p.state IN ('queued','running','waiting','awaiting_reply')
+        AND (COALESCE(CASE WHEN json_valid(i.envelope) THEN json_extract(i.envelope,'$.chatType') END,'')!='group' OR
+          (p.senderId=i.senderId AND COALESCE(CASE WHEN json_valid(p.envelope) THEN json_extract(p.envelope,'$.scopeKey') END,p.chatKey)=COALESCE(CASE WHEN json_valid(i.envelope) THEN json_extract(i.envelope,'$.scopeKey') END,i.chatKey))))
       ORDER BY i.seq`).all() as unknown as Task[];
   }
   start(t: Task): string {

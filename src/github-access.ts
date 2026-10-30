@@ -67,7 +67,7 @@ export function parseGitHubAccessConfig(raw: unknown, env: Readonly<Record<strin
   const repositories = list(value.repositories, 'repository'), allowedUserIds = list(value.allowedUserIds, 'user');
   if (value.mode !== undefined && value.mode !== 'simple') throw new GitHubAccessError('github_access_invalid_config');
   if (value.mode === 'simple' ? typeof value.ownerUserId !== 'string' || !USER.test(value.ownerUserId) || value.ownerUserId === '*'
-    || repositories.length > 0 || allowedUserIds.length > 0 || value.grants !== undefined || value.source === 'anonymous'
+    || repositories.length > 0 || allowedUserIds.length > 0 || value.source === 'anonymous'
     : value.ownerUserId !== undefined) throw new GitHubAccessError('github_access_invalid_scope');
   let grants: GitHubAccessConfig['grants'];
   if (value.grants !== undefined) {
@@ -75,7 +75,7 @@ export function parseGitHubAccessConfig(raw: unknown, env: Readonly<Record<strin
     grants = value.grants.map(v=>({...parseAudience(v),repository:repository(v.repository)}));
     if (new Set(grants.map(g=>g.repository)).size!==grants.length) throw new GitHubAccessError('github_access_invalid_scope');
   }
-  const shared = value.mode === 'simple' ? {mode:'simple' as const,ownerUserId:value.ownerUserId as string} : grants === undefined ? {} : {grants};
+  const shared = value.mode === 'simple' ? {mode:'simple' as const,ownerUserId:value.ownerUserId as string,...(grants===undefined?{}:{grants})} : grants === undefined ? {} : {grants};
   if (value.source !== undefined && (typeof value.source!=='string' || !['token','gh','anonymous'].includes(value.source))) throw new GitHubAccessError('github_access_invalid_config');
   if (value.source === 'gh') {
     if (value.token !== undefined || value.tokenEnv !== undefined || repositories.length || value.mode !== 'simple' && grants===undefined && allowedUserIds.length !== 1)
@@ -131,7 +131,7 @@ export class ScopedGitHubAdapter implements GitHubObservationAdapter {
       if (!this.feishu || row.chatKey!==`${this.feishu.appId}:${context.chatId}`
         || !admitted(this.feishu,m.senderId,m.chatId,m.envelope?.tenantKey)
         || !this.feishu.allowedUserIds.includes(this.config.ownerUserId!)
-        || !(m.envelope?.chatType==='group' || m.envelope?.chatType==='p2p' && m.senderId===this.config.ownerUserId))
+        || !(m.envelope?.chatType==='group' && !!this.config.grants?.some(g=>g.repository===selected&&audienceAllows(g,m)) || m.envelope?.chatType==='p2p' && m.senderId===this.config.ownerUserId))
         throw new GitHubAccessError('github_access_denied');
     } else if (this.config.grants) {
       const m = {senderId:context.ownerId,chatId:context.chatId,envelope} as Incoming;
@@ -148,9 +148,19 @@ export class ScopedGitHubAdapter implements GitHubObservationAdapter {
       taskId: context.taskId, ownerId: context.ownerId, chatId: context.chatId })).digest('hex');
   }
 
+  /** Recheck the actual grant each time, then bind history to the credential and
+   * repository instead of unrelated members or grants. Legacy scopes remain valid. */
+  authorizeStable(target:Readonly<GitHubTarget>,context:GitHubAccessContext):string|undefined {
+    const authorized=this.authorize(target,context);if(!authorized)return;
+    return createHash('sha256').update(JSON.stringify({version:2,token:this.config?.token,localGh:this.config?.localGh,
+      source:this.config?.source,mode:this.config?.mode,ownerUserId:this.config?.ownerUserId,
+      appId:this.feishu?.appId,domain:this.feishu?.domain,access:this.feishu?.access,repository:repository(`${target.owner}/${target.repo}`),
+      taskId:context.taskId,ownerId:context.ownerId,chatId:context.chatId})).digest('hex');
+  }
+
   async readPullRequest(target: Pick<GitHubTarget,'owner'|'repo'|'pullNumber'>, context: GitHubAccessContext, deadlineMs: number, cursor?: {baseSha:string;headSha:string;index:number;offset:number}, source?: import('./external-waits.js').ReviewContext) {
     const selected = {...target,headSha:'0'.repeat(40)};
-    const scope = this.authorize(selected,context);
+    const scope = this.authorizeStable(selected,context);
     const local = this.config?.localGh;
     const credential = local ? await this.ghToken(local,deadlineMs) : scope ? this.config?.token : undefined;
     const adapter = new GitHubRestAdapter({...(credential?{token:credential}:{}),fetch:this.fetcher});
@@ -159,7 +169,7 @@ export class ScopedGitHubAdapter implements GitHubObservationAdapter {
       if (account.id!==local.userId || account.login.toLowerCase()!==local.login.toLowerCase()) throw new GitHubAccessError('github_access_changed');
     }
     const result = source ? await adapter.reviewContext(selected,deadlineMs,source) : await adapter.reviewBatch(selected,deadlineMs,cursor);
-    if (this.authorize(selected,context)!==scope) throw new GitHubAccessError('github_access_changed');
+    if (this.authorizeStable(selected,context)!==scope) throw new GitHubAccessError('github_access_changed');
     return {snapshot:result,scope};
   }
 

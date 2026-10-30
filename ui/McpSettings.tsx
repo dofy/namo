@@ -12,7 +12,7 @@ import {getLocale,t as tr} from './i18n';
 
 type Draft=McpConnectionPatch;
 type Editor={originalId:string;revision:string;draft:Draft};
-const patch=(v:ConfigView['mcpConnections'][number]):Draft=>({id:v.id,type:v.type,url:v.url,enabled:v.enabled,audience:v.audience,projects:v.projects,...(v.oauthScope?{oauthScope:v.oauthScope}:{})});
+const patch=(v:ConfigView['mcpConnections'][number]):Draft=>({id:v.id,type:v.type,url:v.url,enabled:v.enabled,audience:v.audience,projects:v.projects,ownerUserId:v.ownerUserId??'',...(v.oauthScope?{oauthScope:v.oauthScope}:{})});
 const errorMessage=(error:unknown)=>{const code=message(error);const keys={mcp_duplicate_endpoint:'mcp.endpointDuplicate',mcp_oauth_invalid_scope:'mcp.scopeInvalid',mcp_oauth_scope:'mcp.scopeGrantedMismatch',mcp_config_changed:'mcp.conflict',mcp_credential_target_changed:'mcp.targetChanged',mcp_oauth_failed:'mcp.oauthFailed',mcp_connection_failed:'mcp.testFailed',mcp_invalid_config:'mcp.invalid',codex_mcp_duplicate:'mcp.importDuplicate',codex_mcp_config_changed:'mcp.importChanged'} as const;return code in keys?tr(keys[code as keyof typeof keys]):code;};
 export function McpSettings({config,refresh,expired}:{config:ConfigView;refresh:()=>Promise<unknown>;expired:boolean}) {
  const [editor,setEditor]=useState<Editor|null>(null),[busy,setBusy]=useState(false),[waiting,setWaiting]=useState(false);
@@ -67,6 +67,7 @@ export function McpSettings({config,refresh,expired}:{config:ConfigView;refresh:
      </section>
      <section className="mcp-editor-section" aria-labelledby="mcp-access-heading"><div className="mcp-section-heading"><Heading as="h3" size="3" id="mcp-access-heading">{tr('mcp.accessTitle')}</Heading></div><Text as="p" size="1" color="gray">{tr('mcp.accessNote')}</Text>
      <AudienceFields id="mcp-editor" value={draft.audience} onChange={audience=>update({audience})}/>
+     <Field label={tr('mcp.credentialOwner')} htmlFor="mcp-owner"><TextField.Root id="mcp-owner" value={draft.ownerUserId??''} onChange={e=>update({ownerUserId:e.target.value})}/><Text as="p" size="1" color="gray">{tr('mcp.credentialOwnerHelp')}</Text></Field>
      <Field label={tr('mcp.projects')} htmlFor="mcp-editor-projects"><IdentityInput id="mcp-editor-projects" value={draft.projects} onChange={projects=>update({projects})}/></Field>
      </section>
     </fieldset>

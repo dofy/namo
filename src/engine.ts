@@ -1,6 +1,5 @@
 import { sessionList } from './session-list.js';
 import { mcpApprovalCommand } from './mcp-write-approval.js';
-import { authorizationRevision } from './runtime-config.js';
 import { memoryProjects } from './memory-access.js';
 import { selectAgent, selectedPolicyHash, AgentRegistryError, type AgentSelection } from './agent-registry.js';
 import { mkdirSync, realpathSync, readFileSync } from 'node:fs';
@@ -41,11 +40,12 @@ import { TaskImages, type ImageInput } from './image-inputs.js';
 import type { MaterialReadAdapter } from './materials.js';
 import { richPost, openFence, hasMarkdown } from './richtext.js';
 import { Feedback, recordActivity } from './feedback.js';
-import { admitted, projectAllowed, executionPolicy } from './access.js';
-import { assertMcpDelivery, mcpRead } from './mcp-connections.js';
+import { admitted, projectAllowed, executionPolicy, taskAuthorizationValid } from './access.js';
+import { assertMcpDelivery, assertMcpApprovalScope, mcpRead } from './mcp-connections.js';
 import { assertReviewDelivery, readReview, reviewCoverageBrief } from './github-review.js';
 import { recordProgress } from './public-progress.js';
 import { Schedules } from './schedules.js';
+import { redactExpiredInbox } from './inbox-retention.js';
 
 export interface DeliveryRoute { messageId: string; thread: boolean; }
 export interface Sender {
@@ -68,6 +68,10 @@ interface Active { key: string; task: Task; run: string; cwd: string; abort: Abo
 
 export class Engine {
   private active = new Map<string, Active>();
+  private slotKey(task:Task):string {
+    const m=this.store.get(task.inboxKey);
+    return m?.envelope?.chatType==='group' ? JSON.stringify(['group',task.chatKey,task.scopeKey,task.ownerId]) : task.chatKey;
+  }
   private tasks: Tasks;
   private outputBusy = false;
   private stopped = false;
@@ -82,13 +86,14 @@ export class Engine {
   private externalPolling?: Promise<unknown>;
   private nextExternalPoll = 0;
   private nextSchedulePoll = 0;
+  private nextRetentionPoll = 0;
   private autoMemories?: AutoMemories;
   private memoryRunning?: Promise<void>;
   private memoryAbort?: AbortController;
   private modelCatalog?: ModelCatalog;
   private versions = new RuntimeVersions();
   constructor(readonly store: Store, private runtime: Runtime, private sender: Sender,
-    private config: Pick<Config, 'dataDir' | 'concurrency' | 'github' | 'mcpConnections'> & { file?:string; codex?: Config['codex']; agents?: Config['agents']; feishu?: Partial<Config['feishu']> },
+    private config: Pick<Config, 'dataDir' | 'concurrency' | 'github' | 'mcpConnections' | 'retention'> & { file?:string; codex?: Config['codex']; agents?: Config['agents']; feishu?: Partial<Config['feishu']> },
     private redact: (s: string) => string = s => s,
     private log: Log = () => {},
     private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); this.feedback = new Feedback(store, sender,task=>this.taskAccessible(task)); this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined,id=>{const task=this.tasks.get(id);return !!task&&this.taskAccessible(task);});
@@ -138,8 +143,7 @@ export class Engine {
     });
     if (!fresh || defer) return fresh;
     for (const active of this.active.values()) if (this.store.get(active.key)?.cancelRequested) active.abort.abort();
-    const slot = this.active.get(m.chatKey);
-    if (slot) void this.steer(slot).catch(() => this.fatal('revision_storage_error'));
+    for(const slot of this.active.values()) if(slot.task.chatKey===m.chatKey && slot.task.ownerId===m.senderId && slot.task.scopeKey===scopeOf(m)) void this.steer(slot).catch(() => this.fatal('revision_storage_error'));
     void this.pump();
     return true;
   }
@@ -210,7 +214,7 @@ export class Engine {
         else if (this.store.hasPending(m.chatKey, m.key,m.senderId,scopeOf(m))) reply = '本会话仍有未完成的请求，暂不能切换项目。请等待完成，或 /cancel 后再切换。';
         else { this.store.setProject(this.projectScope(m), name); this.store.clearThread(m.chatKey); this.tasks.reset(m); reply = `已切换到 ${name}：${projects[name]}。下一条消息开始新的 Codex 上下文。`; }
       }
-      else if (command === '/unsupported') reply = '当前版本只支持文字和富文本。图片、文件、语音等内容尚未接入，请先发文字说明。';
+      else if (command === '/unsupported') reply = '这类消息暂不支持处理。可发送文字、支持的图片或文本附件并附上说明；语音及其他未支持的内容请先转为文字。';
       else if (command === '/too-long') reply = '这条消息超过 16000 字符，尚未交给模型。请拆成较短的消息。';
       else if (command === '/help') reply = [
         '**任务**',
@@ -223,7 +227,7 @@ export class Engine {
         '`/schedule` 查看创建和管理方法',
         '**个人设置与记忆 · 私聊**',
         '`/model` 查看或设置默认模型\n`/profile` 查看或修改个人档案\n`/memories` 查看记忆\n`/remember owner|project|chat 内容` 保存记忆\n`/memory-correct 编号 版本 内容` 修改记忆\n`/memory-disable 编号 版本` 停用记忆\n`/forget 编号 版本` 删除记忆\n`/handoff N-编号` 保存任务交接',
-        '**MCP 操作审批**',
+        '**MCP 与 GitHub 操作审批**',
         '`/mcp-approve MA-编号 --confirm` 确认操作\n`/mcp-reject MA-编号` 拒绝操作\n`/mcp-status MA-编号` 查看状态',
         '**异常与受控推送**',
         '`/issues` 查看待核对异常\n`/issue 编号` 查看异常详情和处理方式\n`/push-request N-编号 remote refs/heads/分支` 申请受控推送\n`/push-status AP-编号` 查看审批状态\n`/push-approve AP-编号 --confirm` 确认并执行推送\n`/push-reject AP-编号` 拒绝推送',
@@ -254,9 +258,16 @@ export class Engine {
     const parts = m.text.trim().split(/\s+/);
     if (parts.length > 2) return '**模型命令**\n`/model` 查看\n`/model 模型ID` 设置\n`/model default` 恢复默认';
     try {
-      if (parts.length === 2) setUserModel(this.store, identity, parts[1] === 'default' ? '' : parts[1]);
+      const allowed=this.config.codex?.allowedModels??[];
+      if (parts.length === 2) {
+        const selected=parts[1] === 'default' ? '' : parts[1];
+        if(f.access && selected && !allowed.includes(selected))return '该模型未在服务允许列表中；请使用 /model default 或联系服务管理员。';
+        setUserModel(this.store, identity, selected);
+      }
       void this.modelCatalog?.refresh();
-      return formatModelReply(userModel(this.store, identity), this.modelCatalog?.models ?? []);
+      const selected=userModel(this.store, identity);
+      return formatModelReply(f.access&&!allowed.includes(selected)?'':selected, f.access?(this.modelCatalog?.models??[]).filter(model=>allowed.includes(model.id)):this.modelCatalog?.models ?? [])
+        +(f.access?'\n组织模式仅允许服务配置中列出的模型；群聊始终使用服务默认。':'');
     } catch (error) { if (error instanceof ModelPreferenceError) return error.message; throw error; }
   }
   private profileCommand(m: Incoming): string {
@@ -360,22 +371,43 @@ export class Engine {
     try {
       for(const active of this.active.values()) if(this.store.get(active.key)?.cancelRequested) active.abort.abort();
       this.tasks.expireMaterials();
+      new Waits(this.store).expire();
+      if(Date.now()>=this.nextRetentionPoll){this.nextRetentionPoll=Date.now()+3_600_000;redactExpiredInbox(this.store,this.config.retention?.inboxDays??0);}
       if(Date.now()>=this.nextSchedulePoll){
         const now=Date.now(); this.nextSchedulePoll=now+1000;
         this.store.transaction(()=>{if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
         new Schedules(this.store).due(now,(schedule,source)=>{
-          let allowed=false;
+          const statusKey=`schedule-status:${schedule.id}`;
+          const status=()=>{const row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(statusKey);return row?JSON.parse(String(row.value)) as {reason?:string;skipped?:number}:{};};
+          const saveStatus=(value:unknown)=>this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(statusKey,JSON.stringify(value));
+          const pause=(reason:string,notify:boolean)=>{
+            this.store.db.prepare("UPDATE schedules SET state='paused' WHERE id=?").run(schedule.id);saveStatus({...status(),reason});
+            if(notify){const key=`schedule-alert:${schedule.id}:${schedule.nextAt}`;
+              if(this.store.enqueue({...source,key,text:'',createdAt:now})){this.store.claim(key);this.store.finish(key,`定时任务 ${schedule.id} 已暂停：${reason}。处理后可用 /schedule resume ${schedule.id} 恢复。`);}}
+          };
+          // Recheck only the scheduled task's own authority against saved
+          // settings; unrelated changes do not consume or pause this trigger.
+          if(this.config.file) {
+            try { const current=loadConfig(this.config.file);
+              if(current.feishu.appId!==this.config.feishu?.appId||current.feishu.domain!==this.config.feishu?.domain)return false;
+              if(schedule.kind==='task') {const binding=JSON.parse(schedule.binding??'null') as ProjectBinding|null;
+                if(!binding||typeof binding.cwd!=='string'||!taskAuthorizationValid(this.config as Config,current,source,binding.project,binding.cwd))return false;}
+            }
+            catch { return false; }
+          }
+          let allowed=false,admittedNow=false;
           try {
             const current=this.contextConfig();
-            allowed=admitted(current.feishu,source.senderId,source.chatId,source.envelope?.tenantKey)
-              && (!this.config.file || authorizationRevision(loadConfig(this.config.file))===authorizationRevision(this.config as Config))
+            admittedNow=admitted(current.feishu,source.senderId,source.chatId,source.envelope?.tenantKey);
+            allowed=admittedNow
               && (schedule.kind==='reminder' || JSON.stringify(this.project(source))===schedule.binding);
           } catch { allowed=false; }
-          if(!allowed){this.store.db.prepare("UPDATE schedules SET state='paused' WHERE id=?").run(schedule.id);return;}
-          const uncertain=this.store.db.prepare("SELECT 1 FROM inbox i LEFT JOIN tasks t ON t.id=i.taskId WHERE i.key LIKE ? AND (i.state IN ('delivery_unknown','delivery_failed') OR i.error='interrupted' OR t.state IN ('interrupted','lost')) LIMIT 1").get(`schedule:${schedule.id}:%`);
-          if(uncertain){this.store.db.prepare("UPDATE schedules SET state='paused' WHERE id=?").run(schedule.id);return;}
-          const pending=this.store.db.prepare("SELECT 1 FROM inbox WHERE key LIKE ? AND state IN ('queued','running','waiting','awaiting_reply') LIMIT 1").get(`schedule:${schedule.id}:%`);
-          if(pending)return;
+          if(!allowed){pause(admittedNow?'项目或权限绑定已变化':'接入权限已变化',admittedNow);return;}
+          const prefix=`schedule:${schedule.id}:`,upper=prefix+'\uffff';
+          const uncertain=this.store.db.prepare("SELECT 1 FROM inbox i LEFT JOIN tasks t ON t.id=i.taskId WHERE i.key>=? AND i.key<? AND (i.state IN ('delivery_unknown','delivery_failed') OR i.error='interrupted' OR t.state IN ('interrupted','lost')) LIMIT 1").get(prefix,upper);
+          if(uncertain){pause('此前触发的结果需要核对',true);return;}
+          const pending=this.store.db.prepare("SELECT 1 FROM inbox WHERE key>=? AND key<? AND state IN ('queued','running','waiting','awaiting_reply') LIMIT 1").get(prefix,upper);
+          if(pending){const previous=status();saveStatus({...previous,skipped:(previous.skipped??0)+1});return;}
           const m:Incoming={...source,key:`schedule:${schedule.id}:${schedule.nextAt}`,text:schedule.content,createdAt:now};
           if(!this.store.enqueue(m))return;
           if(schedule.kind==='reminder'){this.store.claim(m.key);this.store.finish(m.key,`⏰ 定时提醒 · ${schedule.id}\n${schedule.content}`);}
@@ -400,7 +432,7 @@ export class Engine {
         const activeIds=new Set([...this.active.values()].map(a=>a.run));
         const reservations=(this.runtime.reservations?.()??[]).filter(r=>!activeIds.has(r.runId));
         const blocked=[...this.active.values(),...reservations];
-        const ready=this.tasks.candidates().some(t=>!this.active.has(t.chatKey)&&!blocked.some(a=>('chatKey' in a&&a.chatKey===t.chatKey)||pathsOverlap(a.cwd,t.cwd)));
+        const ready=this.tasks.candidates().some(t=>!this.active.has(this.slotKey(t))&&!blocked.some(a=>('task' in a?this.slotKey(a.task):a.slotKey??a.chatKey)===this.slotKey(t)||pathsOverlap(a.cwd,t.cwd)));
         if(ready&&this.active.size+reservations.length+1>=this.config.concurrency)this.memoryAbort?.abort('foreground_task');
       }
       for (;;) {
@@ -409,8 +441,16 @@ export class Engine {
         if (this.active.size + reservations.length + (this.memoryRunning ? 1 : 0) >= this.config.concurrency) break;
         const claimed=this.store.transaction(()=>{
           if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
-          const next=this.tasks.candidates().find(t=>!this.active.has(t.chatKey)&&![...this.active.values(), ...reservations].some(a=>('chatKey' in a && a.chatKey===t.chatKey)||pathsOverlap(a.cwd,t.cwd)));
-          return next?{next,run:this.tasks.start(next)}:undefined;
+          const next=this.tasks.candidates().find(t=>!this.active.has(this.slotKey(t))&&![...this.active.values(), ...reservations].some(a=>('task' in a?this.slotKey(a.task):a.slotKey??a.chatKey)===this.slotKey(t)||pathsOverlap(a.cwd,t.cwd)));
+          if(!next)return;
+          const limit=this.config.codex?.dailyTurnLimit??(this.config.feishu?.access?100:0),day=new Date().toISOString().slice(0,10),key=`daily-turns:${day}`;
+          if(limit>0){const row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key),used=row?Number(row.value):0;
+            if(!Number.isSafeInteger(used)||used<0)throw new Error('daily_turn_count_invalid');
+            if(used>=limit){this.store.addOutput(next.inboxKey,`quota:${day}`,`今日模型执行次数已达到服务上限（${limit} 次，按 UTC 日期统计）。任务已保留排队，将在下一 UTC 日自动继续；也可取消。`);return;}
+            this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,String(used+1));}
+          const run=this.tasks.start(next);
+          if(limit>0)this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(`daily-turn-run:${run}`,day);
+          return {next,run};
         });
         if (!claimed) break;
         const {next,run}=claimed;
@@ -421,10 +461,17 @@ export class Engine {
       if(!this.memoryRunning&&this.autoMemories?.pending()
         &&this.active.size+reserved.filter(r=>!runs.has(r.runId)).length<this.config.concurrency
         &&!this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get()) {
-        this.memoryAbort=new AbortController();
-        this.memoryRunning=this.autoMemories.tick(this.memoryAbort.signal)
-          .catch(()=>this.log('memory_extraction_failed'))
-          .finally(()=>{this.memoryRunning=undefined;this.memoryAbort=undefined;void this.pump();});
+        const allowed=this.store.transaction(()=>{
+          const limit=this.config.codex?.dailyTurnLimit??(this.config.feishu?.access?100:0);if(!limit)return true;
+          const key=`daily-turns:${new Date().toISOString().slice(0,10)}`,row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key),used=row?Number(row.value):0;
+          if(!Number.isSafeInteger(used)||used<0)throw new Error('daily_turn_count_invalid');
+          if(used>=limit)return false;
+          this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,String(used+1));return true;
+        });
+        if(allowed){this.memoryAbort=new AbortController();
+          this.memoryRunning=this.autoMemories.tick(this.memoryAbort.signal)
+            .catch(()=>this.log('memory_extraction_failed'))
+            .finally(()=>{this.memoryRunning=undefined;this.memoryAbort=undefined;void this.pump();});}
       }
       if (!this.outputBusy) {
         this.outputBusy = true;
@@ -434,12 +481,13 @@ export class Engine {
     finally { this.pumping = false; }
   }
   private track(task: Task, run: string): void {
-    if (this.active.has(task.chatKey)) throw new Error('duplicate_running_chat');
+    const slotKey=this.slotKey(task);
+    if (this.active.has(slotKey)) throw new Error('duplicate_running_chat');
     const abort = new AbortController();
     const promise = Promise.resolve().then(() => this.execute(task, run, abort.signal))
       .catch(() => this.fatal('execution_storage_error'))
-      .finally(() => { this.active.delete(task.chatKey); void this.pump(); });
-    this.active.set(task.chatKey, { key: task.inboxKey, task, run, cwd: task.cwd, abort, promise });
+      .finally(() => { this.active.delete(slotKey); void this.pump(); });
+    this.active.set(slotKey, { key: task.inboxKey, task, run, cwd: task.cwd, abort, promise });
   }
   private async execute(task: Task, run: string, signal: AbortSignal): Promise<void> {
     const m = this.store.get(task.inboxKey)!;
@@ -475,17 +523,17 @@ export class Engine {
         onModel: model => this.tasks.freezeDefaultModel(task.id, model),
         threadId: this.tasks.thread(task), cwd, signal,
         prompt, images,
-        ...(this.config.file&&this.config.mcpConnections?.length?{onMcp:(args:unknown)=>mcpRead(this.store,this.config.file!,task,args,signal)}:{}),
+        ...(this.config.file&&this.config.mcpConnections?.length?{onMcp:(args:unknown,toolSignal:AbortSignal)=>mcpRead(this.store,this.config.file!,task,args,toolSignal)}:{}),
         ...(this.config.file?{onReview:(args:unknown)=>readReview(this.store,this.config.file!,task,args,signal)}:{}),
         onActivity: phase => recordActivity(this.store, run, phase),
         onProgress: event => recordProgress(this.store, run, event, this.redact),
         onThread: threadId => { this.store.saveThread(this.tasks.sessionKey(task), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
         onTurn: turnId => { const threadId = this.store.thread(this.tasks.sessionKey(task)); if (threadId) { this.store.saveRun(m.key, threadId, turnId); this.tasks.saveRun(run, threadId, turnId); } },
-        onReady: controls => { const slot = this.active.get(m.chatKey); if (slot?.task.id === task.id) { slot.controls = controls; void this.steer(slot).catch(() => this.fatal('revision_storage_error')); } },
+        onReady: controls => { const slot = this.active.get(this.slotKey(task)); if (slot?.task.id === task.id) { slot.controls = controls; void this.steer(slot).catch(() => this.fatal('revision_storage_error')); } },
         onEvidence: item => evidence!.observe(item),
         onWait: request => requestWait(this.store, task.id, run, { ...request, question: this.redact(request.question), choices: request.choices?.map(value => this.redact(value)) }),
       });
-      await this.active.get(m.chatKey)?.steering;
+      await this.active.get(this.slotKey(task))?.steering;
       if (this.config.file) { assertReviewDelivery(this.store,loadConfig(this.config.file),task); assertMcpDelivery(this.store,loadConfig(this.config.file),task); }
       if (signal.aborted && !this.runtime.persistent) throw new RuntimeError('cancelled');
       this.store.transaction(() => {
@@ -498,14 +546,33 @@ export class Engine {
       });
       this.log('turn_completed', { messageId: m.messageId });
     } catch (e) {
-      if (this.runtime.persistent && e instanceof RuntimeError && e.code === 'receiver_detached') return;
+      if (this.runtime.persistent && e instanceof RuntimeError && e.code === 'receiver_detached') {
+        // The durable runner reservation is created before the worker can
+        // invoke Codex. Without one this run never reached the model and may
+        // safely return to the queue after a receiver switch.
+        this.store.transaction(()=>{
+          const inbox=this.store.get(task.inboxKey);
+          if(!runnerJob(this.store,run)&&inbox?.state==='running'&&!inbox.cancelRequested){
+            const reservation=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`daily-turn-run:${run}`);
+            if(reservation&&/^\d{4}-\d{2}-\d{2}$/.test(String(reservation.value))){
+              const counter=`daily-turns:${String(reservation.value)}`,row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(counter),used=Number(row?.value);
+              if(Number.isSafeInteger(used)&&used>0)this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(String(used-1),counter);
+              this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`daily-turn-run:${run}`);
+            }
+            this.store.db.prepare("UPDATE task_runs SET state='not_started',error='receiver_detached_before_dispatch',finishedAt=? WHERE id=? AND state='running'").run(Date.now(),run);
+            this.store.db.prepare("UPDATE tasks SET state='queued',startedAt=NULL,error=NULL WHERE id=? AND state='running'").run(task.id);
+            this.store.db.prepare("UPDATE inbox SET state='queued',error=NULL WHERE key=? AND state='running'").run(task.inboxKey);
+          }
+        });
+        return;
+      }
       if (this.runtime.persistent && e instanceof RuntimeError && ['runner_observer_error','runner_record_missing'].includes(e.code)) throw e;
       const code = signal.aborted && !this.runtime.persistent ? 'cancelled' : e instanceof RuntimeError ? e.code : 'runtime_error';
       const text = code === 'cancelled' ? '这条请求已停止。已发生的操作不会自动撤销。'
         : code === 'runner_lost' ? '独立执行进程失联，结果未确认，没有自动重跑。可能仍有子进程或外部操作；并发名额与项目占位保留。请在本机核对进程和操作后，通过异常核对入口解除占位。'
         : code === 'turn_timeout' ? '这条请求超时，执行器已停止。执行结果未确认，没有自动重跑。'
         : `这条请求未完成（${code}）。请检查本地 Codex 登录与服务状态；为避免重复操作，没有自动重跑。`;
-      await this.active.get(m.chatKey)?.steering;
+      await this.active.get(this.slotKey(task))?.steering;
       this.store.transaction(() => {
         evidence?.finish(false);
         const report = evidence?.report ?? readEvidence(this.store, task.id).find(r => r.runId === run);
@@ -543,7 +610,8 @@ export class Engine {
       const delivery=/^\/run\s+--deliver\s+(\S+)\s+--\s+\S/.exec(m.text);
       this.store.transaction(()=>{
         const selection = this.selectedAgent(m,ref), f = this.config.feishu;
-        const preference = f?.appId && f.domain ? userModel(this.store, {channel:f.domain,appId:f.appId,userId:m.senderId}) : '';
+        let preference = f?.appId && f.domain ? userModel(this.store, {channel:f.domain,appId:f.appId,userId:m.senderId}) : '';
+        if(m.envelope?.chatType==='group' || f?.access && !(this.config.codex?.allowedModels??[]).includes(preference))preference='';
         const configured = this.config.codex && selection ? agentCodexConfig({...this.config,codex:this.config.codex},selection).model : this.config.codex?.model;
         const task=this.tasks.create(m,project,ref,selection,preference || configured || null);
         if(delivery)this.artifacts.intent(m,task,delivery[1]);
@@ -604,17 +672,29 @@ export class Engine {
       if (!output) return;
       if (this.config.file) {
         const scheduled=this.store.get(output.inboxKey);
-        if(output.inboxKey.startsWith('schedule:') && scheduled) try {
+        if((output.inboxKey.startsWith('schedule:')||output.inboxKey.startsWith('schedule-alert:')||output.inboxKey.startsWith('mcp-owner-approval:')) && scheduled) try {
           const current=loadConfig(this.config.file);
-          if(authorizationRevision(current)!==authorizationRevision(this.config as Config) || !admitted(current.feishu,scheduled.senderId,scheduled.chatId,scheduled.envelope?.tenantKey)) throw new Error('access_changed');
+          if(current.feishu.appId!==this.config.feishu?.appId || current.feishu.domain!==this.config.feishu?.domain || !admitted(current.feishu,scheduled.senderId,scheduled.chatId,scheduled.envelope?.tenantKey)) throw new Error('access_changed');
+          if(output.inboxKey.startsWith('mcp-owner-approval:')) {
+            const id=output.inboxKey.slice('mcp-owner-approval:'.length),row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`mcp-approval:${id}`);
+            const approval=row?JSON.parse(String(row.value)):undefined,connection=current.mcpConnections?.find(item=>item.id===approval?.connection);
+            const task=approval?this.tasks.get(approval.taskId):undefined;
+            if(!approval||approval.state!=='pending'||approval.approverId!==scheduled.senderId||!connection||connection.ownerUserId!==approval.approverId||!connection.enabled||!current.feishu.allowedUserIds.includes(approval.approverId)||task?.state!=='running')throw new Error('access_changed');
+            assertMcpApprovalScope(this.store,current,task,approval.connection,approval.scope);
+          }
         } catch {this.store.deliveryFailed(output.id,false,'access_changed');continue;}
         const taskId=this.store.get(output.inboxKey)?.taskId, task=taskId?this.tasks.get(taskId):undefined;
         if (task) try {
           const current=loadConfig(this.config.file), message=this.store.get(task.inboxKey)!;
-          if ((this.config.feishu?.access || current.feishu.access) && (authorizationRevision(current)!==authorizationRevision(this.config as Config) || !admitted(current.feishu,message.senderId,message.chatId,message.envelope?.tenantKey) || task.project && !projectAllowed(current.codex,current.feishu,message,task.project))) throw new Error('access_changed');
-          assertReviewDelivery(this.store,current,task); assertMcpDelivery(this.store,current,task);
+          if(output.kind==='access_notice') {
+            if(current.feishu.appId!==this.config.feishu?.appId || current.feishu.domain!==this.config.feishu?.domain || !admitted(current.feishu,message.senderId,message.chatId,message.envelope?.tenantKey)) throw new Error('access_changed');
+          } else {
+            if (!taskAuthorizationValid(this.config as Config,current,message,task.project,task.cwd)) throw new Error('access_changed');
+            assertReviewDelivery(this.store,current,task); assertMcpDelivery(this.store,current,task);
+          }
         } catch {
           this.store.deliveryFailed(output.id,false,'access_changed');
+          if(output.kind==='result') this.store.addOutput(output.inboxKey,'access_notice','权限或配置已变化，结果未交付。请检查授权后重新发起请求；此前操作可能已执行，请先核对。');
           this.log('reply_withheld',{outboxId:output.id,code:'access_changed'}); continue;
         }
       }

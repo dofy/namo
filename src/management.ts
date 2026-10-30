@@ -103,18 +103,19 @@ export class Management {
     }
     return {revision,valid,github,mcpConnections,activeModelDefault,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
       values:{projectAccess:c.projectAccess??{},projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.allowLocalCommits??false,
-        concurrency:raw.concurrency??2,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
+        concurrency:raw.concurrency??3,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
         reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??200,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},
       feishu:{appId:f.appId??'',domain:f.domain??'feishu',secretConfigured:!!f.appSecret||!!process.env[f.appSecretEnv??'FEISHU_APP_SECRET'],pairedUsers:Array.isArray(f.allowedUserIds)?f.allowedUserIds.length:0,
         restrictedChats:Array.isArray(f.allowedChatIds)?f.allowedChatIds.length:0,access:f.access??null,allowedUserIds:f.allowedUserIds??[],allowedChatIds:f.allowedChatIds??[]},file:this.file};
   }
   state():any {
+    const day=new Date().toISOString().slice(0,10),limit=loadConfig(this.file).codex.dailyTurnLimit??0;
     const db=this.read(s=>{
       const schema=Number(s.db.prepare('PRAGMA user_version').get()?.user_version);
       if(schema!==SCHEMA_VERSION)return {schema,tasks:[],issues:[],workstreams:[]};
       return {schema,tasks:s.db.prepare('SELECT id,workstreamId,project,state,inputVersion,startedAt,finishedAt,error FROM tasks ORDER BY rowid DESC LIMIT 50').all(),
         workstreams:s.db.prepare('SELECT id,project,createdAt FROM workstreams ORDER BY createdAt DESC LIMIT 30').all(),
-        issues:schema===SCHEMA_VERSION?new Recovery(s).list():[],queue:s.status()};
+        issues:schema===SCHEMA_VERSION?new Recovery(s).list():[],queue:s.status(),usage:{day,turns:Number(s.db.prepare('SELECT value FROM settings WHERE key=?').get(`daily-turns:${day}`)?.value??0),limit}};
     });
     return this.sanitize({service:this.status(),config:this.config(),database:db??{schema:0,tasks:[],issues:[],workstreams:[]},recoveryAvailable:db?.schema===SCHEMA_VERSION,profiles:this.profiles(),assistant:db?.schema===SCHEMA_VERSION?this.read(s=>new AssistantSettings(s).read()):undefined});
   }
@@ -206,7 +207,7 @@ export class Management {
     for(const row of s.db.prepare("SELECT state,COUNT(*) AS n FROM memory_jobs WHERE ownerId=? AND state IN ('pending','running','failed') GROUP BY state").all(ownerId)) {
       counts[row.state as keyof typeof counts]=Number(row.n);
     }
-    const errors=new Set<MemoryExtractionError>(['extraction_failed','timeout','connection_failed','invalid_output','tool_rejected']);
+    const errors=new Set<MemoryExtractionError>(['extraction_failed','timeout','connection_failed','invalid_output','tool_rejected','capacity']);
     const rows=s.db.prepare(`SELECT id,project,state,createdAt,attempts,dueAt,leaseUntil,accepted,rejected,error
       FROM memory_jobs WHERE ownerId=? ORDER BY createdAt DESC,id DESC LIMIT 21`).all(ownerId);
     const redact=this.redactor();
@@ -332,12 +333,12 @@ export class Management {
     const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError('mcp_config_changed');
     const connections=parseMcpConnections(raw.mcpConnections),prior=connections.find(c=>c.id===id);
     if(draft===undefined){if(!prior)throw new ManagementError('mcp_config_changed');const {token:_token,...value}=prior;return value;}
-    if(!draft||typeof draft!=='object'||Array.isArray(draft)||Object.keys(draft).some(k=>!['id','type','url','oauthScope','enabled','audience','projects'].includes(k)))throw new ManagementError('mcp_invalid_config',400);
+    if(!draft||typeof draft!=='object'||Array.isArray(draft)||Object.keys(draft).some(k=>!['id','type','url','oauthScope','ownerUserId','enabled','audience','projects'].includes(k)))throw new ManagementError('mcp_invalid_config',400);
     const value=draft as McpConnectionPatch;
     if(id&&(!prior||id!==value.id)||!id&&connections.some(c=>c.id===value.id))throw new ManagementError('mcp_config_changed');
     let parsed;try{parsed=parseMcpConnections([{...value,token:''}])[0];parseConfig({...raw,mcpConnections:[...connections.filter(c=>c.id!==id),parsed]},this.file);}catch{throw new ManagementError('mcp_invalid_config',400);}
     if(addsDuplicateMcpEndpoint(connections,[...connections.filter(c=>c.id!==id),parsed!]))throw new ManagementError('mcp_duplicate_endpoint',400);
-    const {token:_token,...safe}=parsed!;return safe;
+    const {token:_token,...safe}=parsed!;return {...safe,...(Object.hasOwn(value,'ownerUserId')&&!value.ownerUserId?{ownerUserId:''}:{})};
   }
   saveMcpOAuth(revision:string,id:string,reference:string,draft?:McpConnectionPatch):void {
     if(!isOAuthReference(reference))throw new ManagementError('mcp_oauth_invalid',400);
@@ -383,12 +384,13 @@ export class Management {
       }
       if(patch.github!==undefined){
         if(!patch.github||typeof patch.github!=='object'||Array.isArray(patch.github)||Object.keys(patch.github).some(k=>!['mode','ownerUserId','source','repositories','allowedUserIds','grants'].includes(k)))throw new ManagementError(tr("management.invalidGithubConfiguration"),400);
+        const retainedGrants=patch.github.grants===undefined && patch.github.mode==='simple' && raw.github?.mode==='simple' ? raw.github.grants : patch.github.grants;
         next.github={...next.github,...patch.github};
-        if(patch.github.grants===undefined)delete next.github.grants;
+        if(retainedGrants===undefined)delete next.github.grants;else next.github.grants=retainedGrants;
         if(patch.github.mode===undefined){delete next.github.mode;delete next.github.ownerUserId;}
         if (patch.github.source==='gh') {
           if (!localGh || patch.newGithubToken || patch.clearGithubToken || patch.github.repositories?.length) throw new ManagementError(tr("management.invalidGithubConfiguration"),400);
-          next.github={source:'gh',localGh,repositories:[],allowedUserIds:patch.github.allowedUserIds,...(patch.github.mode==='simple'?{mode:'simple',ownerUserId:patch.github.ownerUserId}:{}),...(patch.github.grants===undefined?{}:{grants:patch.github.grants})};
+          next.github={source:'gh',localGh,repositories:[],allowedUserIds:patch.github.allowedUserIds,...(patch.github.mode==='simple'?{mode:'simple',ownerUserId:patch.github.ownerUserId}:{}),...(retainedGrants===undefined?{}:{grants:retainedGrants})};
         } else if (patch.github.source==='anonymous') {
           if (patch.newGithubToken) throw new ManagementError(tr("management.invalidGithubConfiguration"),400);
           next.github={source:'anonymous',repositories:[],allowedUserIds:[],...(patch.github.grants===undefined?{}:{grants:patch.github.grants})};
@@ -400,13 +402,14 @@ export class Management {
         if(!Array.isArray(patch.mcpConnections)||patch.mcpConnections.length>20)throw new ManagementError('mcp_invalid_config',400);
         const previous=parseMcpConnections(raw.mcpConnections);
         next.mcpConnections=patch.mcpConnections.map((entry:any)=>{
-          if(!entry||typeof entry!=='object'||Array.isArray(entry)||Object.keys(entry).some(k=>!['id','type','enabled','audience','projects','url','oauthScope','newToken','clearToken'].includes(k))
+          if(!entry||typeof entry!=='object'||Array.isArray(entry)||Object.keys(entry).some(k=>!['id','type','enabled','audience','projects','url','oauthScope','ownerUserId','newToken','clearToken'].includes(k))
             ||entry.newToken!==undefined&&typeof entry.newToken!=='string'||entry.clearToken!==undefined&&typeof entry.clearToken!=='boolean'
             ||entry.clearToken&&entry.newToken||!internalOAuth&&typeof entry.newToken==='string'&&isOAuthReference(entry.newToken))throw new ManagementError('mcp_invalid_config',400);
           const prior=previous.find(v=>v.id===entry.id);
           if(prior?.token&&(prior.type!==entry.type||prior.type==='remote'&&prior.url!==entry.url)&&!entry.clearToken&&!entry.newToken)throw new ManagementError('mcp_credential_target_changed',400);
           if(prior?.token&&isOAuthReference(prior.token)&&(prior.oauthScope??'')!==(entry.oauthScope??'')&&!entry.clearToken&&!entry.newToken)throw new ManagementError('mcp_credential_target_changed',400);
-          return {id:entry.id,type:entry.type,enabled:entry.enabled,audience:entry.audience,projects:entry.projects,...(entry.type==='remote'?{url:entry.url,...(entry.oauthScope?{oauthScope:entry.oauthScope}:{})}:{}),
+          const owner=entry.ownerUserId===undefined?prior?.ownerUserId:entry.ownerUserId;
+          return {id:entry.id,type:entry.type,enabled:entry.enabled,audience:entry.audience,projects:entry.projects,...(owner?{ownerUserId:owner}:{}),...(entry.type==='remote'?{url:entry.url,...(entry.oauthScope?{oauthScope:entry.oauthScope}:{})}:{}),
             token:entry.clearToken?'':entry.newToken||prior?.token||''};
         });
       }

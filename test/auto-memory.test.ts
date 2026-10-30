@@ -236,6 +236,14 @@ test('model evidence bounds match the durable memory API', async t => {
   assert.equal(f.items().length, 0); assert.equal(jobs(f.store)[0]!.rejected, 3);
 });
 
+test('memory capacity is reported when an automatic candidate cannot be saved',async t=>{
+ const source=message('capacity','这是新的长期偏好');const f=fixture(t,async()=>[candidate('capacity',source.text,{key:'new:concept'})]);
+ const authority={kind:'local-owner' as const,authenticated:true,ownerId:'alice',chatKey:'app:alice',chatType:'p2p' as const,project:null,source:{kind:'automatic' as const,ref:'seed'}};
+ for(let i=0;i<40;i++)f.memory.upsertAutomatic({key:`seed:${i}`,kind:'user_fact',level:'global',privacy:'shared',text:`seed ${i}`,sourceMessageIds:['seed'],evidence:['evidence'],observedAt:Date.now()-3000},authority);
+ f.store.enqueue(source);f.queue.enqueue([source.key],null,'capacity-run');due(f.store);await f.queue.tick();
+ assert.equal(jobs(f.store)[0]!.error,'capacity');assert.equal(jobs(f.store)[0]!.accepted,0);assert.equal(f.items().length,40);
+});
+
 test('extraction receives only its owner records and deleted concept keys without old content or evidence', async t => {
   const seen: AutoMemoryInput[] = [], f = fixture(t, async input => { seen.push(input); return []; });
   const authority = (ownerId: string) => ({ kind: 'local-owner' as const, authenticated: true, ownerId,

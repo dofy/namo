@@ -19,7 +19,7 @@ export interface Config {
     progressDelayMs?: number; progressIntervalMs?: number; progressHeartbeatMs?: number;
   };
   codex: {
-    bin: string; home: string; model?: string; timeoutMs: number;
+    bin: string; home: string; model?: string; allowedModels?: string[]; dailyTurnLimit?:number; timeoutMs: number;
     sandbox: 'read-only' | 'workspace-write';
     projects?: Record<string, string>; defaultProject?: string;
     projectAccess?: Record<string, ProjectAccess>; accessScope?: string; managedMcp?: boolean;
@@ -30,6 +30,7 @@ export interface Config {
     remotes: Array<{ name: string; url: string; transport: 'https' | 'ssh' | 'local-test'; credentialHelpers?: string[] }>;
   };
   concurrency: number;
+  retention?: { enabled:true; inboxDays:number };
   github?: GitHubAccessConfig;
   mcpConnections?: McpConnection[];
   agent?: 'codex';
@@ -51,10 +52,15 @@ export function parseConfig(d: any, absolute: string): Config {
   };
   const f = d.feishu ?? {};
   const c = d.codex ?? {};
+  const retention=d.retention;
+  if(retention?.enabled===true&&retention?.acknowledgeRedaction===true&&(typeof retention!=='object'||Array.isArray(retention)||Object.keys(retention).some(k=>!['enabled','inboxDays','acknowledgeRedaction'].includes(k))||!Number.isSafeInteger(retention.inboxDays)||retention.inboxDays<1||retention.inboxDays>3650))throw new Error('retention_invalid');
+  const allowedModels=list(c.allowedModels??[],'codex.allowedModels');
+  if(allowedModels.length>100 || allowedModels.some(model=>!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model)))throw new Error('codex_allowed_models_invalid');
   const github=parseGitHubAccessConfig(d.github,process.env);
   const pairedUserIds=list(f.allowedUserIds??[],'feishu.allowedUserIds');
   if(github?.mode==='simple' && !pairedUserIds.includes(github.ownerUserId!))throw new Error('github_owner_not_paired');
   const access = parseOrganization(f.access);
+  if(c.dailyTurnLimit!==undefined&&(!Number.isSafeInteger(c.dailyTurnLimit)||c.dailyTurnLimit<0||c.dailyTurnLimit>10000))throw new Error('codex_daily_turn_limit_invalid');
   if(!access && github?.allowedUserIds.some(id=>!pairedUserIds.includes(id)))throw new Error('github_access_user_not_paired');
   const mcpConnections = parseMcpConnections(d.mcpConnections);
   const g = d.gitApprovals ?? {};
@@ -71,7 +77,7 @@ export function parseConfig(d: any, absolute: string): Config {
   for (const key of ['reactions','progressUpdates']) if (f[key] !== undefined && typeof f[key] !== 'boolean') throw new Error(`feishu.${key} must be boolean`);
   for (const [key,min,max] of [['progressDelayMs',0,120000],['progressIntervalMs',5000,60000],['progressHeartbeatMs',30000,300000]] as const) if (f[key] !== undefined && (!Number.isSafeInteger(f[key]) || f[key]<min || f[key]>max)) throw new Error(`feishu.${key} must be between ${min} and ${max}`);
   if (d.dataDir === '' || c.home === '' || c.bin === '') throw new Error(tr("config.datadirCodexHomeCodexBinMustNot"));
-  const concurrency = d.concurrency ?? 2;
+  const concurrency = d.concurrency ?? 3;
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error(tr("config.concurrencyMustBetween"));
   if (!['read-only', 'workspace-write'].includes(c.sandbox ?? 'read-only')) throw new Error(tr("config.codexSandboxMustReadWorkspaceWrite"));
   const timeoutMs = c.timeoutMs ?? 600_000;
@@ -112,7 +118,7 @@ export function parseConfig(d: any, absolute: string): Config {
     remoteNames.add(value.name); gitRemotes.push({ name: value.name, url: value.url, transport: value.transport, credentialHelpers: value.credentialHelpers ? [...new Set(value.credentialHelpers as string[])] : undefined });
   }
   return {
-    file: absolute, dataDir, concurrency, agent: 'codex', github, mcpConnections,
+    file: absolute, dataDir, concurrency, agent: 'codex', github, mcpConnections, ...(retention?.enabled===true&&retention?.acknowledgeRedaction===true?{retention:{enabled:true as const,inboxDays:retention.inboxDays}}:{}),
     agents: parseAgentRegistry(d.agents, dirname(absolute)),
     feishu: {
       appId: f.appId ?? '',
@@ -127,7 +133,7 @@ export function parseConfig(d: any, absolute: string): Config {
     },
     codex: {
       bin: c.bin && (c.bin.includes('/') || c.bin.includes('\\')) ? path(c.bin) : c.bin ?? 'codex', home: path(c.home ?? `${dataDir}/codex-home`),
-      model: c.model || undefined, timeoutMs, sandbox: c.sandbox ?? 'read-only',
+      model: c.model || undefined, allowedModels, dailyTurnLimit:c.dailyTurnLimit??(access?100:0), timeoutMs, sandbox: c.sandbox ?? 'read-only',
       projects, defaultProject: c.defaultProject, networkAccess: c.networkAccess ?? false,
       ...(c.projectAccess !== undefined ? {projectAccess} : {}),
       allowLocalCommits: c.allowLocalCommits ?? false,

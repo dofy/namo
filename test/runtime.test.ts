@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import { CodexRuntime, RuntimeError } from '../src/runtime.js';
 import type { EvidenceItem } from '../src/ui-contract.js';
 import type { PublicProgressEvent } from '../src/public-progress.js';
+import { storeFixture } from './helpers.js';
+import { Tasks } from '../src/tasks.js';
+import { awaitMcpApproval, mcpApprovalCommand } from '../src/mcp-write-approval.js';
 
 const FAKE = `#!/usr/bin/env node
 import { createInterface } from 'node:readline';
@@ -289,3 +292,37 @@ test('an explicit active or unknown tool status in a terminal snapshot never bec
  await run('mcp-invalid',async()=>{calls++;throw Error('must not run');});assert.equal(calls,1);
  const failure=await run('mcp',async()=>{throw Error('PRIVATE_CREDENTIAL');});assert.match(failure.text,/mcp_connection_failed/);assert.doesNotMatch(failure.text,/PRIVATE_CREDENTIAL/);
  });
+
+test('timed out MCP and GitHub calls cannot outlive the model turn', async t => {
+ const {dir,runtime}=fixture(t,100);
+ for (const kind of ['mcp','github-api'] as const) {
+  let toolSignal:AbortSignal|undefined;
+  const pending=async (_args:unknown,signal:AbortSignal)=>{
+   toolSignal=signal;
+   await new Promise<void>(resolve=>signal.addEventListener('abort',()=>resolve(),{once:true}));
+   throw new Error('cancelled');
+  };
+  await assert.rejects(runtime.run({cwd:dir,prompt:kind,signal:new AbortController().signal,onThread(){},onTurn(){},
+   ...(kind==='mcp'?{onMcp:pending}:{onGitHub:pending})}),
+   (e:unknown)=>e instanceof RuntimeError&&e.code==='turn_timeout');
+  assert.equal(toolSignal?.aborted,true);
+ }
+});
+
+test('a late approval after a timed out tool call cannot authorize dispatch', async t => {
+ const {dir,runtime}=fixture(t,150), {store}=storeFixture(t,'namo-turn-approval-');
+ store.enqueue({key:'task',messageId:'task',chatKey:'chat',chatId:'chat',senderId:'alice',text:'request'});
+ const task=new Tasks(store).create(store.get('task')!,{cwd:dir,policyHash:'test'});
+ store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(task.id);
+ let dispatched=false;
+ await assert.rejects(runtime.run({cwd:dir,prompt:'mcp',signal:new AbortController().signal,onThread(){},onTurn(){},
+  onMcp:async (_args,signal)=>{await awaitMcpApproval(store,task,'remote','https://example.com/mcp','write',{},'scope',signal,()=>true);dispatched=true;return {};}}),
+  (e:unknown)=>e instanceof RuntimeError&&e.code==='turn_timeout');
+ const row=store.db.prepare("SELECT key,value FROM settings WHERE key LIKE 'mcp-approval:%'").get()!;
+ assert.equal(JSON.parse(String(row.value)).state,'cancelled');
+ const id=String(row.key).slice('mcp-approval:'.length);
+ store.enqueue({key:'approve',messageId:'approve',chatKey:'chat',chatId:'chat',senderId:'alice',text:`/mcp-approve ${id} --confirm`});
+ mcpApprovalCommand(store,store.get('approve')!);
+ assert.match(String(store.db.prepare("SELECT content FROM outbox WHERE inboxKey='approve' AND kind='result'").get()?.content),/不能重复/);
+ assert.equal(dispatched,false);
+});

@@ -24,7 +24,7 @@ export class RuntimeHost {
     return this.runtime.accept(message, !!this.switching || this.closing || this.unavailable);
   }
   acceptCard(event: CardEvent): ReturnType<HostedRuntime['acceptCard']> {
-    if (this.switching || this.closing || this.unavailable) return { toast: { type: 'error', content: '正在更新，消息仍会保存。请稍后重新点击。' } };
+    if (this.switching || this.closing || this.unavailable) return { toast: { type: 'error', content: '正在更新，按钮操作未处理。请稍后重新点击。' } };
     return this.runtime.acceptCard(event);
   }
   replace(factory: RuntimeFactory, commit: () => void): Promise<void> {
@@ -53,7 +53,7 @@ export class RuntimeHost {
     });
     this.switching = operation.finally(() => {
       this.switching = undefined;
-      if (!this.closing && !this.unavailable) this.runtime.resume();
+      if (!this.closing && !this.unavailable) try { this.runtime.resume(); } catch(error) { this.unavailable=true; throw error; }
     });
     return this.switching;
   }

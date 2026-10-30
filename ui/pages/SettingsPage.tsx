@@ -130,6 +130,6 @@ export function SettingsPage({ config, recoveryAvailable, refresh, notify }: {
         disabled={dirty || saving || !recoveryAvailable} onConfirm={async () => { const result = await api.apply(revision); notify(result.message, !result.ready); await refresh(); }}><Icon name="play" />{tr("settings.applyConfiguration")}</ConfirmButton>
     </div>
   </form>
-    <CodexUpdatePanel configRevision={config.revision} disabled={dirty || saving || !config.valid} />
+    <CodexUpdatePanel configRevision={config.revision} disabled={dirty || saving || !config.valid} pendingApplication={config.application==='pending'} />
   </div>;
 }

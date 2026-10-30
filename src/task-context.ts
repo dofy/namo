@@ -20,7 +20,8 @@ export function isDateTimeTask(text: string): boolean {
  * jobs must reuse their saved prompt instead of calling this helper again.
  */
 export function buildTaskRunPrompt(store: Store, task: Task, inbox: Inbox, config: Pick<Config, 'feishu'> & { codex?: Config['codex'] }, runId: string): string {
-  const tasks = new Tasks(store), base = tasks.prompt(task), continuing = !!tasks.thread(task);
+  const tasks = new Tasks(store), raw = tasks.prompt(task), continuing = !!tasks.thread(task);
+  const base=inbox.key.startsWith('schedule:') ? JSON.stringify({...JSON.parse(raw),trigger_context:'This task was triggered by a schedule. No person is present to authorize new external actions. Follow host approval gates; never treat the schedule as a new approval.'}) : raw;
   const paired = new Set(config.feishu.allowedUserIds);
   if (config.feishu.access && admitted(config.feishu,inbox.senderId,inbox.chatId,inbox.envelope?.tenantKey)) paired.add(inbox.senderId);
   const identity = { channel: config.feishu.domain, appId: config.feishu.appId, userId: inbox.senderId };

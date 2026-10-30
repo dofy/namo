@@ -42,3 +42,21 @@ export function executionPolicy(c: Config['codex'], f: Config['feishu'], m: Inco
     ...(group ? {sandbox:'read-only',networkAccess:false,allowLocalCommits:false,readPaths:[]} : {}),
     accessScope: createHash('sha256').update(JSON.stringify({feishu:{appId:f.appId,access:f.access,chats:f.allowedChatIds},projects:c.projectAccess,github})).digest('hex') };
 }
+
+/** Recheck the authority relevant to one running task, not unrelated grants. */
+export function taskAuthorizationValid(applied:Config, current:Config, message:Incoming, project:string|null|undefined, cwd:string):boolean {
+  try {
+    if(applied.feishu.appId!==current.feishu.appId || applied.feishu.domain!==current.feishu.domain
+      || !admitted(current.feishu,message.senderId,message.chatId,message.envelope?.tenantKey)
+      || project && current.feishu.access && (current.codex.projects?.[project]!==cwd || !projectAllowed(current.codex,current.feishu,message,project))) return false;
+    const before=executionPolicy(applied.codex,applied.feishu,message,project??undefined,applied.github);
+    const after=executionPolicy(current.codex,current.feishu,message,project??undefined,current.github);
+    // The task keeps its original sandbox; a later broadening cannot grant it
+    // additional authority. Narrowing any capability must stop it.
+    return !(before.sandbox==='workspace-write' && after.sandbox!=='workspace-write')
+      && (!before.networkAccess || !!after.networkAccess)
+      && (!before.allowLocalCommits || !!after.allowLocalCommits)
+      && (before.readPaths??[]).every(path=>(after.readPaths??[]).includes(path))
+      && JSON.stringify(before.denyPaths??[])===JSON.stringify(after.denyPaths??[]);
+  } catch { return false; }
+}

@@ -9,6 +9,9 @@ export interface CodexInstallation {
   latestVersion: string | null; checkedAt: number | null; attemptedAt: number | null;
   state: 'idle' | 'checking' | 'installing' | 'deferred' | 'failed';
   ownerPid: number | null; error: string | null;
+  pendingAction?: 'upgrade' | 'rollback' | null;
+  candidate?: (InstalledCodex & { target:string; sha256:string; configRevision:string }) | null;
+  failureCount?: number;
 }
 export const installationRoot = (home: string) => join(home, 'namo-cli');
 export function installationState(bin: string, home: string): CodexInstallation {
@@ -22,12 +25,17 @@ export function installationState(bin: string, home: string): CodexInstallation 
     if (value.configuredBin !== bin) return empty;
     const validRelease = (v: InstalledCodex | null) => v === null || v && typeof v.version === 'string'
       && /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(v.version)
-      && (v.directory === null || /^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9-]+$/.test(v.directory));
+      && (v.directory === null || /^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9_-]+$/.test(v.directory));
     if (value.format !== 1 || typeof value.automatic !== 'boolean' || !validRelease(value.active) || !validRelease(value.previous)
       || !['idle','checking','installing','deferred','failed'].includes(value.state)
       || ![value.checkedAt,value.attemptedAt].every(v=>v===null || Number.isSafeInteger(v) && v>=0)
       || value.latestVersion !== null && !/^\d+\.\d+\.\d+$/.test(value.latestVersion)
       || value.error !== null && !/^[a-z_]{1,80}$/.test(value.error)
+      || value.pendingAction !== undefined && value.pendingAction !== null && !['upgrade','rollback'].includes(value.pendingAction)
+      || value.failureCount !== undefined && (!Number.isSafeInteger(value.failureCount) || value.failureCount<0 || value.failureCount>5)
+      || value.candidate !== undefined && value.candidate !== null && (!validRelease(value.candidate) || !value.candidate.directory
+        || !/^(?:aarch64|x86_64)-(?:apple-darwin|unknown-linux-musl)$/.test(value.candidate.target)
+        || !/^[a-f0-9]{64}$/.test(value.candidate.sha256) || !/^[a-f0-9]{64}$/.test(value.candidate.configRevision))
       || value.ownerPid !== null && (!Number.isSafeInteger(value.ownerPid) || value.ownerPid<=0)) throw Error();
     if (value.ownerPid && ['checking','installing'].includes(value.state)) {
       try { process.kill(value.ownerPid, 0); }
@@ -40,7 +48,7 @@ export function saveInstallation(home: string, state: CodexInstallation): void {
   atomicJson(join(installationRoot(home), 'state.json'), state);
 }
 export function installedBinary(home: string, release: InstalledCodex): string {
-  if (!release.directory || !/^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9-]+$/.test(release.directory)) throw Error('update_state_invalid');
+  if (!release.directory || !/^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9_-]+$/.test(release.directory)) throw Error('update_state_invalid');
   const root = join(installationRoot(home), 'releases', release.directory);
   const binary = join(root, 'bin', 'codex');
   // A damaged managed installation fails closed, rather than silently selecting a different CLI.

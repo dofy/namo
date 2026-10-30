@@ -3,7 +3,7 @@ import { runtimeFor } from './agents.js';
 import { readFileSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadConfig, type Config } from './config.js';
-import { authorizationRevision, readWorkerSnapshot } from './runtime-config.js';
+import { readWorkerSnapshot } from './runtime-config.js';
 import { digest } from './paths.js';
 import { makeRedactor } from './safety.js';
 import { Store } from './store.js';
@@ -16,7 +16,7 @@ import { recordProgress } from './public-progress.js';
 import { Waits } from './waits.js';
 import { requestWait } from './external-wait-bridge.js';
 import { loadRunImages } from './image-inputs.js';
-import { executionPolicy } from './access.js';
+import { executionPolicy, taskAuthorizationValid } from './access.js';
 import { readReview, assertReviewDelivery } from './github-review.js';
 import { mcpRead, assertMcpDelivery } from './mcp-connections.js';
 import { githubApi } from './github-api.js';
@@ -30,6 +30,7 @@ async function main(): Promise<void> {
   const stop = () => abort.abort('worker_stopped');
   process.once('SIGTERM', stop); process.once('SIGINT', stop);
   let timer: NodeJS.Timeout | undefined, evidence: EvidenceRecorder | undefined;
+  let nextHeartbeat=0,nextAccessCheck=0;
   let controls: RunControls | undefined, steering: Promise<void> | undefined;
   let storageFailed = false;
   const owned = () => {
@@ -54,9 +55,9 @@ async function main(): Promise<void> {
       const snapshot = mode === '--snapshot' ? await readWorkerSnapshot() : undefined;
       const config: Config = snapshot === undefined ? loadConfig(file) : JSON.parse(snapshot);
       const revision = digest(snapshot ?? readFileSync(file, 'utf8'));
-      const accessRevision = authorizationRevision(config);
       const current = loadConfig(file);
-      if (config.file !== file || (config.feishu.access || current.feishu.access) && authorizationRevision(current) !== accessRevision)
+      const message=store.get(task.inboxKey)!;
+      if (config.file !== file || !taskAuthorizationValid(config,current,message,task.project,task.cwd))
         throw new RuntimeError('task_configuration_changed');
       const policy = executionPolicy(config.codex,config.feishu,store.get(task.inboxKey)!,task.project??undefined,config.github);
       const effectiveConfig = {...config,codex:policy};
@@ -90,11 +91,15 @@ async function main(): Promise<void> {
       };
       timer = setInterval(() => {
         try {
-          write(() => { store.db.prepare('UPDATE runner_jobs SET updatedAt=? WHERE runId=?').run(Date.now(), runId); });
-          try {
-            const current = loadConfig(file);
-            if ((config.feishu.access || current.feishu.access) && authorizationRevision(current) !== accessRevision) abort.abort('access_configuration_changed');
-          } catch { abort.abort('access_configuration_changed'); }
+          const now=Date.now();
+          if(now>=nextHeartbeat){write(() => { store.db.prepare('UPDATE runner_jobs SET updatedAt=? WHERE runId=?').run(now, runId); });nextHeartbeat=now+1000;}
+          if(now>=nextAccessCheck){
+            try {
+              const current = loadConfig(file);
+              if (!taskAuthorizationValid(config,current,message,task.project,task.cwd)) abort.abort('access_configuration_changed');
+            } catch { abort.abort('access_configuration_changed'); }
+            nextAccessCheck=now+1000;
+          }
           if (store.get(task.inboxKey)?.cancelRequested) abort.abort('user_cancelled');
           steer();
         } catch { storageFailed = true; abort.abort('storage_failed'); }
@@ -114,8 +119,8 @@ async function main(): Promise<void> {
           const thread = store.thread(tasks.sessionKey(task))!;
           store.saveRun(task.inboxKey, thread, turn); tasks.saveRun(runId, thread, turn); runnerEvent(store, runId, 'turn_bound');
         }),
-        ...(config.mcpConnections?.length?{onMcp:async(args:unknown)=>{
-          const response=await mcpRead(store,file,task,args,abort.signal,undefined,config);
+        ...(config.mcpConnections?.length?{onMcp:async(args:unknown,signal:AbortSignal)=>{
+          const response=await mcpRead(store,file,task,args,signal,undefined,config);
           if(args&&typeof args==='object'&&(args as Record<string,unknown>).operation==='call') {
             const failed=!!(response as {data?:{isError?:boolean}})?.data?.isError;
             write(()=>runnerEvent(store,runId,`mcp_call_${failed?'failed':'completed'}`));
@@ -123,7 +128,7 @@ async function main(): Promise<void> {
           return response;
         }}:{}),
         onReview: args => readReview(store,file,task,args,abort.signal),
-        ...(config.github?.mode==='simple'?{onGitHub:(args:unknown)=>githubApi(store,file,task,args,abort.signal)}:{}),
+        ...(config.github?.mode==='simple'?{onGitHub:(args:unknown,signal:AbortSignal)=>githubApi(store,file,task,args,signal)}:{}),
         onReady: next => { controls = next; steer(); },
         onActivity: phase => write(() => recordActivity(store, runId, phase)),
         onProgress: event => write(() => recordProgress(store, runId, event, redact)),

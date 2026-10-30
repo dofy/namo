@@ -8,6 +8,7 @@ const errorKeys={
   extraction_failed:'memory.extraction.errorFailed', timeout:'memory.extraction.errorTimeout',
   connection_failed:'memory.extraction.errorConnection', invalid_output:'memory.extraction.errorOutput',
   tool_rejected:'memory.extraction.errorTool',
+  capacity:'memory.extraction.errorCapacity',
 } as const;
 function status(job:MemoryExtractionJob):string {
   if(job.state==='pending')return tr(job.error?'memory.extraction.retrying':'memory.extraction.pending');

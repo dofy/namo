@@ -176,6 +176,8 @@ export function serviceStatus(c: Config, verifyRelease = false): Record<string, 
     running: live, mode: registered ? 'background' : live ? 'foreground' : 'stopped', pid, connection: live && health?.pid === pid ? health.connection : 'unknown',
     ready: live && health?.pid === pid && health.ready === true, config: c.file,
     liveUpgrade: live && health?.pid === pid && health.liveUpgradeVersion === 1,
+    liveUpgradeCount: live && health?.pid===pid && Number.isSafeInteger(health.liveUpgradeCount) ? health.liveUpgradeCount : 0,
+    restartRecommended: live && health?.pid===pid && health.restartRecommended===true,
     upgrading: live && health?.pid === pid && health.upgrading === true,
     release: { installed: installedRelease, running: runningRelease, receiver: saved?.release?.id, verified: releaseVerified,
       matches: installedRelease && runningRelease ? installedRelease === runningRelease : undefined } };
@@ -233,7 +235,7 @@ export async function serviceAction(action: string, c: Config): Promise<Record<s
         if(from===release.id)return {...serviceStatus(c,true),upgrade:{mode:'live',unchanged:true}};
         upgradeBackup=await createUpgradeBackup(c,plist,'live-upgrade');
         const receipt=await requestLiveUpgrade(c,record.release.id,from,release.id);
-        return {...serviceStatus(c,true),upgrade:{mode:'live',state:receipt.state},backup:{path:upgradeBackup,verified:true}};
+        return {...serviceStatus(c,true),upgrade:{mode:'live',state:receipt.state,...(receipt.trial?{trial:true}:{})},backup:{path:upgradeBackup,verified:true}};
       }
       const finishReceiver = acquireLock(c.dataDir);
       try {
