@@ -58,6 +58,11 @@ createInterface({ input: process.stdin }).on('line', line => {
         id: 'cmd', type: 'commandExecution', command: 'node task.js', cwd, status: 'inProgress' } } });
       return requestWait();
     }
+    if (mode === 'active-collab') {
+      write({ method: 'item/started', params: { threadId: 'thread-one', turnId: 'turn-one', item: {
+        id: 'collab', type: 'collabToolCall', tool: 'spawnAgent', status: 'inProgress' } } });
+      return requestWait();
+    }
     if (mode === 'foreign') return requestWait({ threadId: 'foreign-thread' });
     if (mode === 'malformed') return requestWait({}, { question: 'ok', extra: true });
     if (mode === 'choices') return requestWait({}, { question: '选择语言', choices: ['中文', '英文'] });
@@ -175,7 +180,7 @@ test('foreign and malformed wait requests are protocol errors, never successful 
 });
 
 test('an active effect, a post-wait effect, and a second wait are rejected conservatively', async t => {
-  for (const prompt of ['active-effect', 'post-effect', 'duplicate', 'unsettled-terminal']) {
+  for (const prompt of ['active-effect', 'active-collab', 'post-effect', 'duplicate', 'unsettled-terminal']) {
     const { dir, runtime } = fixture(t);
     await assert.rejects(waitRun(runtime, dir, prompt),
       (error: unknown) => error instanceof RuntimeError && error.code === 'wait_protocol_error');

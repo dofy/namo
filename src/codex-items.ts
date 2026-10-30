@@ -8,7 +8,7 @@ export function isWaitToolItem(item: Obj): boolean {
 
 export function isEffectfulItem(item: Obj): boolean {
   if (isWaitToolItem(item)) return false;
-  return ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'collabAgentToolCall',
+  return ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'collabToolCall', 'collabAgentToolCall',
     'subAgentActivity', 'webSearch', 'sleep', 'imageGeneration'].includes(item?.type);
 }
 
