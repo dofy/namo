@@ -31,6 +31,7 @@ Namo manages messages, queues, projects, sessions and execution boundaries. The 
 - **Local workbench:** a dashboard, searchable task and session lists, user/project/status/date filters, pagination, details, profiles, assistant settings, memory review, configuration and connection diagnostics.
 - **Concise chat replies:** durable acceptance reactions, original-message/topic routing, safe rich text and a single updatable progress card. Buttons require the Feishu callback subscription.
 - **Controlled continuations:** exact-head GitHub check waits (public, or explicitly configured private repositories) can resume the same task without model polling; a limited-protection Git push approval path binds one approval to one task, commit, remote and branch.
+- **Remote MCP:** explicitly add public HTTPS connections with scoped access; each tool call requires approval in Feishu. OAuth and Bearer authorization are supported.
 - **Local service management:** guided setup, isolated official Codex login, diagnostics, immutable service releases and macOS background service commands.
 
 The workbench and CLI support **English and Simplified Chinese**. They follow the system language by default and fall back to English for unsupported languages. Task content, user input and execution logs retain their original language.
@@ -59,7 +60,7 @@ To build a local CLI package:
 
 ```sh
 pnpm pack
-npm install -g ./namo-0.2.0.tgz
+npm install -g ./namo-0.4.1.tgz
 namo init
 ```
 
