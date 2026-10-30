@@ -373,8 +373,37 @@ summary { cursor: pointer; font-size: 13px; color: #47657c; }
 :where(.form-section, .guide) details > summary + * { margin-top: 12px; }
 :where(.form-section, .guide) .rt-TextAreaRoot { min-width: 0; }
 
-.mcp-scopes { margin-block: 18px; }
+.mcp-editor .settings-editor-body { padding-top: 6px; }
+.mcp-editor-section { padding: 22px 2px; border-top: 1px solid #e4e9ee; }
+.mcp-editor-section:first-child { border-top: 0; padding-top: 12px; }
+.mcp-editor-section > p { margin: 8px 0 16px; }
+.mcp-section-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.mcp-section-heading h3 { margin: 0; }
+.mcp-section-heading > p { flex-basis: 100%; margin: 0; }
+.mcp-enable-control { padding: 14px 16px; border: 1px solid #dce3e9; border-radius: 9px; background: #f8fafb; }
+.mcp-enable-control > p { margin: 7px 0 0 24px; }
+.mcp-scopes { margin-block: 14px 0; }
+.mcp-scopes-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.mcp-scopes-header p { margin: 0; }
+.mcp-scopes-header p + p { margin-top: 5px; }
+.mcp-scopes-header button { flex-shrink: 0; }
+.mcp-scopes > p { margin: 12px 0; }
 .mcp-scopes code { overflow-wrap: anywhere; }
+.mcp-scope-list { margin: 14px 0; border: 1px solid #dce3e9; border-radius: 9px; overflow: hidden; }
+.mcp-scope-list-heading { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; background: #f6f8fa; border-bottom: 1px solid #dce3e9; }
+.mcp-scope-option { display: block; padding: 10px 14px; cursor: pointer; }
+.mcp-scope-option + .mcp-scope-option { border-top: 1px solid #edf0f3; }
+.mcp-scope-option:hover { background: #f8fafb; }
+.mcp-advanced { margin: 12px 0 0; padding: 10px 14px; border: 1px solid #e4e9ee; border-radius: 8px; }
+.mcp-advanced summary { padding: 2px 0; }
+.mcp-advanced > p { margin: 10px 0; }
+.mcp-advanced .field { margin-bottom: 6px; }
+.mcp-credentials > label { display: block; margin: 14px 0 4px; }
+@media(max-width:700px) {
+  .mcp-editor-section { padding-block: 18px; }
+  .mcp-scopes-header { flex-wrap: wrap; gap: 10px; }
+  .mcp-enable-control > p { margin-left: 0; }
+}
 
 .mcp-connection-row { display:flex; justify-content:space-between; align-items:center; gap:20px; padding-block:20px; }
 .mcp-connection-row + .mcp-connection-row { border-top:1px solid #dce3e9; }

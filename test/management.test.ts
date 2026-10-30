@@ -407,3 +407,19 @@ test('scheduled task list is authenticated, paginated, redacted and read-only',a
  assert.equal((await fetch(ui.url+'/api/schedules?pageSize=101',{headers})).status,400);
  const after=new Store(join(f.data,'bot.sqlite'),true);assert.equal(after.db.prepare("SELECT COUNT(*) n FROM schedules WHERE state='paused'").get()?.n,1);after.close();
 });
+
+test('MCP authorization result pages are localized, nonce-styled and do not reflect input',async t=>{
+ const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());
+ for(const language of ['zh-CN','en']){
+  const headers={'Accept-Language':language};
+  const response=await fetch(ui.url+'/oauth-complete?status=success',{headers});const html=await response.text();
+  assert.match(html,language==='en'?/Authorization complete/:/授权完成/);
+  const nonce=/style nonce="([^"]+)"/.exec(html)?.[1];assert.ok(nonce);assert.ok(response.headers.get('content-security-policy')?.includes(`'nonce-${nonce}'`));
+  assert.equal(response.headers.get('referrer-policy'),'no-referrer');
+  const failed=await (await fetch(ui.url+'/oauth-complete?status=failed&reason=mcp_oauth_scope',{headers})).text();
+  assert.match(failed,language==='en'?/outside the requested scope/:/超出请求范围/);
+  const untrusted=await (await fetch(ui.url+'/oauth-complete?reason=%3Cscript%3Ealert(1)%3C%2Fscript%3E',{headers})).text();
+  assert.doesNotMatch(untrusted,/<script>|alert\(1\)/);
+  const prototype=await (await fetch(ui.url+'/oauth-complete?reason=constructor',{headers})).text();assert.doesNotMatch(prototype,/function Object/);
+ }
+});

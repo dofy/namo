@@ -1,5 +1,12 @@
 # Release notes
 
+## 0.4.1 — 2026-10-30
+
+- Clarify the MCP connection editor with separate connection, authorization and
+  access sections, and a clearer OAuth permission selection.
+- Present localized authorization success and failure pages while retaining
+  the existing callback and content security protections.
+
 ## 0.4.0 — 2026-10-30
 
 - Create and manage one-time reminders and daily or weekly tasks in a Feishu

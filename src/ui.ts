@@ -1,4 +1,4 @@
-import { t as tr, withLocale } from './locale.js';
+import { currentLocale, t as tr, withLocale } from './locale.js';
 import { parseLocale } from './i18n.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -19,6 +19,17 @@ const viewportStyleHashes = [
 ].map(hash => `'${hash}'`).join(' ');
 
 const equal=(a:string,b:string)=>Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
+/** All displayed strings come from the bundled locale catalog, never callback input. */
+function oauthResultPage(ok:boolean,reason:string,nonce:string):string {
+  const title=tr(ok?'mcp.resultSuccessTitle':'mcp.resultFailureTitle');
+  const body=ok?tr('mcp.resultSuccess'):reason;
+  return `<!doctype html><html lang="${currentLocale()}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} · Namo</title>
+<style nonce="${nonce}">
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#f6f8fa;color:#22252a;font:15px/1.65 system-ui,-apple-system,"PingFang SC",sans-serif;display:grid;place-items:center;padding:24px}
+main{width:min(100%,520px)}.brand{display:flex;align-items:center;gap:12px;margin-bottom:24px;color:#637180;font-size:13px}.brand img{width:40px;height:44px;object-fit:contain}.brand strong{display:block;color:#22252a;font-size:18px;line-height:1.2}
+.panel{background:#fff;border:1px solid #dce3e9;border-radius:14px;padding:32px;box-shadow:0 12px 40px #202c3810}.icon{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;font-size:24px;font-weight:700;background:${ok?'#e3f4ec':'#fff0e5'};color:${ok?'#258356':'#ae550d'}}h1{font-size:23px;line-height:1.3;margin:20px 0 10px}p{margin:0;color:#526270;overflow-wrap:anywhere}.foot{margin-top:24px;padding-top:20px;border-top:1px solid #e6ebef;font-size:13px;color:#637180}@media(max-width:480px){.panel{padding:24px}}
+</style></head><body><main><div class="brand"><img src="/logo.png" alt=""><div><strong>Namo</strong>MCP</div></div><section class="panel"><div class="icon" aria-hidden="true">${ok?'✓':'!'}</div><h1>${title}</h1><p>${body}</p><p class="foot">${tr('mcp.resultFootnote')}</p></section></main></body></html>`;
+}
 export async function startUi(manager:Management):Promise<{url:string;entryUrl:string;close:()=>Promise<void>}> {
   try { readFileSync(new URL('index.html',assetRoot)); }
   catch { throw new ManagementError(tr("ui.workbenchAssetsMissingSourceDevelopmentRunPnpm")); }
@@ -44,9 +55,10 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
     if(req.method==='GET'&&path==='/oauth-complete'){
       const parameters=new URL(req.url??'/',origin).searchParams;
       const ok=parameters.get('status')==='success';
-      const reasons:Record<string,string>={mcp_oauth_invalid_scope:'所选权限范围不被服务支持。请返回连接设置，探测权限并重新勾选。',mcp_oauth_access_denied:'服务拒绝了授权，或你取消了授权。',mcp_oauth_invalid_grant:'授权码已失效，请重新登录授权。',mcp_oauth_scope:'服务返回的权限超出请求范围，授权未保存。',mcp_oauth_callback_invalid:'授权回调无效或已使用，请重新开始授权。',mcp_oauth_invalid_client:'服务未接受此登录客户端，请重新开始授权或联系服务管理员。',mcp_config_changed:'授权期间配置发生变化，请重新载入后再授权。',mcp_oauth_expired:'本次授权已过期，请重新开始。'};
-      const reason=reasons[parameters.get('reason')??'']??'授权未完成。请返回 Namo 管理界面重新操作。';
-      return send(200,ok?'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>MCP 授权完成</title><p>授权完成。请返回 Namo 管理界面并重新载入连接设置。</p></html>':'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>MCP 授权未完成</title><p>'+reason+'</p></html>','text/html');
+      const reasons:Record<string,string>={mcp_oauth_invalid_scope:tr('mcp.resultInvalidScope'),mcp_oauth_access_denied:tr('mcp.resultDenied'),mcp_oauth_invalid_grant:tr('mcp.resultInvalidGrant'),mcp_oauth_scope:tr('mcp.resultScopeMismatch'),mcp_oauth_callback_invalid:tr('mcp.resultInvalidCallback'),mcp_oauth_invalid_client:tr('mcp.resultInvalidClient'),mcp_config_changed:tr('mcp.resultConfigChanged'),mcp_oauth_expired:tr('mcp.resultExpired')};
+      const key=parameters.get('reason')??'';
+      const reason=Object.hasOwn(reasons,key)?reasons[key]:tr('mcp.resultDefaultError');
+      return send(200,oauthResultPage(ok,reason,styleNonce),'text/html');
     }
     if(req.headers['sec-fetch-site']==='cross-site')return send(403,{error:tr("ui.invalidRequestOrigin")});
     if(req.method==='GET'&&Object.values(uiRoutes).some(route=>route===path)) {
