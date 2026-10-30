@@ -178,7 +178,7 @@ test('management hides retired registry while preserving legacy Codex configurat
   const selection = selectAgent(before);
   assert.equal(selection.profileId, 'team');
   assert.equal(agentCodexConfig(before, selection).home, join(f.data, 'agents', 'team'));
-  f.manager.save(view.revision, { concurrency: 2 });
+  f.manager.save(view.revision, { concurrency: 4 });
   const saved = JSON.parse(readFileSync(f.file, 'utf8'));
   assert.deepEqual(saved.agents, f.raw.agents);
   assert.deepEqual(saved.custom, f.raw.custom);

@@ -317,6 +317,8 @@ test('global limit still counts a surviving worker when next task uses a differe
   const f = fixture(t), other = join(f.dir, 'other'); mkdirSync(other);
   const raw = JSON.parse(readFileSync(f.file, 'utf8')); raw.concurrency = 1; raw.codex.projects.two = other;
   writeFileSync(f.file, JSON.stringify(raw)); Object.assign(f.config, loadConfig(f.file));
+  // Exercise the scheduler's one-slot behavior independently of config bounds.
+  f.config.concurrency = 1;
   const first = f.receiver(); first.start(); first.accept(message('a'));
   await wait(() => f.calls() === 1); await first.stop();
   const next = f.receiver(); next.start(); next.accept(message('switch', '/project two', 'other-chat'));

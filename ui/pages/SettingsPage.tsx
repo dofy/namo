@@ -102,7 +102,7 @@ export function SettingsPage({ config, recoveryAvailable, refresh, notify }: {
         <div><ModelSelect id="model" label={tr('model.serviceDefault')} value={draft.model} onChange={value=>edit('model',value)} disabled={saving} inheritLabel={tr('model.codexDefault')} resetKey={revision} />
           <Text as="p" size="1" color="gray">{tr('model.serviceHelp')}</Text></div>
         <Field label={tr("settings.codexCommandFullPath")} htmlFor="bin"><TextField.Root id="bin" required value={draft.bin} onChange={e => edit('bin', e.target.value)} /></Field>
-        <Field label={tr("settings.maximumConcurrentTasks")} htmlFor="concurrency"><TextField.Root id="concurrency" type="number" min="1" max="8" required value={draft.concurrency} onChange={e => edit('concurrency', e.target.value)} /></Field>
+        <Field label={tr("settings.maximumConcurrentTasks")} htmlFor="concurrency"><TextField.Root id="concurrency" type="number" min="4" max="64" required value={draft.concurrency} onChange={e => edit('concurrency', e.target.value)} /></Field>
         <Field label={tr("settings.executionTimeoutSeconds")} htmlFor="timeout"><TextField.Root id="timeout" type="number" min="1" max="7200" required value={draft.timeoutSeconds} onChange={e => edit('timeoutSeconds', e.target.value)} /></Field>
       </div></PageSection>
       <PageSection icon="sessions" title={tr("settings.feishuMessages")} description={tr("design.messages")}>

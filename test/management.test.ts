@@ -22,13 +22,19 @@ function fixture(t:any,deps:any={}){
  t.after(()=>rmSync(dir,{recursive:true,force:true}));return {dir,data,project,file,raw,manager};
 }
 
-test('missing concurrency defaults to three without changing existing explicit values or the config file',t=>{
+test('concurrency defaults to eight and legacy values are applied safely without changing the config file',t=>{
  const f=fixture(t);
- assert.equal(f.manager.config().values.concurrency,1);
+ assert.equal(f.manager.config().values.concurrency,4);
+ assert.equal(JSON.parse(readFileSync(f.file,'utf8')).concurrency,1);
  const raw=JSON.parse(readFileSync(f.file,'utf8'));delete raw.concurrency;
  writeFileSync(f.file,JSON.stringify(raw));const before=readFileSync(f.file,'utf8');
- assert.equal(f.manager.config().values.concurrency,3);
+ assert.equal(f.manager.config().values.concurrency,8);
  assert.equal(readFileSync(f.file,'utf8'),before);
+});
+test('management accepts concurrency 4–64 and rejects invalid changes',t=>{
+ const f=fixture(t);
+ for(const value of [3,65,4.5])assert.throws(()=>f.manager.save(f.manager.config().revision,{concurrency:value}));
+ for(const value of [4,8,64]){f.manager.save(f.manager.config().revision,{concurrency:value});assert.equal(loadConfig(f.file).concurrency,value);}
 });
 
 test('model defaults are confirmed only for the matching running configuration', t=>{

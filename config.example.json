@@ -2,7 +2,7 @@
   "version": 1,
   "agent": "codex",
   "dataDir": "./data",
-  "concurrency": 3,
+  "concurrency": 8,
   "feishu": {
     "appId": "",
     "appSecret": "",

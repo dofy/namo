@@ -77,8 +77,11 @@ export function parseConfig(d: any, absolute: string): Config {
   for (const key of ['reactions','progressUpdates']) if (f[key] !== undefined && typeof f[key] !== 'boolean') throw new Error(`feishu.${key} must be boolean`);
   for (const [key,min,max] of [['progressDelayMs',0,120000],['progressIntervalMs',5000,60000],['progressHeartbeatMs',30000,300000]] as const) if (f[key] !== undefined && (!Number.isSafeInteger(f[key]) || f[key]<min || f[key]>max)) throw new Error(`feishu.${key} must be between ${min} and ${max}`);
   if (d.dataDir === '' || c.home === '' || c.bin === '') throw new Error(tr("config.datadirCodexHomeCodexBinMustNot"));
-  const concurrency = d.concurrency ?? 3;
-  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error(tr("config.concurrencyMustBetween"));
+  const requestedConcurrency = d.concurrency ?? 8;
+  // Existing 1–3 settings predate the new minimum. Keep the file intact and
+  // apply the minimum at runtime instead of making an upgrade fail to start.
+  if (!Number.isInteger(requestedConcurrency) || requestedConcurrency < 1 || requestedConcurrency > 64) throw new Error(tr("config.concurrencyMustBetween"));
+  const concurrency = Math.max(4, requestedConcurrency);
   if (!['read-only', 'workspace-write'].includes(c.sandbox ?? 'read-only')) throw new Error(tr("config.codexSandboxMustReadWorkspaceWrite"));
   const timeoutMs = c.timeoutMs ?? 600_000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 7_200_000) throw new Error(tr("config.codexTimeoutmsMustBetween"));

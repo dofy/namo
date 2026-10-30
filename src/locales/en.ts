@@ -590,7 +590,7 @@ export const english = {
   "config.codexSandboxMustReadWorkspaceWrite": "codex.sandbox must be read-only or workspace-write",
   "config.codexOnly": "Only the official Codex backend is supported.",
   "config.codexTimeoutmsMustBetween": "codex.timeoutMs must be between 1000 and 7200000",
-  "config.concurrencyMustBetween": "concurrency must be between 1 and 8",
+  "config.concurrencyMustBetween": "concurrency must be between 4 and 64",
   "config.configurationMustJsonObject": "Configuration must be a JSON object",
   "config.datadirCodexHomeCodexBinMustNot": "dataDir, codex.home and codex.bin must not be empty",
   "config.feishuCardsMustBoolean": "feishu.cards must be a boolean",

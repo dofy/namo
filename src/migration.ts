@@ -367,7 +367,7 @@ function dataDirectory(target: JsonObject | undefined, targetFile: string): stri
 
 function initialTarget(targetFile: string): JsonObject {
   const dataDir = join(dirname(targetFile), 'data');
-  return { version: 1, agent: 'codex', dataDir, concurrency: 1,
+  return { version: 1, agent: 'codex', dataDir, concurrency: 8,
     feishu: { appId: '', appSecret: '', allowedUserIds: [], allowedChatIds: [], requireMention: true, domain: 'feishu' },
     codex: { bin: 'codex', home: join(dataDir, 'codex-home'), timeoutMs: 600_000, sandbox: 'read-only', projects: {}, networkAccess: false, readPaths: [], denyPaths: [], allowLocalCommits: false } };
 }

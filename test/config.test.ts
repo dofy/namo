@@ -14,9 +14,11 @@ test('project configuration resolves cwd and enforces service credential exclusi
   const base = { codex: { projects: { app: './project' }, defaultProject: 'app', networkAccess: true, sandbox: 'workspace-write' } };
   const save = (c: unknown) => writeFileSync(file, JSON.stringify(c));
   save(base); const config = loadConfig(file);
-  assert.equal(config.concurrency, 3);
-  assert.equal(initialConfig(file).concurrency,3);
-  save({...base,concurrency:1}); assert.equal(loadConfig(file).concurrency,1);
+  assert.equal(config.concurrency, 8);
+  assert.equal(initialConfig(file).concurrency,8);
+  for(const value of [1,2,3]) {save({...base,concurrency:value}); assert.equal(loadConfig(file).concurrency,4);}
+  for(const value of [4,8,64]) {save({...base,concurrency:value}); assert.equal(loadConfig(file).concurrency,value);}
+  for(const value of [0,65,2.5]) {save({...base,concurrency:value}); assert.throws(()=>loadConfig(file));}
   save(base);
   assert.equal(config.codex.projects?.app, realpathSync(join(root, 'project')));
   assert.equal(config.codex.networkAccess, true);

@@ -103,7 +103,7 @@ export class Management {
     }
     return {revision,valid,github,mcpConnections,activeModelDefault,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
       values:{projectAccess:c.projectAccess??{},projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.allowLocalCommits??false,
-        concurrency:raw.concurrency??3,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
+        concurrency:Number.isInteger(raw.concurrency)&&raw.concurrency>=1&&raw.concurrency<4?4:raw.concurrency??8,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
         reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??200,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},
       feishu:{appId:f.appId??'',domain:f.domain??'feishu',secretConfigured:!!f.appSecret||!!process.env[f.appSecretEnv??'FEISHU_APP_SECRET'],pairedUsers:Array.isArray(f.allowedUserIds)?f.allowedUserIds.length:0,
         restrictedChats:Array.isArray(f.allowedChatIds)?f.allowedChatIds.length:0,access:f.access??null,allowedUserIds:f.allowedUserIds??[],allowedChatIds:f.allowedChatIds??[]},file:this.file};
@@ -376,7 +376,10 @@ export class Management {
         next.feishu.access=a.access;next.feishu.allowedUserIds=a.allowedUserIds;next.feishu.allowedChatIds=a.allowedChatIds;
       }
       if(next.codex.defaultProject==='')delete next.codex.defaultProject;
-      if(Object.hasOwn(patch,'concurrency'))next.concurrency=patch.concurrency;
+      if(Object.hasOwn(patch,'concurrency')){
+        if(!Number.isInteger(patch.concurrency)||patch.concurrency<4||patch.concurrency>64)throw new ManagementError(tr('config.concurrencyMustBetween'),400);
+        next.concurrency=patch.concurrency;
+      }
       for(const k of ['cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs'])if(Object.hasOwn(patch,k))next.feishu[k]=patch[k];
       if(patch.newSecret!==undefined) {
         if(typeof patch.newSecret!=='string'||patch.newSecret.length>256)throw new ManagementError(tr("management.invalidSecretFormat"));

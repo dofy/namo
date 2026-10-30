@@ -591,7 +591,7 @@ export const chinese = {
   "config.codexSandboxMustReadWorkspaceWrite": "codex.sandbox 只能是 read-only 或 workspace-write",
   "config.codexOnly": "当前版本仅支持官方 Codex 执行后端。",
   "config.codexTimeoutmsMustBetween": "codex.timeoutMs 必须在 1000–7200000 之间",
-  "config.concurrencyMustBetween": "concurrency 必须在 1–8 之间",
+  "config.concurrencyMustBetween": "concurrency 必须在 4–64 之间",
   "config.configurationMustJsonObject": "配置必须是 JSON 对象",
   "config.datadirCodexHomeCodexBinMustNot": "dataDir、codex.home、codex.bin 不能是空字符串",
   "config.feishuCardsMustBoolean": "feishu.cards 必须是布尔值",
