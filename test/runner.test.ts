@@ -24,7 +24,7 @@ import {createInterface} from 'node:readline';
 import {appendFileSync,existsSync} from 'node:fs';
 import {join} from 'node:path';
 let cwd,thread='thread',turn='turn',timer;
-process.on('SIGTERM',()=>{if(!cwd||!existsSync(join(cwd,'hold-close')))process.exit(0);appendFileSync(join(cwd,'closing'),'ready');setInterval(()=>{if(existsSync(join(cwd,'exit-now')))process.exit(0);},5);});
+process.on('SIGTERM',()=>{if(!cwd||!existsSync(join(cwd,'hold-close')))process.exit(0);appendFileSync(join(cwd,'closing'),'ready');setInterval(()=>{if(existsSync(join(cwd,'exit-now'))){appendFileSync(join(cwd,'exiting'),'ready');process.exit(0);}},5);});
 const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
 const done=text=>{clearInterval(timer);send({method:'item/completed',params:{threadId:thread,turnId:turn,item:{id:'command',type:'commandExecution',command:'node --test',cwd,status:'completed',exitCode:0,durationMs:12}}});send({method:'turn/completed',params:{threadId:thread,turn:{id:turn,status:'completed',items:[{id:'final',type:'agentMessage',phase:'final_answer',text}]}}});};
 createInterface({input:process.stdin}).on('line',line=>{
@@ -250,7 +250,9 @@ test('cancellation committed before the final worker transaction wins even after
     assert.equal(f.job().state,'running');
     f.store.db.prepare("UPDATE inbox SET cancelRequested=1 WHERE key='a'").run();
     writeFileSync(join(f.project,'exit-now'),'exit');
-    await wait(()=>processState(f.job().runtimePid)==='dead');
+    // The worker can be blocked on the SQLite lock and cannot reap the child
+    // yet. A zombie PID still responds to signal 0 on macOS.
+    await wait(()=>existsSync(join(f.project,'exiting')));
     await new Promise(resolve=>setTimeout(resolve,150));
     f.store.db.exec('COMMIT');
   } catch(e) {f.store.db.exec('ROLLBACK');throw e;}
