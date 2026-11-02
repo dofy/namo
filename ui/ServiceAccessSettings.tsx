@@ -2,15 +2,16 @@ import {SettingsPanelDialog} from './SettingsPanelDialog';
 import type {ReactNode} from 'react';
 import { useEffect, useState, useRef } from 'react';
 import { Button, Flex, Heading, Text, TextField } from '@radix-ui/themes';
-import type { ConfigView } from '../src/ui-contract';
+import type { ConfigView, ProfileState } from '../src/ui-contract';
 import type { ProjectAccess } from '../src/access-contract';
-import { AudienceFields, emptyAudience, IdentityInput } from './AudienceFields';
+import { emptyAudience, IdentityInput } from './AudienceFields';
+import { ProjectAccessFields, accessSummary } from './ProjectAccessFields';
 import { Choice, ConfirmButton, Field, Notice } from './components';
 import { api, message } from './api';
 import { t as tr } from './i18n';
 
 const draftFrom=(c:ConfigView)=>({mode:c.feishu.access?'organization':'selected',tenantKey:c.feishu.access?.tenantKey??'',users:c.feishu.allowedUserIds??[],chats:c.feishu.allowedChatIds??[],projects:c.values.projectAccess??{}});
-function ServiceAccessEditor({config,refresh,expired,onStateChange,cancelControl}:{config:ConfigView;refresh:()=>Promise<unknown>;expired:boolean;onStateChange:(dirty:boolean,busy:boolean)=>void;cancelControl:ReactNode}) {
+function ServiceAccessEditor({config,profiles,refresh,expired,onStateChange,cancelControl}:{config:ConfigView;profiles?:ProfileState;refresh:()=>Promise<unknown>;expired:boolean;onStateChange:(dirty:boolean,busy:boolean)=>void;cancelControl:ReactNode}) {
   const [draft,setDraft]=useState(()=>draftFrom(config)),[revision,setRevision]=useState(config.revision),[dirty,setDirty]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const observedRevision=useRef(config.revision);
   useEffect(()=>{onStateChange(dirty,busy);},[dirty,busy]);
@@ -37,9 +38,8 @@ function ServiceAccessEditor({config,refresh,expired,onStateChange,cancelControl
         <Field label={tr("common.restrictChatsLeaveEmptyAllChats")} htmlFor="service-chats"><IdentityInput id="service-chats" value={draft.chats} onChange={chats=>edit({chats})}/></Field>
         <Heading as="h3" size="3" mt="4">{tr("serviceAccess.localProjectSharing")}</Heading>
         <Text as="p" size="2" color="gray">{tr("serviceAccess.organizationMembersUseIsolatedWorkspacesDefaultWithout")}</Text>
-        {Object.keys(config.values.projects).map(name=>{const value=draft.projects[name]??{...emptyAudience(),permission:'read-only' as const};return <details key={name}><summary>{name}</summary>
-          <AudienceFields id={`project-${name}`} value={value} onChange={a=>project(name,{...a,permission:value.permission})}/>
-          <Field label={tr("serviceAccess.projectFilePermissions")} htmlFor={`permission-${name}`}><Choice id={`permission-${name}`} value={value.permission} onChange={permission=>project(name,{...value,permission:permission as ProjectAccess['permission']})} options={[{value:'read-only',label:tr("common.read")},{value:'workspace-write',label:tr("common.allowProjectFileChanges")}]}/></Field>
+        {Object.keys(config.values.projects).map(name=>{const value=draft.projects[name]??{...emptyAudience(),permission:'read-only' as const};return <details className="service-project-access" key={name}><summary>{name} <span className="project-access-summary">{accessSummary(draft.projects[name])}</span></summary>
+          <ProjectAccessFields id={`service-project-${name}`} value={value} config={config} profiles={profiles} onChange={a=>project(name,a)}/>
         </details>;})}
       </fieldset>
       <Flex gap="3" mt="4" wrap="wrap" className="settings-editor-footer">{cancelControl}<Button type="submit" loading={busy} disabled={!dirty||expired||conflict}>{tr("serviceAccess.saveAccessSettings")}</Button><ConfirmButton disabled={busy||expired} title={tr("editor.discardTitle")} description={tr("editor.discardHelp")} action={tr("common.reload")} onConfirm={async()=>{setBusy(true);try{reset((await api.state()).config);}finally{setBusy(false);}}}>{tr("common.reload")}</ConfirmButton></Flex>
@@ -47,6 +47,6 @@ function ServiceAccessEditor({config,refresh,expired,onStateChange,cancelControl
   </section>;
 }
 
-export function ServiceAccessSettings(props:{config:ConfigView;refresh:()=>Promise<unknown>;expired:boolean}) {
+export function ServiceAccessSettings(props:{config:ConfigView;profiles?:ProfileState;refresh:()=>Promise<unknown>;expired:boolean}) {
  return <SettingsPanelDialog icon="profiles" title={tr('serviceAccess.organizationAccessProjectPermissions')} summary={tr('serviceAccess.administratorsConfigureServiceConnectionsMembersNotNeed')} disabled={props.expired}>{controls=><ServiceAccessEditor {...props} {...controls}/>}</SettingsPanelDialog>;
 }

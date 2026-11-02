@@ -503,6 +503,21 @@ html { scroll-padding-bottom:180px; }
 .workbench-main .save-bar { background: var(--namo-surface); border: 1px solid var(--panel-border); border-radius: var(--panel-radius); padding: 18px 24px; margin: 20px 0; }
 .workbench-main .save-bar > p { margin: 0; }
 .settings-page .projects { margin-top: 0; }
+.project-access-intro { margin: 0 0 14px; }
+.project-card { border: 1px solid var(--namo-border-soft); border-radius: 8px; padding: 14px; min-width: 0; }
+.project-access { margin-top: 12px; }
+.project-access > summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; cursor: pointer; }
+.project-access > summary::before { content: '▸'; margin-right: -8px; }
+.project-access[open] > summary::before { content: '▾'; }
+.project-access > summary > :first-child { margin-right: auto; }
+.project-access-summary, .project-access-empty { font-size: 12px; font-weight: 400; color: var(--gray-11); }
+.project-access-empty { color: var(--orange-11); }
+.project-access-fields { padding: 2px 0 0; }
+.audience-members { margin: 14px 0; }
+.audience-members > p { margin: 0 0 8px; }
+.audience-member-list { display: flex; gap: 10px 18px; flex-wrap: wrap; }
+.audience-advanced { margin: 12px 0; }
+.service-project-access > summary .project-access-summary { margin-left: 8px; }
 .settings-page .setting-options { margin-top: 12px; }
 .connections-page .connection { border: 0; padding: 0; margin: 0; align-items: flex-start; flex-wrap: wrap; }
 .connections-page .connection > .panel-heading { flex: 1 1 280px; }

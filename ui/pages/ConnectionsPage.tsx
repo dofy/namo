@@ -51,7 +51,7 @@ export function ConnectionsPage({ state, refresh, expired }: {
       <Text as="p" size="2" color="gray">{tr("connections.setupCannotConnectWhileAnotherReceiverActive")}</Text>
     </div>}
     </details></section>
-    <ServiceAccessSettings config={config} refresh={refresh} expired={expired} />
+    <ServiceAccessSettings config={config} profiles={profiles} refresh={refresh} expired={expired} />
     <McpSettings config={config} refresh={refresh} expired={expired} />
     <GitHubSettings config={config} profiles={profiles} refresh={refresh} expired={expired} />
     <OperationsPanel state={state} expired={expired}/>
