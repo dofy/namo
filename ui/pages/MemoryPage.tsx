@@ -127,16 +127,15 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
     <Text as="p" size="2" color="gray">{c.privacy}</Text>
     {!editable && <Notice error>{unavailableReason || c.conflict}</Notice>}
     {notice && <Notice>{notice}</Notice>}{error && <Notice error>{error}</Notice>}
-    <PageSection icon="search" title={tr("design.memoryBrowse")} description={tr("design.memoryHelp")}><div className="form-grid">
-      <Field label={c.owner} htmlFor="memory-owner"><Choice id="memory-owner" value={state?.ownerId??''} disabled={busy||!state}
+    <PageSection icon="search" title={tr("design.memoryBrowse")} description={tr("design.memoryHelp")}><div className="memory-browse-controls">
+      <Field className="memory-owner-field" label={c.owner} htmlFor="memory-owner"><Choice id="memory-owner" value={state?.ownerId??''} disabled={busy||!state}
         onChange={value => { setEditing(null);setScopeKind('owner');setDirectory('');setChatKey('');setNotice('');setError('');setBusy(true);void api.memories(value).then(setState).catch(failure=>setError(errorMessage(failure))).finally(()=>setBusy(false)); }}
         options={(state?.owners??[]).map(owner => ({ value: owner.id, label: owner.label }))} /></Field>
-      <Field label={c.search} htmlFor="memory-search"><TextField.Root id="memory-search" value={query} maxLength={120} onChange={event => setQuery(event.target.value)} /></Field>
+      <Field className="memory-search-field" label={c.search} htmlFor="memory-search"><TextField.Root id="memory-search" value={query} maxLength={120} onChange={event => setQuery(event.target.value)} /></Field>
+      <Button className="memory-refresh" variant="soft" color="gray" disabled={busy || !state} onClick={() => void act(() => api.memories(state!.ownerId), false)}>{c.refresh}</Button>
     </div>
-    <Flex direction="column" align="start" gap="2">
-      <Button variant="soft" color="gray" disabled={busy || !state} onClick={() => void act(() => api.memories(state!.ownerId), false)}>{c.refresh}</Button>
-      {state&&<Text as="p" size="1" color="gray">{c.capacity}: {state.items.filter(item=>item.status!=='deleted').length} / {state.limits.ownerEntries} {c.entries} · {state.items.reduce((sum,item)=>sum+item.contentChars,0)} / {state.limits.ownerChars} {c.chars}</Text>}
-    </Flex></PageSection>
+    {state&&<Text as="p" size="1" color="gray" className="memory-capacity">{c.capacity}: {state.items.filter(item=>item.status!=='deleted').length} / {state.limits.ownerEntries} {c.entries} · {state.items.reduce((sum,item)=>sum+item.contentChars,0)} / {state.limits.ownerChars} {c.chars}</Text>}
+    </PageSection>
     {state?.extraction&&<MemoryExtractionStatus value={state.extraction}/>}
 
     {busy && !state && <div className="loading" role="status"><Spinner />{tr("tasks.loadingRecords")}</div>}

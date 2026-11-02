@@ -23,8 +23,9 @@ export interface RunRequest {
   onProcess?: (pid: number) => void;
 }
 export interface RunControls { steer(text: string): Promise<'accepted' | 'not_active' | 'rejected'>; }
+export interface WaitQuestion { question: string; choices: string[]; }
 export interface WaitRequest {
-  threadId: string; turnId: string; callId: string; question: string; choices?: string[];
+  threadId: string; turnId: string; callId: string; question: string; choices?: string[]; questions?: WaitQuestion[];
   /** Present only when Codex called the separately validated external-wait tool. */
   external?: ExternalWaitRequest;
 }

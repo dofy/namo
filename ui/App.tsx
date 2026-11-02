@@ -1,6 +1,6 @@
 import { t as tr, setLocale, useLocale, useLanguagePreference, type MessageKey } from './i18n';
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
-import { Button, Flex, Heading, Link, Popover, Text } from '@radix-ui/themes';
+import { useCallback, useEffect, useId, useRef, useState, type MouseEvent } from 'react';
+import { Button, Dialog, Flex, Heading, Link, Popover, Tabs, Text } from '@radix-ui/themes';
 import { uiRoutes, type ManagementState, type UiPage } from '../src/ui-contract';
 import { api, ApiError, message } from './api';
 import { Choice, Notice } from './components';
@@ -11,6 +11,7 @@ import { TasksPage, type DetailTarget } from './pages/TasksPage';
 import { SchedulesPage } from './pages/SchedulesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
+import { OperationsPanel } from './OperationsPanel';
 import { MemoryProfilesPage } from './pages/MemoryProfilesPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { AssistantPage } from './pages/AssistantPage';
@@ -18,30 +19,69 @@ import { ChangelogPage } from './pages/ChangelogPage';
 import { ModelCatalogProvider } from './components/ModelSelect';
 import { Icon, type IconName } from './Icon';
 import { ThemeSwitch } from './ThemeSwitch';
+import { PageWatermark } from './components/PageWatermark';
 
 type NavigationPage = Exclude<UiPage, 'profiles'>;
 const pageIcons: Record<NavigationPage, IconName> = { assistant: 'assistant', memory: 'memory', dashboard: 'dashboard', tasks: 'tasks', schedules: 'schedules', sessions: 'sessions', settings: 'settings', connections: 'connections', changelog: 'changelog' };
 const navigationGroups: { label: MessageKey; pages: NavigationPage[] }[] = [
   { label: "nav.workspace", pages: ['dashboard', 'tasks', 'schedules', 'sessions'] },
   { label: "nav.personalization", pages: ['assistant', 'memory'] },
-  { label: "nav.management", pages: ['settings', 'connections', 'changelog'] },
+  { label: "nav.management", pages: ['settings', 'changelog'] },
 ];
 function currentRoute(): { page: NavigationPage; pathname: string; search: string } {
   const page = (Object.keys(uiRoutes) as UiPage[]).find(page => uiRoutes[page] === location.pathname) ?? 'dashboard';
-  return { page: page === 'profiles' ? 'memory' : page, pathname: location.pathname, search: location.search.slice(1) };
+  return { page: page === 'profiles' ? 'memory' : page === 'connections' ? 'settings' : page, pathname: location.pathname, search: location.search.slice(1) };
+}
+function serviceLabel(state: ManagementState | undefined, expired: boolean): string {
+  return expired || !state ? tr('app.notAuthorized') : state.service.ready ? tr('app.feishuConnected') : state.service.running ? tr('app.connectionNotReady') : tr('app.serviceStopped');
+}
+function SidebarControls({ state, expired, navigate, onRefresh, refreshing, mobile = false }: {
+  state: ManagementState | undefined; expired: boolean; navigate: (event: MouseEvent<HTMLAnchorElement>, page: NavigationPage) => void; onRefresh: () => void; refreshing: boolean; mobile?: boolean;
+}) {
+  const languagePreference = useLanguagePreference(), languageId = useId();
+  const [versionOpen, setVersionOpen] = useState(false);
+  const application = { applied: tr('app.savedConfigurationActive'), pending: tr('app.configurationSavedApplyActivate'), unknown: tr('app.serviceConfigurationVersionUnavailable'), stopped: tr('app.configurationApplyNextStart') };
+  return <div className={mobile ? 'mobile-menu-controls' : 'sidebar-foot'}><div className="service-status"><div className="service-status-row"><div><span className={`dot ${state?.service.ready ? 'ready' : ''}`} />
+    <Text weight="medium" size="2">{serviceLabel(state, expired)}</Text></div>
+    <Button className="service-refresh" variant="ghost" color="gray" size="1" aria-label={tr('common.refreshStatus')} title={tr('common.refreshStatus')} disabled={!state || expired} loading={refreshing} onClick={onRefresh}><Icon name="refresh" /></Button></div>
+    {state && state.config.application !== 'applied' && <Text as="p" size="1" color="gray">{state.config.automaticConfiguration&&state.config.application==='pending'?tr(state.config.configurationReload==='error'?'settings.configurationReloadError':'settings.configurationDraining'):application[state.config.application]}</Text>}</div>
+    <ThemeSwitch />
+    <div className="language-control"><label className="sr-only" htmlFor={languageId}>Language / 语言</label>
+      <Choice id={languageId} value={languagePreference} onChange={value => setLocale(value as LanguagePreference)} options={[{ value: 'system', label: tr('language.system') }, { value: 'en', label: 'English' }, { value: 'zh-CN', label: '简体中文' }]} />
+    </div>
+    <div className="sidebar-links">
+      <Popover.Root open={versionOpen} onOpenChange={setVersionOpen}><Popover.Trigger><Button className="version-button" variant="ghost" color="gray" size="1" aria-label={tr('app.versionLabel', __NAMO_VERSION__)}>v{__NAMO_VERSION__}<Icon name="info" size={13} /></Button></Popover.Trigger>
+        <Popover.Content className="version-popover" size="2" aria-label={tr('app.versionInformation')}>
+          <Flex justify="between" align="center" gap="3"><Heading as="h2" size="3">{tr('app.versionInformation')}</Heading><Popover.Close><Button type="button" variant="soft" color="gray" size="1"><Icon name="close"/>{tr('common.close')}</Button></Popover.Close></Flex>
+          <dl><dt>{tr('app.workbenchVersion')}</dt><dd>v{__NAMO_VERSION__}</dd>
+            <dt>{tr('app.runningServiceRelease')}</dt><dd>{state?.service.running && state.service.release?.running ? state.service.release.running.slice(0,12) : tr('app.notReported')}</dd>
+            {state?.service.release?.installed && state.service.release.installed !== state.service.release.running && <><dt>{tr('app.installedServiceRelease')}</dt><dd>{state.service.release.installed.slice(0,12)}</dd></>}
+          </dl><Text as="p" size="1" color="gray">{tr('app.localAccess')}</Text>
+          <Link href={uiRoutes.changelog} onClick={event => { navigate(event, 'changelog'); setVersionOpen(false); }}>{tr('changelog.view')}</Link>
+        </Popover.Content></Popover.Root>
+      <Link className="repository-link" href={REPOSITORY_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub · dofy/namo"><Icon name="external" /><span>GitHub</span></Link>
+    </div>
+  </div>;
 }
 export function App({ initial, startupError }: { initial?: ManagementState; startupError?: string }) {
-  const locale = useLocale(), languagePreference = useLanguagePreference();
-  const pages: Record<NavigationPage, string> = { assistant:tr("nav.assistantSettings"), memory:tr("nav.memoryProfiles"), dashboard: tr("nav.dashboard"), tasks: tr("nav.tasks"), schedules:tr('nav.schedules'), sessions: tr("nav.sessions"), settings: tr("nav.directoryPermissions"), connections: tr("nav.connections"), changelog:tr('changelog.title') };
+  const locale = useLocale();
+  const pages: Record<NavigationPage, string> = { assistant:tr("nav.assistantSettings"), memory:tr("nav.memoryProfiles"), dashboard: tr("nav.dashboard"), tasks: tr("nav.tasks"), schedules:tr('nav.schedules'), sessions: tr("nav.sessions"), settings: tr("nav.directories"), connections: tr("nav.connections"), changelog:tr('changelog.title') };
   const navigation: Record<NavigationPage, string> = { ...pages, assistant:tr("nav.assistant"), settings:tr("nav.directories"), connections:tr("nav.connections") };
-  const descriptions: Record<NavigationPage, string> = { assistant:tr("app.configureAssistantIdentityPresentationPreferences"), memory:tr("app.manageMemoriesConversationsNamesLanguagesTimeZones"), dashboard: tr("app.activityItemsNeedAttention"), tasks: tr("app.findTasksFollowTheirProgressResults"), schedules:tr('schedules.description'), sessions: tr("app.pickUpWhereEachConversationLeftOff"), settings: tr("app.chooseWhereAgentWorksWhatCan"), connections: tr("app.manageCodexFeishuGithubConnections"), changelog:tr('changelog.description') };
+  const descriptions: Record<NavigationPage, string> = { assistant:tr("app.configureAssistantIdentityPresentationPreferences"), memory:tr("app.manageMemoriesConversationsNamesLanguagesTimeZones"), dashboard: tr("app.activityItemsNeedAttention"), tasks: tr("app.findTasksFollowTheirProgressResults"), schedules:tr('schedules.description'), sessions: tr("app.pickUpWhereEachConversationLeftOff"), settings: tr("settings.pageDescription"), connections: tr("app.manageCodexFeishuGithubConnections"), changelog:tr('changelog.description') };
   const [state, setState] = useState(initial), [route, setRoute] = useState(currentRoute), [target, setTarget] = useState<DetailTarget | null>(null);
   const { page: view, pathname, search } = route;
+  const requestedSettingsTab = new URLSearchParams(search).get('tab');
+  const settingsTab = requestedSettingsTab === 'feishu' || requestedSettingsTab === 'connections' || requestedSettingsTab === 'maintenance' ? requestedSettingsTab : pathname === uiRoutes.connections ? 'connections' : 'work';
   const memoryTab = pathname === uiRoutes.profiles || new URLSearchParams(search).get('tab') === 'profiles' ? 'profiles' : 'memory';
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(startupError ? { text: startupError, error: true } : null);
   const [refreshing, setRefreshing] = useState(false), [expired, setExpired] = useState(false);
-  const [versionOpen, setVersionOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const sequence = useRef(0), opener = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const closeOnDesktop = () => { if (window.innerWidth > 820) setMenuOpen(false); };
+    window.addEventListener('resize', closeOnDesktop);
+    return () => window.removeEventListener('resize', closeOnDesktop);
+  }, []);
   useEffect(() => {
     const restorePage = () => { setRoute(currentRoute()); setTarget(null); };
     window.addEventListener('popstate', restorePage);
@@ -83,7 +123,10 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
     timer = setTimeout(tick, 5000);
     return () => { clearTimeout(timer); controller.abort(); };
   }, [initial, expired, target, refresh, notify]);
-  const application = { applied: tr("app.savedConfigurationActive"), pending: tr("app.configurationSavedApplyActivate"), unknown: tr("app.serviceConfigurationVersionUnavailable"), stopped: tr("app.configurationApplyNextStart") };
+  const refreshStatus = async () => {
+    setRefreshing(true);
+    try { await refresh(); } catch (e) { notify(message(e), true); } finally { setRefreshing(false); }
+  };
   return <div className="app-shell">
     <aside className="sidebar">
       <a href={uiRoutes.dashboard} className="brand" onClick={event => navigate(event, 'dashboard')}><img src="/logo.png" alt={tr("app.namoFoxLogo")} /><span><span className="brand-wordmark">Namo</span><small>{tr("app.localWorkbench")}</small></span></a>
@@ -94,37 +137,31 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
             <a href={uiRoutes[key]} aria-current={view === key ? 'page' : undefined} onClick={event => navigate(event, key)}><Icon name={pageIcons[key]} size={18} /><span>{navigation[key]}</span></a>
           </Button>)}</div>
       </div>)}</nav>
-      <div className="mobile-navigation"><label className="sr-only" htmlFor="workbench-page">{tr("nav.main")}</label>
-        <Choice id="workbench-page" value={view} onChange={value => go(uiRoutes[value as NavigationPage])} options={navigationGroups.flatMap(group => group.pages.map(key => ({value:key,label:pages[key]})))} />
+      <div className="mobile-masthead-status"><span className={`dot ${state?.service.ready ? 'ready' : ''}`} />
+        <span>{serviceLabel(state, expired)}</span>
       </div>
-      <div className="sidebar-foot"><div className="service-status"><span className={`dot ${state?.service.ready ? 'ready' : ''}`} />
-        <Text weight="medium" size="2">{expired || !state ? tr("app.notAuthorized") : state.service.ready ? tr("app.feishuConnected") : state.service.running ? tr("app.connectionNotReady") : tr("app.serviceStopped")}</Text>
-        {state && state.config.application !== 'applied' && <Text as="p" size="1" color="gray">{state.config.automaticConfiguration&&state.config.application==='pending'?tr(state.config.configurationReload==='error'?'settings.configurationReloadError':'settings.configurationDraining'):application[state.config.application]}</Text>}</div>
-        <ThemeSwitch />
-        <div className="language-control">
-          <label className="sr-only" htmlFor="workbench-language">Language / 语言</label>
-          <Choice id="workbench-language" value={languagePreference} onChange={value => setLocale(value as LanguagePreference)} options={[{ value: 'system', label: tr("language.system") }, { value: 'en', label: 'English' }, { value: 'zh-CN', label: '简体中文' }]} />
-        </div>
-        <div className="sidebar-links">
-          <Popover.Root open={versionOpen} onOpenChange={setVersionOpen}><Popover.Trigger><Button className="version-button" variant="ghost" color="gray" size="1" aria-label={tr("app.versionLabel", __NAMO_VERSION__)}>v{__NAMO_VERSION__}<Icon name="info" size={13} /></Button></Popover.Trigger>
-            <Popover.Content className="version-popover" size="2" aria-label={tr("app.versionInformation")}>
-              <Flex justify="between" align="center" gap="3"><Heading as="h2" size="3">{tr("app.versionInformation")}</Heading><Popover.Close><Button type="button" variant="soft" color="gray" size="1"><Icon name="close"/>{tr("common.close")}</Button></Popover.Close></Flex>
-              <dl><dt>{tr("app.workbenchVersion")}</dt><dd>v{__NAMO_VERSION__}</dd>
-                <dt>{tr("app.runningServiceRelease")}</dt><dd>{state?.service.running && state.service.release?.running ? state.service.release.running.slice(0,12) : tr("app.notReported")}</dd>
-                {state?.service.release?.installed && state.service.release.installed !== state.service.release.running && <><dt>{tr("app.installedServiceRelease")}</dt><dd>{state.service.release.installed.slice(0,12)}</dd></>}
-              </dl><Text as="p" size="1" color="gray">{tr("app.localAccess")}</Text>
-              <Link href={uiRoutes.changelog} onClick={event => { navigate(event, 'changelog'); setVersionOpen(false); }}>{tr('changelog.view')}</Link>
-            </Popover.Content></Popover.Root>
-          <Link className="repository-link" href={REPOSITORY_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub · dofy/namo"><Icon name="external" /><span>GitHub</span></Link>
-        </div>
-      </div>
+      <Dialog.Root open={menuOpen} onOpenChange={setMenuOpen}>
+        <Dialog.Trigger><Button className="mobile-menu-trigger" variant="soft" color="gray"><Icon name="menu" size={19}/><span>{tr('nav.menu')}</span></Button></Dialog.Trigger>
+        <Dialog.Content className="mobile-menu-dialog" aria-describedby={undefined}>
+          <div className="mobile-menu-header"><div><Dialog.Title>{tr('nav.main')}</Dialog.Title><Text as="p" size="1" color="gray">{tr('app.localWorkbench')}</Text></div>
+            <Dialog.Close><Button variant="ghost" color="gray" aria-label={tr('common.close')}><Icon name="close" size={20}/></Button></Dialog.Close></div>
+          <nav className="mobile-menu-navigation" aria-label={tr('nav.main')}>
+            {navigationGroups.map(group => <div className="mobile-menu-group" key={group.label}>
+              <Text as="p" size="1" color="gray">{tr(group.label)}</Text>
+              <div className="mobile-menu-links">{group.pages.map(key => <a key={key} href={uiRoutes[key]} aria-current={view === key ? 'page' : undefined} onClick={event => { navigate(event, key); setMenuOpen(false); }}>
+                  <Icon name={pageIcons[key]} size={18}/><span>{navigation[key]}</span>
+                </a>)}</div>
+            </div>)}
+          </nav>
+          <SidebarControls state={state} expired={expired} navigate={(event, page) => { navigate(event, page); setMenuOpen(false); }} onRefresh={() => void refreshStatus()} refreshing={refreshing} mobile />
+        </Dialog.Content>
+      </Dialog.Root>
+      <SidebarControls state={state} expired={expired} navigate={navigate} onRefresh={() => void refreshStatus()} refreshing={refreshing} />
     </aside>
     <main className={`workbench-main page-${view}`}>
-      <header className="page-header"><div className="page-heading"><span className="page-icon"><Icon name={pageIcons[view]} size={24} /></span><div><Heading as="h1" size="7">{pages[view]}</Heading>
+      <header className="page-header"><div className="page-heading"><span className="page-icon"><PageWatermark name={pageIcons[view]} /></span><div><Heading as="h1" size="7">{pages[view]}</Heading>
         <Text as="p" size="2" color="gray">{descriptions[view]}</Text></div></div>
-        <Button variant="outline" color="gray" disabled={!state || expired} loading={refreshing} onClick={async () => {
-          setRefreshing(true); try { await refresh(); } catch (e) { notify(message(e), true); } finally { setRefreshing(false); }
-        }}><Icon name="refresh" />{tr("common.refreshStatus")}</Button>
+
       </header>
       {notice && <Notice error={notice.error}>{notice.text}</Notice>}
       {state && <ModelCatalogProvider revision={state.config.revision}>
@@ -137,8 +174,21 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
         {view === 'dashboard' && <section aria-label={tr("app.dashboardContent")}><DashboardPage state={state} navigate={go} onOpen={onOpen} enabled={!expired} /></section>}
         {(view === 'tasks' || view === 'sessions') && <section aria-label={view === 'tasks' ? tr("app.taskContent") : tr("app.sessionContent")}><TasksPage key={view} kind={view} state={state} onOpen={onOpen} navigate={go} search={search} enabled={!expired} /></section>}
         {view === 'schedules' && <SchedulesPage state={state} search={search} navigate={go} enabled={!expired} />}
-        <section hidden={view !== 'settings'} aria-label={tr("app.directoriesPermissionsContent")}><SettingsPage config={state.config} profiles={state.profiles} recoveryAvailable={state.recoveryAvailable && !expired} refresh={refresh} notify={notify} /></section>
-        <section hidden={view !== 'connections'} aria-label={tr("app.agentFeishuContent")}><ConnectionsPage state={state} refresh={refresh} expired={expired} /></section>
+        <section className="settings-container" hidden={view !== 'settings'} aria-label={tr("nav.directories")}>
+          <Tabs.Root className="settings-tabs" value={settingsTab} onValueChange={tab => go(tab === 'work' ? uiRoutes.settings : `${uiRoutes.settings}?tab=${tab}`)}>
+            <Tabs.List aria-label={tr('settings.sections')}>
+              <Tabs.Trigger value="work">{tr('settings.workSection')}</Tabs.Trigger>
+              <Tabs.Trigger value="feishu">{tr('settings.feishuMessages')}</Tabs.Trigger>
+              <Tabs.Trigger value="connections">{tr('nav.connections')}</Tabs.Trigger>
+              <Tabs.Trigger value="maintenance">{tr('settings.maintenanceSection')}</Tabs.Trigger>
+            </Tabs.List>
+            <SettingsPage tab={settingsTab} onTabChange={tab => go(`${uiRoutes.settings}?tab=${tab}`)} config={state.config} profiles={state.profiles} recoveryAvailable={state.recoveryAvailable && !expired} refresh={refresh} notify={notify}
+              operations={<OperationsPanel state={state} expired={expired}/>} />
+            <Tabs.Content value="connections" forceMount hidden={settingsTab !== 'connections'} className="settings-tab-panel">
+              <ConnectionsPage state={state} refresh={refresh} expired={expired} />
+            </Tabs.Content>
+          </Tabs.Root>
+        </section>
         {view === 'changelog' && <ChangelogPage />}
       </ModelCatalogProvider>}
     </main>

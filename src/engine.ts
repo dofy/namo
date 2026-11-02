@@ -414,7 +414,7 @@ export class Engine {
         }).catch(()=>this.log('external_wait_poll_failed')).finally(()=>{this.externalPolling=undefined;});
       }
       void this.artifacts.tick().catch(()=>this.fatal('artifact_storage_error'));
-      void this.feedback.tick({progress:this.config.feishu?.progressUpdates,cadenceMs:this.config.feishu?.progressIntervalMs,heartbeatMs:this.config.feishu?.progressHeartbeatMs}).catch(()=>this.fatal('feedback_storage_error'));
+      void this.feedback.tick({waitCards:!!this.config.feishu?.cards,progress:this.config.feishu?.progressUpdates,cadenceMs:this.config.feishu?.progressIntervalMs,heartbeatMs:this.config.feishu?.progressHeartbeatMs}).catch(()=>this.fatal('feedback_storage_error'));
       // Extraction is background work: yield its slot when a user task arrives.
       if(this.memoryRunning){
         const activeIds=new Set([...this.active.values()].map(a=>a.run));
@@ -526,7 +526,7 @@ export class Engine {
         onTurn: turnId => { const threadId = this.store.thread(this.tasks.sessionKey(task)); if (threadId) { this.store.saveRun(m.key, threadId, turnId); this.tasks.saveRun(run, threadId, turnId); } },
         onReady: controls => { const slot = this.active.get(this.slotKey(task)); if (slot?.task.id === task.id) { slot.controls = controls; void this.steer(slot).catch(() => this.fatal('revision_storage_error')); } },
         onEvidence: item => evidence!.observe(item),
-        onWait: request => requestWait(this.store, task.id, run, { ...request, question: this.redact(request.question), choices: request.choices?.map(value => this.redact(value)) }),
+        onWait: request => requestWait(this.store, task.id, run, { ...request, question: this.redact(request.question), choices: request.choices?.map(value => this.redact(value)), questions: request.questions?.map(q => ({question:this.redact(q.question),choices:q.choices.map(v => this.redact(v))})) }),
       });
       await this.active.get(this.slotKey(task))?.steering;
       if (this.config.file) { assertReviewDelivery(this.store,loadConfig(this.config.file),task); assertMcpDelivery(this.store,loadConfig(this.config.file),task); }

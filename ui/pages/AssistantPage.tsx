@@ -5,6 +5,7 @@ import { getLocale, t as tr } from '../i18n';
 import { Icon } from '../Icon';
 import { SettingToggle } from '../components/SettingToggle';
 import { Choice, ConfirmButton, Field, Notice } from '../components';
+import { useToast } from '../Toast';
 
 // Browser-only mirror of src/assistant.ts's JSON contract. Keeping this page
 // free of server imports prevents Node/SQLite code from entering the UI graph.
@@ -35,7 +36,6 @@ const copy = () => ({
   intro: tr("assistant.intro"),
   local: tr("assistant.local"),
   legacy: tr("assistant.legacy"),
-  active: tr("assistant.active"),
   inactive: tr("assistant.inactive"),
   version: tr("assistant.version"),
   name: tr("assistant.name"),
@@ -83,21 +83,21 @@ const valuesOf = (settings: AssistantPageSettings): AssistantPageValues => ({ ..
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 export function AssistantPage({ settings, editable, unavailableReason, save, reset, preview, refresh }: AssistantPageProps) {
-  const c = copy();
+  const c = copy(), toast = useToast();
   const [draft, setDraft] = useState(() => valuesOf(settings));
   const [baseVersion, setBaseVersion] = useState(settings.version);
   const [dirty, setDirty] = useState(false), [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState(''), [error, setError] = useState(''), [sample, setSample] = useState('');
+  const [sample, setSample] = useState('');
   const observed = useRef(settings);
   const conflict = settings.version !== baseVersion;
   const canEdit = editable && !conflict;
   const active = baseVersion > 0;
 
   function load(next: AssistantPageSettings) {
-    setDraft(valuesOf(next)); setBaseVersion(next.version); setDirty(false); setError(''); setSample('');
+    setDraft(valuesOf(next)); setBaseVersion(next.version); setDirty(false); setSample('');
   }
   function change(patch: Partial<AssistantPageValues>) {
-    setDraft(current => ({ ...current, ...patch })); setDirty(true); setNotice(''); setSample('');
+    setDraft(current => ({ ...current, ...patch })); setDirty(true); setSample('');
   }
   useEffect(() => {
     if (observed.current !== settings && !dirty && !busy && settings.version >= baseVersion) load(settings);
@@ -111,23 +111,30 @@ export function AssistantPage({ settings, editable, unavailableReason, save, res
 
   async function persist() {
     if ((!dirty && active) || !canEdit || busy) return;
-    setBusy(true); setError(''); setNotice('');
+    setBusy(true);
     try {
-      const next = await save(baseVersion, draft); load(next); setNotice(c.saved);
+      const next = await save(baseVersion, draft); load(next); toast(c.saved);
       try { await refresh?.(); } catch { /* The save result is authoritative; a later poll may refresh status. */ }
-    } catch (failure) { setError(errorMessage(failure)); }
+    } catch (failure) { toast(errorMessage(failure), true); }
     finally { setBusy(false); }
   }
 
+  const lengthOptions = [
+    { value: 'concise', label: c.concise, description: tr('assistant.conciseHelp') },
+    { value: 'balanced', label: c.balanced, description: tr('assistant.balancedLengthHelp') },
+    { value: 'detailed', label: c.detailed, description: tr('assistant.detailedHelp') },
+  ] as const;
+  const detailOptions = [
+    { value: 'essential', label: c.essential, description: tr('assistant.essentialHelp') },
+    { value: 'balanced', label: c.balanced, description: tr('assistant.balancedDetailHelp') },
+    { value: 'deep', label: c.deep, description: tr('assistant.deepHelp') },
+  ] as const;
+
   return <div className="profiles-page assistant-settings">
-    <div className="assistant-state">
-      <span className="assistant-state-icon"><Icon name={active ? 'check' : 'settings'} size={21} /></span>
-      <div><Text as="p" size="2" weight="medium">{active ? c.active : c.inactive}</Text>
-        <Text as="p" size="2" color="gray">{active ? tr('assistant.activeHelp') : c.legacy}</Text></div>
-    </div>
+    {!active && <div className="assistant-state"><span className="assistant-state-icon"><Icon name="info" size={19} /></span>
+      <Text as="p" size="2">{c.legacy}</Text></div>}
     {!editable && <Notice error>{unavailableReason || c.local}</Notice>}
     {conflict && <Notice>{c.conflict}</Notice>}
-    {notice && <Notice>{notice}</Notice>}{error && <Notice error>{error}</Notice>}
 
     <form onSubmit={event => { event.preventDefault(); void persist(); }}>
       <fieldset disabled={!canEdit || busy}>
@@ -158,21 +165,21 @@ export function AssistantPage({ settings, editable, unavailableReason, save, res
             <Text as="p" size="2" weight="medium" id="assistant-length-label">{c.replyLength}</Text>
             <RadioCards.Root className="assistant-choices" aria-labelledby="assistant-length-label" value={draft.replyLength} disabled={!canEdit || busy}
               onValueChange={value => change({ replyLength: value as AssistantPageValues['replyLength'] })}>
-              {([{value:'concise',label:c.concise,description:tr('assistant.conciseHelp')},{value:'balanced',label:c.balanced,description:tr('assistant.balancedLengthHelp')},
-                {value:'detailed',label:c.detailed,description:tr('assistant.detailedHelp')}] as const).map(option => <RadioCards.Item key={option.value} value={option.value}>
-                <span className="assistant-choice-copy"><strong>{option.label}</strong><span>{option.description}</span></span>
+              {lengthOptions.map(option => <RadioCards.Item key={option.value} value={option.value} aria-label={`${option.label}: ${option.description}`}>
+                {option.label}
               </RadioCards.Item>)}
             </RadioCards.Root>
+            <Text as="p" size="1" color="gray" className="assistant-choice-description">{lengthOptions.find(option => option.value === draft.replyLength)?.description}</Text>
           </div>
           <div className="assistant-choice-group">
             <Text as="p" size="2" weight="medium" id="assistant-detail-label">{c.detail}</Text>
             <RadioCards.Root className="assistant-choices" aria-labelledby="assistant-detail-label" value={draft.technicalDetail} disabled={!canEdit || busy}
               onValueChange={value => change({ technicalDetail: value as AssistantPageValues['technicalDetail'] })}>
-              {([{value:'essential',label:c.essential,description:tr('assistant.essentialHelp')},{value:'balanced',label:c.balanced,description:tr('assistant.balancedDetailHelp')},
-                {value:'deep',label:c.deep,description:tr('assistant.deepHelp')}] as const).map(option => <RadioCards.Item key={option.value} value={option.value}>
-                <span className="assistant-choice-copy"><strong>{option.label}</strong><span>{option.description}</span></span>
+              {detailOptions.map(option => <RadioCards.Item key={option.value} value={option.value} aria-label={`${option.label}: ${option.description}`}>
+                {option.label}
               </RadioCards.Item>)}
             </RadioCards.Root>
+            <Text as="p" size="1" color="gray" className="assistant-choice-description">{detailOptions.find(option => option.value === draft.technicalDetail)?.description}</Text>
           </div>
           <div className="setting-options">
             <SettingToggle icon="tasks" title={c.conclusion} description={tr('assistant.conclusionHelp')} checked={draft.conclusionFirst}
@@ -191,10 +198,10 @@ export function AssistantPage({ settings, editable, unavailableReason, save, res
         <Text as="p" size="2" color="gray">{dirty ? c.draft : tr('assistant.saveHelp')}</Text>
         <Button type="submit" disabled={(!dirty && active) || !canEdit} loading={busy}><Icon name="save" />{active ? c.save : tr('assistant.enable')}</Button>
         {dirty && <ConfirmButton disabled={busy} title={c.reloadTitle} description={c.reloadDescription} action={c.reload} onConfirm={async () => {
-          load(settings); setNotice('');
+          load(settings);
         }}>{c.reload}</ConfirmButton>}
         <ConfirmButton disabled={busy || dirty || !editable} title={c.resetTitle} description={c.resetDescription} action={c.reset} onConfirm={async () => {
-          const next = await reset(settings.version); load(next); setNotice(c.resetDone); try { await refresh?.(); } catch { /* Keep returned state. */ }
+          const next = await reset(settings.version); load(next); toast(c.resetDone); try { await refresh?.(); } catch { /* Keep returned state. */ }
         }}>{c.reset}</ConfirmButton>
       </Flex>
     </form>
@@ -203,7 +210,7 @@ export function AssistantPage({ settings, editable, unavailableReason, save, res
       <summary>{c.preview}</summary>
       <Text as="p" size="2" color="gray">{c.previewHelp}</Text>
       <Button type="button" variant="soft" disabled={busy} onClick={async () => {
-        setError(''); try { setSample(await preview({ ...draft, defaultLanguage: draft.defaultLanguage === 'auto' ? (getLocale() === 'zh-CN' ? 'zh-CN' : 'en-US') : draft.defaultLanguage })); } catch (failure) { setError(errorMessage(failure)); }
+        try { setSample(await preview({ ...draft, defaultLanguage: draft.defaultLanguage === 'auto' ? (getLocale() === 'zh-CN' ? 'zh-CN' : 'en-US') : draft.defaultLanguage })); } catch (failure) { toast(errorMessage(failure), true); }
       }}>{c.previewAction}</Button>
       {sample && <TextArea mt="3" value={sample} readOnly rows={5} aria-label={c.preview} />}
     </details>

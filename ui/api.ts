@@ -16,6 +16,8 @@ async function request<T>(path: string, body?: unknown, signal?: AbortSignal): P
   return data as T;
 }
 export const api = {
+  chooseDirectory:()=>request<{status:'selected';path:string}|{status:'cancelled'|'unavailable'}>('/api/choose-directory',{}),
+  directories: (path?:string,signal?:AbortSignal)=>request<{path:string;parent:string|null;selectable:boolean;directories:{name:string;path:string}[]}>(`/api/directories${path===undefined?'':`?path=${encodeURIComponent(path)}`}`,undefined,signal),
   organization:()=>request<{tenantKey:string;name:string}>('/api/organization',{}),
   mcpOAuthScopes:(revision:string,url:string)=>request<{scopes:string[];recommended:string[];published:boolean;issuer:string}>('/api/mcp-oauth-scopes',{revision,url}),
   cancelMcpOAuth:(id:string)=>request('/api/mcp-oauth-cancel',{id}),

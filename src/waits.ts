@@ -1,12 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import type { Incoming, Store } from './store.js';
 import type { Task } from './tasks.js';
-import { RuntimeError, validWaitChoices, type WaitRequest, type WaitResult } from './runtime.js';
+import { RuntimeError, validWaitChoices, validWaitQuestions, type WaitRequest, type WaitResult } from './runtime.js';
 import { ExternalWaits } from './external-waits.js';
 
 export interface TaskWait extends WaitResult {
   taskId: string; runId: string; inputVersion: number; state: string; createdAt: number;
-  settledAt?: number; replyInboxKey?: string; replyVersion?: number;
+  settledAt?: number; replyInboxKey?: string; replyVersion?: number; answers?: (number | null)[];
 }
 export class WaitInputError extends Error {}
 export const HUMAN_WAIT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
@@ -28,9 +28,16 @@ export class Waits {
   private decode(row: unknown): TaskWait | undefined {
     if (!row) return;
     const value = row as Omit<TaskWait, 'choices'> & { choices?: string | null };
-    const choices: unknown = value.choices ? JSON.parse(value.choices) : undefined;
-    if (choices !== undefined && !validWaitChoices(choices)) throw new RuntimeError('wait_invalid_choices');
-    return { ...value, choices } as TaskWait;
+    const data: unknown = value.choices ? JSON.parse(value.choices) : undefined;
+    if (data && !Array.isArray(data) && typeof data === 'object') {
+      const group = data as {questions?: unknown; answers?: unknown};
+      if (!validWaitQuestions(group.questions) || !Array.isArray(group.answers) || group.answers.length !== group.questions.length) throw new RuntimeError('wait_invalid_choices');
+      const questions=group.questions;
+      if (!group.answers.every((v, i) => v === null || Number.isInteger(v) && v >= 0 && v < questions[i].choices.length)) throw new RuntimeError('wait_invalid_choices');
+      return { ...value, choices: undefined, questions: group.questions, answers: group.answers } as TaskWait;
+    }
+    if (data !== undefined && !validWaitChoices(data)) throw new RuntimeError('wait_invalid_choices');
+    return { ...value, choices: data } as TaskWait;
   }
   list(taskId: string): unknown[] {
     if (!this.store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_waits'").get()) return [];
@@ -62,12 +69,12 @@ export class Waits {
         || row.threadId !== request.threadId || row.turnId !== request.turnId) throw new RuntimeError('wait_identity_mismatch');
       if (this.current(taskId) || this.store.db.prepare('SELECT 1 FROM task_waits WHERE runId=?').get(runId)) throw new RuntimeError('wait_already_requested');
       if (!request.question.trim() || [...request.question].length > 1500 || !request.callId) throw new RuntimeError('wait_invalid_request');
-      if (request.choices !== undefined && !validWaitChoices(request.choices)) throw new RuntimeError('wait_invalid_choices');
+      if (request.choices !== undefined && !validWaitChoices(request.choices) || request.questions !== undefined && (!validWaitQuestions(request.questions) || request.choices !== undefined)) throw new RuntimeError('wait_invalid_choices');
       if (this.store.db.prepare("SELECT 1 FROM task_messages WHERE taskId=? AND role='revision' AND dispatch NOT IN ('accepted','applied')").get(taskId))
         throw new RuntimeError('wait_unresolved_revision');
       const id = `WAIT-${randomBytes(6).toString('hex').toUpperCase()}`;
       this.store.db.prepare(`INSERT INTO task_waits(id,taskId,runId,threadId,turnId,callId,question,inputVersion,state,createdAt,choices)
-        VALUES(?,?,?,?,?,?,?,?,'requested',?,?)`).run(id, taskId, runId, request.threadId, request.turnId, request.callId, request.question.trim(), Number(row.inputVersion), Date.now(), request.choices ? JSON.stringify(request.choices) : null);
+        VALUES(?,?,?,?,?,?,?,?,'requested',?,?)`).run(id, taskId, runId, request.threadId, request.turnId, request.callId, request.question.trim(), Number(row.inputVersion), Date.now(), request.questions ? JSON.stringify({questions:request.questions,answers:request.questions.map(()=>null)}) : request.choices ? JSON.stringify(request.choices) : null);
       return id;
     });
   }
@@ -85,7 +92,7 @@ export class Waits {
       const external = linkedExternalWait(this.store, w.id);
       this.store.addOutput(task.inboxKey, `wait:${w.id}`, external
         ? `${w.question}\n\n系统会只读核对固定的 PR HEAD；普通回复、引用、按钮或 /resume 都不会跳过条件。等待期间不会继续执行；/cancel ${task.id} 可停止任务。`
-        : `${w.question}${w.choices ? '\n选项：' + w.choices.join(' / ') : ''}\n\n请引用这条消息回复，或发送：\n/resume ${w.id} 你的回答\n等待最长 24 小时，超时后任务结束；/cancel ${task.id} 可停止任务。`);
+        : `${w.question}${w.choices ? '\n选项：' + w.choices.join(' / ') : ''}${w.questions ? '\n\n' + w.questions.map((q,i)=>`${i+1}. ${q.question}\n${q.choices.join(' / ')}`).join('\n\n') : ''}\n\n请引用这条消息回复，或发送：\n/resume ${w.id} 你的回答\n等待最长 24 小时，超时后任务结束；/cancel ${task.id} 可停止任务。`);
     });
   }
   answer(w: TaskWait, m: Incoming, reply: string): void {
@@ -103,6 +110,26 @@ export class Waits {
       if (t.inputVersion >= 100) throw new WaitInputError('本任务已达到输入版本上限，请先取消，再明确发起后续任务。');
       if (this.store.db.prepare('SELECT state FROM task_runs WHERE id=?').get(w.runId)?.state !== 'waiting') throw new WaitInputError('上一轮执行尚未确认结束，未恢复任务。');
       this.settle(current, t, m.key);
+    });
+  }
+  /** Record one choice atomically. A choice is never an authorization to perform an operation. */
+  answerChoice(w: TaskWait, m: Incoming, questionIndex: number, choiceIndex: number): boolean {
+    this.expire();
+    return this.store.transaction(() => {
+      const current=this.get(w.id), task=this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(w.taskId) as unknown as Task | undefined;
+      if (!task || task.ownerId!==m.senderId || task.chatKey!==m.chatKey || task.scopeKey!==(m.envelope?.scopeKey ?? m.chatKey)) throw new WaitInputError('未找到本话题中属于你的等待事项。');
+      if (!current || linkedExternalWait(this.store,w.id) || current.state!=='open' || task.state!=='waiting' || task.inputVersion!==current.inputVersion || this.store.get(task.inboxKey)?.cancelRequested || this.store.db.prepare('SELECT state FROM task_runs WHERE id=?').get(w.runId)?.state!=='waiting') throw new WaitInputError('这次等待已结束或任务已变化。');
+      if (!Number.isInteger(questionIndex) || !Number.isInteger(choiceIndex) || !current.questions?.[questionIndex] || !current.questions[questionIndex].choices[choiceIndex] || !current.answers) throw new WaitInputError('选项无效。');
+      if (current.answers[questionIndex] !== null) throw new WaitInputError('这个问题已经回答。');
+      const answers=[...current.answers]; answers[questionIndex]=choiceIndex;
+      this.store.db.prepare('UPDATE task_waits SET choices=? WHERE id=?').run(JSON.stringify({questions:current.questions,answers}),current.id);
+      if (answers.some(value=>value===null)) return false;
+      const text=current.questions.map((q,i)=>`${i+1}. ${q.question}\n回答：${q.choices[answers[i]!]}`).join('\n\n');
+      const input={...m,text};
+      if (!this.store.enqueue(input)) throw new WaitInputError('这次回答已经处理。');
+      this.answer(current,input,text);
+      this.store.db.prepare("UPDATE inbox SET state='linked' WHERE key=?").run(input.key);
+      return true;
     });
   }
   expire(now=Date.now()):void {

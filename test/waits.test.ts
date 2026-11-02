@@ -10,6 +10,7 @@ import { Store, type Incoming } from '../src/store.js';
 import { Tasks } from '../src/tasks.js';
 import { HUMAN_WAIT_TIMEOUT_MS, WaitInputError, Waits } from '../src/waits.js';
 import { Cards } from '../src/cards.js';
+import { Feedback } from '../src/feedback.js';
 
 const until = (condition: () => boolean, timeoutMs = 6000) => waitFor(condition, timeoutMs);
 
@@ -284,13 +285,13 @@ test('human waits expire durably without resuming the model and late replies are
  assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM task_runs WHERE taskId=?').get(task.id)?.n,1);
 });
 
-function waitChoicesFixture(t: any, choices?: string[]) {
+function waitChoicesFixture(t: any, choices?: string[], questions?: {question:string;choices:string[]}[]) {
   const { dir, file, store: s } = storeFixture(t, 'namo-choice-');
   s.enqueue({key:'original',messageId:'original',chatId:'chat',chatKey:'chat',senderId:'alice',text:'ORIGINAL',
     envelope:{version:1,type:'text',kind:'instruction',scopeKey:'topic-one',chatType:'group',materials:[],limitations:[]}});
   const tasks=new Tasks(s),task=tasks.create(s.get('original')!,{cwd:dir,policyHash:'policy'}),run=tasks.start(task);
   tasks.saveRun(run,'thread','turn');
-  const waits=new Waits(s),request={threadId:'thread',turnId:'turn',callId:'call',question:'中文还是英文？',choices};
+  const waits=new Waits(s),request={threadId:'thread',turnId:'turn',callId:'call',question:'中文还是英文？',choices,questions};
   const id=waits.request(task.id,run,request);waits.park(task,run,{id,...request});
   const out=s.db.prepare("SELECT * FROM outbox WHERE kind=?").get(`wait:${id}`) as any;
   const cards=new Cards(s),payload=cards.prepare(out) as any;s.sending(out.id);s.sent(out.id,'platform-wait');
@@ -396,4 +397,62 @@ test('a temporary language answer resumes only its task and never changes prefer
   await until(()=>s.get('choose')?.state==='replied');engine.accept(message('next','现在处理下一件事'));
   await until(()=>s.get('next')?.state==='replied');assert.equal(calls,3);
   assert.deepEqual(profiles.get(),originalProfile);assert.deepEqual(assistant.read(),originalSettings);
+});
+
+
+test('multiple questions persist independently, reject foreign and conflicting clicks, and resume only after all answers',t=>{
+  const questions=[{question:'语言？',choices:['中文','英文']},{question:'长度？',choices:['简短','详细']}];
+  const f=waitChoicesFixture(t,undefined,questions);
+  const groups=f.payload.elements.filter((e:any)=>e.tag==='action');
+  assert.deepEqual(groups.slice(0,2).map((g:any)=>g.actions.map((a:any)=>a.text.content)),[['中文','英文'],['简短','详细']]);
+  const first=f.event('answer:0:0');
+  assert.equal(f.cards.accept({...first,operator:{open_id:'bob'}}).toast.type,'error');
+  assert.equal(f.cards.accept(first).toast.type,'info');
+  assert.equal(f.tasks.get(f.task.id)?.state,'waiting');
+  assert.equal(f.cards.accept(f.event('answer:0:1')).toast.type,'error');
+  const reopened=new Store(f.file);
+  try {
+    assert.deepEqual(new Waits(reopened).get(f.id)?.answers,[0,null]);
+    assert.equal(new Cards(reopened).accept(f.event('answer:1:1')).toast.type,'info');
+    assert.equal(new Cards(reopened).accept(f.event('answer:1:0')).toast.type,'error');
+  } finally { reopened.close(); }
+  const task=f.tasks.get(f.task.id)!;
+  assert.equal(task.state,'queued'); assert.equal(task.inputVersion,2);
+  assert.match(JSON.parse(f.tasks.prompt(task)).reply,/语言？\n回答：中文[\s\S]*长度？\n回答：详细/);
+  assert.equal(f.s.db.prepare("SELECT COUNT(*) n FROM task_messages WHERE role='wait_reply'").get()?.n,1);
+});
+
+test('multiple questions reject invalid groups and retain a text fallback',t=>{
+  assert.throws(()=>waitChoicesFixture(t,undefined,[{question:'bad',choices:['one']}]),RuntimeError);
+  const f=waitChoicesFixture(t,undefined,[{question:'一？',choices:['是','否']},{question:'二？',choices:['甲','乙']}]);
+  const output=f.s.db.prepare('SELECT content FROM outbox WHERE kind=?').get(`wait:${f.id}`);
+  assert.match(String(output?.content),/一？[\s\S]*二？[\s\S]*\/resume/);
+});
+
+
+test('wait cards show committed selections in a serialized update lane even when answers arrive during a patch',async t=>{
+  const f=waitChoicesFixture(t,undefined,[{question:'语言？',choices:['中文','英文']},{question:'长度？',choices:['简短','详细']}]);
+  const patches:any[]=[];let release!:()=>void;
+  const feedback=new Feedback(f.s,{async send(){throw Error('unexpected send');},async updateCard(_id,card){patches.push(card);if(patches.length===1)await new Promise<void>(r=>{release=r;});}});
+  assert.equal(f.cards.accept(f.event('answer:0:0')).toast.type,'info');
+  const first=feedback.tick({progress:false});
+  await until(()=>patches.length===1);
+  assert.match(JSON.stringify(patches[0]),/已选择：中文/);
+  assert.equal(f.cards.accept(f.event('answer:1:1')).toast.type,'info');
+  await feedback.tick({progress:false});assert.equal(patches.length,1);
+  release();await first;
+  await feedback.tick({progress:false});
+  assert.equal(patches.length,2);assert.match(JSON.stringify(patches[1]),/已选择：中文/);assert.match(JSON.stringify(patches[1]),/已选择：详细/);
+  assert.doesNotMatch(JSON.stringify(patches[1]),/停止任务|等待你补充|请回答全部问题/);assert.equal(patches[1].header.title.content,'已回答');
+  await feedback.tick({progress:false});assert.equal(patches.length,2);
+});
+
+test('uncertain wait card patch is never blindly replayed',async t=>{
+  const f=waitChoicesFixture(t,undefined,[{question:'一？',choices:['甲','乙']},{question:'二？',choices:['丙','丁']}]);
+  let patches=0,reads=0;
+  const feedback=new Feedback(f.s,{async send(){throw Error('unexpected');},async updateCard(){patches++;throw Error('timeout');},async readCard(){reads++;return 'different';}});
+  f.cards.accept(f.event('answer:0:0'));
+  await feedback.tick({progress:false});await feedback.tick({progress:false});await feedback.tick({progress:false});
+  assert.equal(patches,1);assert.equal(reads,1);
+  assert.equal(f.waits.get(f.id)?.answers?.[0],0);
 });

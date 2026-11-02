@@ -66,6 +66,8 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (mode === 'foreign') return requestWait({ threadId: 'foreign-thread' });
     if (mode === 'malformed') return requestWait({}, { question: 'ok', extra: true });
     if (mode === 'choices') return requestWait({}, { question: '选择语言', choices: ['中文', '英文'] });
+    if (mode === 'questions') return requestWait({}, { questions: [{question:'语言？',choices:['中','英']},{question:'长度？',choices:['短','长']}] });
+    if (mode === 'invalid-questions') return requestWait({}, { question: '请选择', choices:['a','b'], questions: [{question:'语言？',choices:['中','英']},{question:'长度？',choices:['短','长']}] });
     if (mode === 'invalid-choices') return requestWait({}, { question: '选择语言', choices: ['中文', '中文'] });
     if (mode === 'external-wait') return requestExternalWait();
     requestWait();
@@ -144,6 +146,13 @@ test('structured choices are preserved before wait acknowledgement and malformed
   await assert.rejects(waitRun(invalid.runtime, invalid.dir, 'invalid-choices'),
     (e: unknown) => e instanceof RuntimeError && e.code === 'wait_protocol_error');
   assert.equal(existsSync(join(invalid.dir, 'persisted')), false);
+});
+
+test('multi-question arguments are validated and preserved through the runtime', async t => {
+  const f=fixture(t), result=await waitRun(f.runtime,f.dir,'questions');
+  assert.equal(result.waiting?.questions?.length,2); assert.equal(result.waiting?.question,'请选择以下问题');
+  const invalid=fixture(t);
+  await assert.rejects(waitRun(invalid.runtime,invalid.dir,'invalid-questions'),(e:unknown)=>e instanceof RuntimeError && e.code==='wait_protocol_error');
 });
 
 test('external wait uses the same durable ACK, interrupt and terminal-turn protocol with validated arguments', async t => {

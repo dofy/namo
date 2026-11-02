@@ -3,7 +3,10 @@ import { parseLocale } from './i18n.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { readdir, realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join, parse } from 'node:path';
+import { execFile, spawn } from 'node:child_process';
 import { Management, ManagementError } from './management.js';
 import { RecoveryError } from './recovery.js';
 import { uiRoutes } from './ui-contract.js';
@@ -35,11 +38,28 @@ main{width:min(100%,520px)}.brand{display:flex;align-items:center;gap:12px;margi
 .panel{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:32px;box-shadow:0 12px 40px #202c3810}.icon{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;font-size:24px;font-weight:700;background:var(--status-bg);color:var(--status-text)}.spinner{width:20px;height:20px;border:2px solid #f5c695;border-top-color:var(--status-text);border-radius:50%;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.spinner{animation:none}}h1{font-size:23px;line-height:1.3;margin:20px 0 10px}p{margin:0;color:var(--muted);overflow-wrap:anywhere}.foot{margin-top:24px;padding-top:20px;border-top:1px solid var(--soft);font-size:13px;color:var(--muted)}@media(max-width:480px){.panel{padding:24px}}
 </style></head><body><main><div class="brand"><img src="/logo.png" alt=""><div><strong>Namo</strong>MCP</div></div><section class="panel"${preparing?' role="status"':''}><div class="icon" aria-hidden="true">${preparing?'<span class="spinner"></span>':ok?'✓':'!'}</div><h1>${title}</h1><p>${body}</p>${preparing?'':`<p class="foot">${tr('mcp.resultFootnote')}</p>`}</section></main></body></html>`;
 }
-export async function startUi(manager:Management):Promise<{url:string;entryUrl:string;close:()=>Promise<void>}> {
+type NativeDirectoryResult = {status:'selected';path:string}|{status:'cancelled'|'unavailable'};
+async function chooseNativeDirectory():Promise<NativeDirectoryResult> {
+  if(process.platform!=='darwin')return {status:'unavailable'};
+  const script=`try
+set chosenFolder to choose folder
+return "selected:" & POSIX path of chosenFolder
+on error number errorNumber
+if errorNumber is -128 then return "cancelled"
+error number errorNumber
+end try`;
+  return new Promise(resolve=>execFile('/usr/bin/osascript',['-e',script],{timeout:120000,maxBuffer:16384},(error,stdout)=>{
+    if(error)return resolve({status:'unavailable'});
+    const output=stdout.replace(/\r?\n$/,'');
+    if(output==='cancelled')return resolve({status:'cancelled'});
+    return resolve(output.startsWith('selected:')?{status:'selected',path:output.slice(9)}:{status:'unavailable'});
+  }));
+}
+export async function startUi(manager:Management,options:{chooseDirectory?:()=>Promise<NativeDirectoryResult>}={}):Promise<{url:string;entryUrl:string;close:()=>Promise<void>}> {
   try { readFileSync(new URL('index.html',assetRoot)); }
   catch { throw new ManagementError(tr("ui.workbenchAssetsMissingSourceDevelopmentRunPnpm")); }
   let bootstrap=randomBytes(32).toString('hex');const bootstrapUntil=Date.now()+300000;
-  let session='';let sessionUntil=0,attempts=0,busy=false,origin='',cookieName='';
+  let session='';let sessionUntil=0,attempts=0,busy=false,pickingDirectory=false,origin='',cookieName='';
   const oauth=new McpOAuthFlow(manager,()=>origin);
   async function body(req:IncomingMessage):Promise<any>{
     if(req.headers['content-type']!=='application/json')throw new ManagementError(tr("ui.requestMustUseJson"));
@@ -102,7 +122,35 @@ export async function startUi(manager:Management):Promise<{url:string;entryUrl:s
       }
       const token=(req.headers.cookie??'').split(';').map(x=>x.trim()).find(x=>x.startsWith(cookieName+'='))?.slice(cookieName.length+1)??'';
       if(!session||Date.now()>sessionUntil||!equal(token,session))return send(401,{error:tr("ui.runNamoUiLocalTerminalOpenAuthorized")});
+      if(req.method==='POST'&&path==='/api/choose-directory'){
+        await body(req);
+        if(pickingDirectory)return send(409,{error:tr('ui.previousActionStillRunningTryAgainShortly')});
+        pickingDirectory=true;
+        try {
+          const result=await (options.chooseDirectory??chooseNativeDirectory)();
+          if(result.status!=='selected')return send(200,result);
+          const selected=await realpath(result.path);
+          if(!(await stat(selected)).isDirectory()||selected===parse(selected).root||selected===await realpath(homedir()))return send(400,{error:tr('directories.invalidSelection')});
+          return send(200,{status:'selected',path:selected});
+        } catch { return send(200,{status:'unavailable'}); }
+        finally { pickingDirectory=false; }
+      }
       if(req.method==='GET'){
+        if(path==='/api/directories'){
+          const params=new URL(req.url!,origin).searchParams, requested=params.get('path')??homedir();
+          if(params.getAll('path').length>1||!isAbsolute(requested)||requested.length>4096||requested.includes('\0'))return send(400,{error:tr('directories.browseError')});
+          try {
+            const current=await realpath(requested), entries=await readdir(current,{withFileTypes:true});
+            const directories=await Promise.all(entries.map(async entry=>{
+              if(entry.isDirectory())return entry.name;
+              if(entry.isSymbolicLink())try{return (await stat(join(current,entry.name))).isDirectory()?entry.name:null;}catch{return null;}
+              return null;
+            }));
+            return send(200,{path:current,parent:current===parse(current).root?null:dirname(current),
+              selectable:current!==parse(current).root&&current!==await realpath(homedir()),
+              directories:directories.filter((name):name is string=>name!==null).sort((a,b)=>a.localeCompare(b)).map(name=>({name,path:join(current,name)}))});
+          } catch { return send(400,{error:tr('directories.browseError')}); }
+        }
         if(path==='/api/logs')return send(200,manager.logs());
         if(path==='/api/approvals')return send(200,manager.approvals());
         if(path==='/api/state')return send(200,manager.state());

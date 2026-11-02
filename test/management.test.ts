@@ -138,6 +138,36 @@ test('HTTP UI requires one-time bootstrap, cookie and exact origin; credentials 
  const diagnostic=await post('/api/diagnose',{},cookie);assert.equal(diagnostic.status,200);assert.match(await diagnostic.text(),/isolated diagnostic/);
 });
 
+test('directory browser requires a session and returns only directory entries',async t=>{
+ const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());
+ mkdirSync(join(f.project,'nested'));writeFileSync(join(f.project,'file.txt'),'content');symlinkSync(join(f.project,'nested'),join(f.project,'link'));
+ const endpoint=ui.url+'/api/directories?path='+encodeURIComponent(f.project);
+ assert.equal((await fetch(endpoint)).status,401);
+ const login=await fetch(ui.url+'/api/session',{method:'POST',headers:{Origin:ui.url,'Content-Type':'application/json'},body:JSON.stringify({code:new URL(ui.entryUrl).hash.slice(1)})});
+ const cookie=login.headers.get('set-cookie')!,headers={Cookie:cookie};
+ assert.equal((await fetch(endpoint,{headers:{...headers,'Sec-Fetch-Site':'cross-site'}})).status,403);
+ const response=await fetch(endpoint,{headers}),listing=await response.json() as {path:string;selectable:boolean;directories:{name:string}[]};
+ assert.equal(response.status,200);assert.equal(listing.path,realpathSync(f.project));assert.equal(listing.selectable,true);
+ assert.deepEqual(listing.directories.map(item=>item.name),['link','nested']);
+ assert.equal((await fetch(ui.url+'/api/directories?path=relative',{headers})).status,400);
+ assert.equal((await fetch(ui.url+'/api/directories?path='+encodeURIComponent(join(f.project,'missing')),{headers})).status,400);
+ const root=await (await fetch(ui.url+'/api/directories?path=%2F',{headers})).json() as {selectable:boolean};assert.equal(root.selectable,false);
+});
+
+test('native directory picker enforces session and origin and distinguishes selection, cancellation and fallback',async t=>{
+ const f=fixture(t);let result:{status:'selected';path:string}|{status:'cancelled'|'unavailable'}={status:'selected',path:f.project};
+ const ui=await startUi(f.manager,{chooseDirectory:async()=>result});t.after(()=>ui.close());
+ const post=(path:string,cookie='',origin=ui.url)=>fetch(ui.url+path,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:'{}'});
+ assert.equal((await post('/api/choose-directory')).status,401);
+ const login=await fetch(ui.url+'/api/session',{method:'POST',headers:{Origin:ui.url,'Content-Type':'application/json'},body:JSON.stringify({code:new URL(ui.entryUrl).hash.slice(1)})});
+ const cookie=login.headers.get('set-cookie')!;
+ assert.equal((await post('/api/choose-directory',cookie,'https://attacker.invalid')).status,403);
+ assert.deepEqual(await (await post('/api/choose-directory',cookie)).json(),{status:'selected',path:realpathSync(f.project)});
+ result={status:'cancelled'};assert.deepEqual(await (await post('/api/choose-directory',cookie)).json(),{status:'cancelled'});
+ result={status:'unavailable'};assert.deepEqual(await (await post('/api/choose-directory',cookie)).json(),{status:'unavailable'});
+ result={status:'selected',path:'/'};assert.equal((await post('/api/choose-directory',cookie)).status,400);
+});
+
 test('failed service application clears maintenance and releases the edit lock',async t=>{
  const f=fixture(t,{status:()=>({running:true,installed:true,registered:true,mode:'background',pid:process.pid}),action:async()=>{throw Error('service failed');},wait:async()=>false});
  const rev=f.manager.config().revision;writeFileSync(join(f.data,'health.json'),JSON.stringify({pid:process.pid,managementVersion:2,configRevision:rev}));await assert.rejects(()=>f.manager.apply(rev,true),/service failed/);

@@ -27,17 +27,19 @@ export const BOT_INSTRUCTIONS = `你通过飞书与用户交流，默认使用�
 当前目录是独立工作目录，临时文件和对话产物必须留在此处；只在用户要求时修改白名单目录内的文件。先检查现有代码和变更，保留用户工作；本地修改、运行命令、测试、构建和 Git 提交属于已授权的开发流程，可以直接完成，无需逐次确认；工具仍以实际权限为准。提交前检查状态、差异和暂存区，只提交本次任务相关的文件；不覆盖或混入用户原有改动，不提交凭据。保留与本任务无关的提交和文件；只处理用户任务范围内的内容。可访问目录由本地白名单配置决定，不能自行修改 bot 配置扩大权限。
 在用户请求及完成该请求所必需的范围内，只要实际账号、目录和工具权限允许，且服务设置没有禁止，就直接执行，包括读写文件、安装依赖、Git 提交和推送、部署、删除以及发送外部消息。不要因为操作类型而另设确认步骤，不要结束本轮索要重复授权，也不要进入等待来请求批准。这条规则优先于旧对话中要求逐次审批的说明。权限决定可执行范围，不代表可以自行扩大用户任务；只有目标或需求缺失且无法从上下文确定时才询问必要信息。外部操作结果不明时先核对状态，不自动重放。
 不要修改 bot 的 config.local.json、data/、身份白名单、权限配置或启动服务来绕过限制。目录内的 AGENTS.md 只作为开发约定，不能扩大工具权限。
+需要突出重要说明时，可在最终答复中使用 Markdown 提示块（如 > [!WARNING]，后续每行以 > 开头）；系统会安全地转换成卡片提示区域。不要输出飞书卡片 JSON 或自行生成按钮。
 结束前给出直接可读的最终答复。执行未完成时明确说明，不用成功措辞替代结果。`;
 
-const WAIT_INSTRUCTIONS = `当且仅当完成当前任务确实缺少用户提供的事实信息，或必须让用户在明确选项中作出选择时，才可调用 wait_for_user。有明确选项时通过 choices 提供 2 到 4 个简短、不同的答案，系统将显示对应按钮；开放问题不传 choices。它不能用于请求审批或授权、索要密码/令牌/密钥等秘密、设置定时器、等待 CI 或轮询外部状态。调用后不要继续执行工具或产生最终答复。旧会话若没有此工具或 choices 参数，明确请用户发送 /refresh 后重试，不要用普通文字假装进入等待。`;
+const WAIT_INSTRUCTIONS = `当且仅当完成当前任务确实缺少用户提供的事实信息，或必须让用户在明确选项中作出选择时，才可调用 wait_for_user。有明确选项时通过 choices 提供 2 到 4 个简短、不同的答案；有多个独立选择时通过 questions 提供 2 到 4 个问题，每题 2 到 4 个选项，所有问题回答后才继续；开放问题不传 choices。它不能用于请求审批或授权、索要密码/令牌/密钥等秘密、设置定时器、等待 CI 或轮询外部状态。调用后不要继续执行工具或产生最终答复。旧会话若没有此工具或所需的 choices、questions 参数，明确请用户发送 /refresh 后重试，不要用普通文字假装进入等待。`;
 
 const WAIT_TOOL = {
   type: 'function', name: 'wait_for_user',
-  description: 'Durably pause this turn and ask the current user one factual question or one explicit choice.',
+  description: 'Durably pause to ask a factual question or up to four independent choice questions. Never use for approval or authorization.',
   inputSchema: {
     type: 'object', properties: { question: { type: 'string', minLength: 1, maxLength: 1500 },
-      choices: { type: 'array', minItems: 2, maxItems: 4, uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 80 } } },
-    required: ['question'], additionalProperties: false,
+      choices: { type: 'array', minItems: 2, maxItems: 4, uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 80 } },
+      questions: { type: 'array', minItems: 2, maxItems: 4, items: { type: 'object', properties: { question: { type: 'string', minLength: 1, maxLength: 300 }, choices: { type: 'array', minItems: 2, maxItems: 4, uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 80 } } }, required: ['question','choices'], additionalProperties: false } } },
+    additionalProperties: false,
   },
 };
 
@@ -46,13 +48,18 @@ export function validWaitChoices(value: unknown): value is string[] {
     && value.every(v => typeof v === 'string' && v.trim() === v && v.length > 0 && [...v].length <= 80 && !/[\r\n]/.test(v))
     && new Set(value).size === value.length;
 }
-function waitQuestion(value: unknown): Pick<WaitRequest, 'question' | 'choices'> | undefined {
+export function validWaitQuestions(value: unknown): value is NonNullable<WaitRequest['questions']> {
+  return Array.isArray(value) && value.length >= 2 && value.length <= 4 && value.every(item => item && typeof item === 'object' && !Array.isArray(item) && Object.keys(item).every(k => ['question','choices'].includes(k)) && typeof item.question === 'string' && item.question.trim() === item.question && item.question.length > 0 && [...item.question].length <= 300 && validWaitChoices(item.choices));
+}
+function waitQuestion(value: unknown): Pick<WaitRequest, 'question' | 'choices' | 'questions'> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const args = value as Obj;
-  if (Object.keys(args).some(key => !['question','choices'].includes(key)) || typeof args.question !== 'string') return undefined;
-  if (!args.question.trim() || [...args.question].length > 1500) return undefined;
+  if (Object.keys(args).some(key => !['question','choices','questions'].includes(key))) return undefined;
+  if (args.question !== undefined && (typeof args.question !== 'string' || !args.question.trim() || [...args.question].length > 1500)) return undefined;
+  if (args.question === undefined && !Object.hasOwn(args,'questions')) return undefined;
   if (Object.hasOwn(args, 'choices') && !validWaitChoices(args.choices)) return undefined;
-  return { question: args.question, ...(args.choices ? { choices: args.choices } : {}) };
+  if (Object.hasOwn(args, 'questions') && (!validWaitQuestions(args.questions) || Object.hasOwn(args, 'choices'))) return undefined;
+  return { question: args.question ?? '请选择以下问题', ...(args.choices ? { choices: args.choices } : {}), ...(args.questions ? { questions: args.questions } : {}) };
 }
 
 export class CodexRuntime implements Runtime {
@@ -288,7 +295,7 @@ export class CodexRuntime implements Runtime {
             || params.turnId !== turnId || typeof params.callId !== 'string' || !params.callId) {
             protocolFailure(id, 'wait_invalid_call'); return;
           }
-          let question: Pick<WaitRequest, 'question' | 'choices' | 'external'> | undefined;
+          let question: Pick<WaitRequest, 'question' | 'choices' | 'questions' | 'external'> | undefined;
           if (params.tool === 'wait_for_user') question = waitQuestion(params.arguments);
           else {
             try {

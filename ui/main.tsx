@@ -15,6 +15,7 @@ import { App } from './App';
 import { api, message } from './api';
 import { Notice } from './components';
 import { useAppearance } from './theme';
+import { ToastProvider } from './Toast';
 
 // Radix's scroll-lock stylesheet reads get-nonce's standard global. Authorize
 // that stylesheet without enabling arbitrary inline scripts or styles.
@@ -36,7 +37,7 @@ async function boot() {
   let initial, startupError;
   try { if (code) await api.session(code); initial = await api.state(); } catch (e) { startupError = message(e); } finally { code = ''; }
   createRoot(document.getElementById('root')!).render(<StrictMode><AppTheme>
-    <ErrorBoundary><App initial={initial} startupError={startupError} /></ErrorBoundary>
+    <ErrorBoundary><ToastProvider><App initial={initial} startupError={startupError} /></ToastProvider></ErrorBoundary>
   </AppTheme></StrictMode>);
 }
 void boot();

@@ -101,11 +101,12 @@ export function CodexUpdatePanel({ configRevision, disabled, pendingApplication=
       <Text as="p" size="2">{tr('codexUpdate.latest')}: <Text weight="medium">{status?.latestVersion ?? tr('codexUpdate.notChecked')}</Text></Text>
     </div>
     <Text as="p" size="1" color="gray">{tr('codexUpdate.checked')}: {status?.checkedAt ? new Date(status.checkedAt).toLocaleString(getLocale()) : tr('codexUpdate.notChecked')}</Text>
-    {status && <Text as="p" size="2" role="status" aria-live="polite">{tr(stateKeys[status.state])}
-      {status.state === 'idle' && status.latestVersion && ` · ${tr(status.updateAvailable ? 'codexUpdate.available' : 'codexUpdate.upToDate')}`}
-    </Text>}
     {disabled && <Notice>{tr('codexUpdate.settingsDraft')}</Notice>}
-    <Flex gap="3" wrap="wrap" mt="3">
+    <div className="inline-action-row codex-update-actions">
+    <div>{status && <Text as="p" size="2" role="status" aria-live="polite">{tr(stateKeys[status.state])}
+      {status.state === 'idle' && status.latestVersion && ` · ${tr(status.updateAvailable ? 'codexUpdate.available' : 'codexUpdate.upToDate')}`}
+    </Text>}</div>
+    <Flex gap="3" wrap="wrap">
       <Button type="button" variant="soft" loading={pending === 'check' || status?.state === 'checking'} disabled={busy || status?.supported === false}
         onClick={() => void act('check')}><Icon name="refresh" />{tr('codexUpdate.check')}</Button>
       <ConfirmButton title={tr('codexUpdate.upgradeTitle')} description={tr('codexUpdate.upgradeDescription', status?.latestVersion ?? '')}
@@ -116,7 +117,7 @@ export function CodexUpdatePanel({ configRevision, disabled, pendingApplication=
         action={tr('codexUpdate.rollback')} disabled={unavailable || !status?.previousVersion} onConfirm={() => act('rollback')}>
         <Icon name="reset" />{tr('codexUpdate.rollback')}
       </ConfirmButton>
-    </Flex>
+    </Flex></div>
     <div className="setting-options"><SettingToggle icon="refresh" title={tr('codexUpdate.automatic')} description={tr('codexUpdate.automaticHelp')} checked={status?.automatic === true} disabled={unavailable} onChange={value => void act('automatic', value)} /></div>
   </section>;
 }

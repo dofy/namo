@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { Tasks } from '../src/tasks.js';
-import { Cards, renderTaskCard } from '../src/cards.js';
+import { Cards, renderTaskCard, structuredResult } from '../src/cards.js';
 import { Engine, SendError } from '../src/engine.js';
 import { recordProgress, progressTotals, readProgress, type PublicProgressEvent } from '../src/public-progress.js';
 import { progressState, recordActivity } from '../src/feedback.js';
@@ -105,4 +105,72 @@ test('malformed plan metadata cannot produce invented step counts',t=>{
     recordProgress(f.store,f.run,{id:'bad-plan',kind:'plan',status:'completed',text:'malformed plan',plan} as PublicProgressEvent);
   }
   assert.equal(readProgress(f.store,f.run),undefined);
+});
+
+test('result footer uses the recorded top-level turn and frozen task model, never the directory', t => {
+  const f=fixture(t);
+  f.tasks.saveRun(f.run, 'root-thread', 'root-turn');
+  f.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(`task-model:${f.task.id}`, JSON.stringify('gpt-example'));
+  f.store.db.prepare('INSERT INTO run_evidence(runId,report) VALUES(?,?)').run(f.run, JSON.stringify({
+    version:1, runId:f.run, state:'finished', truncated:false,
+    items:[{id:'tool',kind:'tool',label:'tool',status:'completed'}], git:{before:null,after:null,status:'unavailable'},
+  }));
+  f.tasks.finish(f.task,f.run,'A result');
+  const output=f.store.db.prepare("SELECT * FROM outbox WHERE kind='result' AND part=0").get() as any;
+  const cards=new Cards(f.store),card=cards.prepare(output) as any;
+  assert.equal(card.body.elements[1].text.content,'主线程 · 任务模型：gpt-example');
+  assert.equal(card.body.elements[1].text.tag,'plain_text');
+  assert.doesNotMatch(JSON.stringify(card),/目录：|root-thread|root-turn/);
+  f.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify('later-model'),`task-model:${f.task.id}`);
+  const frozen=f.store.db.prepare('SELECT * FROM outbox WHERE id=?').get(output.id) as any;
+  assert.deepEqual(cards.prepare(frozen),card, 'a prepared payload must not be recomputed or resent');
+});
+
+test('result footer does not invent a source or model for incomplete and legacy execution metadata', t => {
+  const f=fixture(t);
+  f.store.db.prepare('INSERT INTO run_evidence(runId,report) VALUES(?,?)').run(f.run, JSON.stringify({
+    version:1, runId:f.run, state:'finished', truncated:false,
+    items:[{id:'tool',kind:'tool',label:'tool',status:'completed'}], git:{before:null,after:null,status:'unavailable'},
+  }));
+  f.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(`task-model:${f.task.id}`, JSON.stringify('unconfirmed-model'));
+  f.tasks.finish(f.task,f.run,'Legacy result');
+  const output=f.store.db.prepare("SELECT * FROM outbox WHERE kind='result' AND part=0").get() as any;
+  const card=new Cards(f.store).prepare(output) as any;
+  assert.equal(card.body.elements[1].text.content,'来源未记录 · 模型未确认');
+  assert.doesNotMatch(JSON.stringify(card),/主线程|unconfirmed-model|目录：/);
+});
+
+test('known thread with unavailable or unsafe model is explicit and progress cards omit directories', t => {
+  const f=fixture(t);f.tasks.saveRun(f.run, 'root-thread', 'root-turn');
+  f.store.db.prepare('INSERT INTO run_evidence(runId,report) VALUES(?,?)').run(f.run, JSON.stringify({
+    version:1, runId:f.run, state:'finished', truncated:false,
+    items:[{id:'tool',kind:'tool',label:'tool',status:'completed'}], git:{before:null,after:null,status:'unavailable'},
+  }));
+  f.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(`task-model:${f.task.id}`, JSON.stringify('bad\n<at user_id="all">'));
+  const progress=renderTaskCard(f.tasks.get(f.task.id)!,'working','progress',0);
+  assert.doesNotMatch(JSON.stringify(progress),/目录：/);
+  f.tasks.finish(f.task,f.run,'Result');
+  const output=f.store.db.prepare("SELECT * FROM outbox WHERE kind='result' AND part=0").get() as any;
+  const card=new Cards(f.store).prepare(output) as any;
+  assert.equal(card.body.elements[1].text.content,'主线程 · 模型未记录');
+  assert.doesNotMatch(JSON.stringify(card),/<at|目录：/);
+});
+
+test('continuation and failure cards do not claim a model or thread source', t => {
+  const f=fixture(t), task=f.tasks.get(f.task.id)!;
+  const continuation=renderTaskCard({...task,state:'succeeded'},'continued','result',1,[],undefined,{source:'main',model:'gpt-example'});
+  assert.doesNotMatch(JSON.stringify(continuation),/主线程|任务模型|目录：/);
+  f.tasks.finish(task,f.run,'failed','runtime_failed');
+  const output=f.store.db.prepare("SELECT * FROM outbox WHERE kind='result' AND part=0").get() as any;
+  const card=new Cards(f.store).prepare(output);
+  assert.doesNotMatch(JSON.stringify(card),/主线程|任务模型|目录：/);
+});
+
+
+test('structured result escapes untrusted alert content and respects code fences',()=>{
+  const elements=structuredResult('Intro\n\n> [!WARNING] risk\n> <at user_id="all">x</at>\n\n---\n\n```text\n---\n> [!NOTE] literal\n```') as any[];
+  assert.equal(elements.filter(e=>e.tag==='hr').length,1);
+  const box=elements.find(e=>e.tag==='column_set');
+  assert.ok(box);assert.equal(box.columns[0].elements[0].margin,'10px 12px 10px 12px');assert.match(JSON.stringify(box),/注意/);assert.doesNotMatch(JSON.stringify(box),/<at/);
+  assert.match(JSON.stringify(elements),/literal/);
 });

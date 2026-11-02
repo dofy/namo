@@ -1,12 +1,13 @@
 import {
   AtSign, PanelsTopLeft, Smile, Activity, BookUser, Bot, CalendarClock, ChevronLeft, ChevronRight, CircleCheck, Info,
-  ClipboardCheck, ExternalLink, Funnel, LayoutDashboard, MessageSquare, ScrollText,
+  ClipboardCheck, ExternalLink, Funnel, LayoutDashboard, MessageSquare, NotebookText,
   Play, Plug, Plus, RotateCcw, RotateCw, Save, SlidersHorizontal, Square,
-  Trash2, UserRound, X, Search, type LucideIcon,
+  Trash2, UserRound, X, Search, Menu, type LucideIcon,
 } from 'lucide-react';
 
 // Keep UI intent separate from library names, and import only the icons we use.
 const icons = {
+  menu: Menu,
   mention: AtSign,
   cards: PanelsTopLeft,
   reaction: Smile,
@@ -21,7 +22,7 @@ const icons = {
   assistant: Bot,
   memory: BookUser,
   connections: Plug,
-  changelog: ScrollText,
+  changelog: NotebookText,
   refresh: RotateCw,
   filter: Funnel,
   reset: RotateCcw,

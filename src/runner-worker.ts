@@ -136,14 +136,14 @@ async function main(): Promise<void> {
         onWait: request => store.transaction(() => {
           owned();
           const safe = request.external ? request
-            : { ...request, question: redact(request.question), choices: request.choices?.map(redact) };
+            : { ...request, question: redact(request.question), choices: request.choices?.map(redact), questions: request.questions?.map(q => ({question:redact(q.question),choices:q.choices.map(redact)})) };
           const id = requestWait(store, task.id, runId, safe);
           runnerEvent(store, runId, 'wait_requested'); return id;
         }),
       });
       assertReviewDelivery(store,loadConfig(file),task);
       assertMcpDelivery(store,loadConfig(file),task);
-      result = { ...raw, text: redact(raw.text), ...(raw.waiting ? { waiting: { ...raw.waiting, question: redact(raw.waiting.question), choices: raw.waiting.choices?.map(redact) } } : {}) };
+      result = { ...raw, text: redact(raw.text), ...(raw.waiting ? { waiting: { ...raw.waiting, question: redact(raw.waiting.question), choices: raw.waiting.choices?.map(redact), questions: raw.waiting.questions?.map(q => ({question:redact(q.question),choices:q.choices.map(redact)})) } } : {}) };
     } catch (e) {
       error = abort.signal.reason === 'worker_stopped' ? 'interrupted'
         : storageFailed ? 'runner_storage_error' : e instanceof RuntimeError || e instanceof AgentRegistryError ? e.code : 'runtime_error';

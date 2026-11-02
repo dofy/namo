@@ -22,10 +22,10 @@ function UserModelSettings({profile, revision, editable, refresh, config}: {conf
   } catch(e){setError(message(e));} finally {setBusy(false);}}}>
     <ModelStatus config={config} personal={confirmed} />
     <ModelSelect id="profile-model" label={tr('model.userDefault')} value={draft} onChange={setDraft} disabled={!editable||busy} inheritLabel={tr('model.inherit')} resetKey={`${profile.userId}:${saved}`} />
-    <Text as="p" size="1" color="gray">{tr('model.help')}</Text>
     {draft.trim()!==saved&&<Text as="p" size="2" color="orange">{tr('model.unsaved',draft.trim()||tr('model.inherit'))}</Text>}
     {notice&&<Notice>{notice}</Notice>}{error&&<Notice error>{error}</Notice>}
-    <Button type="submit" disabled={!editable||draft.trim()===saved} loading={busy}>{tr('model.save')}</Button>
+    <div className="inline-action-row"><Text as="p" size="1" color="gray">{tr('model.help')}</Text>
+      <Button type="submit" disabled={!editable||draft.trim()===saved} loading={busy}>{tr('model.save')}</Button></div>
   </form>;
 }
 export function ProfilesPage({ profiles, config, expired, refresh }: { config:ConfigView; profiles: ProfileState; expired: boolean; refresh: () => Promise<unknown> }) {
@@ -96,11 +96,11 @@ export function ProfilesPage({ profiles, config, expired, refresh }: { config:Co
           <div className="profile-save-actions"><Button type="submit" disabled={!dirty || !editable} loading={busy}><Icon name="save" />{tr("profiles.save")}</Button>
           <ConfirmButton disabled={busy || expired} title={tr("profiles.reloadSavedProfile")} description={tr("profiles.unsavedDraftDiscarded")} action={tr("profiles.loadSavedProfile")} onConfirm={async () => {
             const latest = await api.state(); reset(latest.profiles.entries.find(p => key(p) === key(selected)) ?? latest.profiles.entries[0], latest.profiles.configRevision); setNotice(tr("profiles.savedProfileLoaded")); await refresh();
-          }}><Icon name="reset" />{tr("common.reload")}</ConfirmButton></div>
+          }}><Icon name="reset" />{tr("common.reload")}</ConfirmButton>
+          <ConfirmButton danger disabled={busy || dirty || !editable || !Object.values(values(selected)).some(Boolean)} title={tr("profiles.clearUsersProfile")}
+            description={tr("profiles.clearNameLanguageTimeZoneWhileRetaining")} action={tr("profiles.clear")} onConfirm={() => save({ name: '', language: '', timezone: '' })}><Icon name="trash" />{tr("profiles.clear")}</ConfirmButton></div>
         </div>
       </form>
-      <ConfirmButton danger disabled={busy || dirty || !editable || !Object.values(values(selected)).some(Boolean)} title={tr("profiles.clearUsersProfile")}
-        description={tr("profiles.clearNameLanguageTimeZoneWhileRetaining")} action={tr("profiles.clear")} onConfirm={() => save({ name: '', language: '', timezone: '' })}><Icon name="trash" />{tr("profiles.clear")}</ConfirmButton>
       {!!selected.changes.length && <details className="profile-history"><summary>{tr("profiles.recentChanges")} ({selected.changes.length})</summary><div className="audit">
         {selected.changes.map(change => <div key={change.version}><Text as="p" size="2">{tr("common.version")} {change.version} · {change.fields.map(f => labels[f]).join('、')} · {change.source === 'self' ? tr("profiles.ownersFeishuLarkDirectMessage") : tr("profiles.localWorkbench")}</Text>
           <Text size="1" color="gray">{new Date(change.createdAt).toLocaleString(getLocale())}{change.sourceRef ? tr("profiles.sourceMessage", change.sourceRef) : ''}</Text></div>)}
