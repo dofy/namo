@@ -20,13 +20,14 @@ const bin=resolve('bin/namo.js');
 test('CLI keeps lifecycle commands and rejects invalid arguments before loading configuration',t=>{
  const dir=mkdtempSync(join(tmpdir(),'namo-cli-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const run=(...a:string[])=>spawnSync(process.execPath,[bin,...a],{cwd:dir,encoding:'utf8',env:{...process.env,NAMO_HOME:dir,NAMO_LANG:'system',LC_ALL:'en_US.UTF-8'}});
- for(const command of ['doctor','check','status','logs','config','agent','issues','issue','resolve','access','github','approval']) {const result=run(command);assert.equal(result.status,1);assert.match(result.stderr,/namo ui/);}
+ for(const command of ['doctor','check','status','logs','agent','issues','issue','resolve','access','github','approval']) {const result=run(command);assert.equal(result.status,1);assert.match(result.stderr,/namo ui/);}
  assert.match(run('migrate').stderr,/namo init --import/);
  assert.match(run('init','--import').stderr,/interactive (?:local )?terminal/);
  assert.match(run('service','status').stderr,/namo ui/);
  assert.match(run('service').stderr,/install.*uninstall/);
  assert.equal(run('ui','--import').status,1);
  assert.equal(run('login','extra').status,1);
+ assert.match(run('config', '--config', join(dir, 'other.json')).stderr,/No configuration/);
  const init=run('init');assert.equal(init.status,1);assert.match(init.stderr,/interactive (?:local )?terminal/);
  assert.match(run('init','--lang','zh-CN').stderr,/交互终端/);
  assert.match(run('--config',join(dir,'other.json'),'ui').stderr,/No configuration/);
@@ -134,4 +135,45 @@ test('partial legacy config is completed with defaults while preserving its fiel
  f.ui.text=async(label,initial,secret)=>label.startsWith('Codex')?process.execPath:label.startsWith('允许 Agent')?f.dir:label==='App ID'?'cli_aaaaaaaaaaaaaaaa':secret?'new-secret':initial??'';
  f.ui.confirm=async label=>!label.includes('允许修改')&&!label.includes('命令联网')&&!label.includes('后台服务');
  const result=await onboard(f.file,f.ui,f.deps);assert.equal(result.verified,true);assert.deepEqual(readJson(f.file).custom,{keep:true});
+});
+
+test('terminal configuration saves only selected settings and preserves secrets and other fields', async t=>{
+ const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');
+ const dir=mkdtempSync(join(tmpdir(),'namo-terminal-config-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const file=join(dir,'config.json'),raw=initialConfig(file,dir);raw.feishu.appSecret='private-secret';raw.feishu.appId='cli_aaaaaaaaaaaaaaaa';raw.codex.directories=[dir];raw.custom={untouched:true};atomicJson(file,raw);
+ const answers=['1','example-model','12','600000','y','y','0'],messages:string[]=[];
+ const ui={select:async()=>answers.shift()!,text:async()=>answers.shift()!,confirm:async()=>answers.shift()==='y',info:(s:string)=>messages.push(s),close:()=>{}};
+ await terminalConfig(new Management(file),ui);
+ const saved=readJson(file);assert.equal(saved.codex.model,'example-model');assert.equal(saved.concurrency,12);assert.equal(saved.feishu.appSecret,'private-secret');assert.deepEqual(saved.custom,{untouched:true});assert.ok(messages.every(s=>!s.includes('private-secret')));
+});
+
+test('terminal configuration Escape discards a partially entered draft',async t=>{
+ const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');const {Back}=await import('../src/config-prompts.js');
+ const dir=mkdtempSync(join(tmpdir(),'namo-terminal-cancel-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const file=join(dir,'config.json'),raw=initialConfig(file,dir);raw.feishu.appSecret='private-secret';raw.codex.directories=[dir];atomicJson(file,raw);const original=readFileSync(file,'utf8');
+ let selected=0,texts=0;const messages:string[]=[];
+ const ui={select:async()=>selected++===0?'1':'0',text:async()=>{if(texts++===0)return 'unsaved-model';throw new Back();},confirm:async()=>true,info:(message:string)=>messages.push(message),close:()=>{}};
+ await terminalConfig(new Management(file),ui);assert.equal(readFileSync(file,'utf8'),original);assert.ok(messages.some(s=>s.includes('取消')||s.includes('Cancelled')));assert.ok(messages.every(s=>!s.includes('private-secret')));
+});
+
+test('terminal configuration Escape at the top menu exits without changes',async t=>{
+ const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');const {Back}=await import('../src/config-prompts.js');
+ const dir=mkdtempSync(join(tmpdir(),'namo-terminal-exit-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const file=join(dir,'config.json');atomicJson(file,initialConfig(file,dir));const original=readFileSync(file,'utf8');
+ const ui={select:async()=>{throw new Back();},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
+ await terminalConfig(new Management(file),ui);assert.equal(readFileSync(file,'utf8'),original);
+});
+
+test('terminal menu bounds Unicode labels to prevent wrapping in narrow windows',async()=>{
+ const {fitTerminalLine}=await import('../src/config-prompts.js');
+ assert.equal(fitTerminalLine('  ❯ 🤖 模型',8),'  ❯ 🤖 ');
+ assert.equal(fitTerminalLine('📁 文件',5),'📁 文');
+ assert.equal(fitTerminalLine('👨‍👩‍👧‍👦ab',3),'👨‍👩‍👧‍👦a');
+});
+
+test('terminal refresh keeps cancellation notice on the next screen',async t=>{
+ const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');const {Back}=await import('../src/config-prompts.js');
+ const dir=mkdtempSync(join(tmpdir(),'namo-screen-refresh-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const file=join(dir,'config.json');atomicJson(file,initialConfig(file,dir));
+ let screens=0,step=0;let lines:string[]=[];
+ const ui={screen:()=>{screens++;lines=[];},select:async()=>step++===0?'1':'0',text:async()=>{throw new Back();},confirm:async()=>false,info:(line:string)=>lines.push(line),close:()=>{}};
+ await terminalConfig(new Management(file),ui);assert.equal(screens,3);assert.ok(lines.some(line=>line.includes('取消')||line.includes('Cancelled')));
 });

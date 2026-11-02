@@ -10,6 +10,7 @@ Namo 负责身份、权限、任务调度和交付，官方 Codex app-server 负
 flowchart TB
   User[用户] <--> Feishu[飞书]
   UI[本机工作台] --> Management[配置、任务与记忆管理]
+  CLI[交互式终端配置] --> Management
 
   subgraph Namo["Namo 宿主"]
     In[身份校验<br/>入站消息持久化]
@@ -58,7 +59,7 @@ flowchart TB
 | 材料与产物 | [materials](../src/materials.ts)、[image-inputs](../src/image-inputs.ts)、[artifacts](../src/artifacts.ts) | 有界读取授权原消息；图片和交付文件冻结内容；正文不能生成授权，拒绝越界及敏感路径 |
 | 展示与投递 | [public-progress](../src/public-progress.ts)、[feedback](../src/feedback.ts)、[recovery](../src/recovery.ts) | 只展示公开进展与有界证据；结果先保存再发送；未知投递不重试模型或盲重发 |
 | GitHub / 推送 | [github-api](../src/github-api.ts)、[github-review](../src/github-review.ts)、[approvals](../src/approvals.ts) | 固定身份与目标；写操作先存回执，未知结果不自动重试；推送批准只消费一次 |
-| 管理与发布 | [management](../src/management.ts)、[service](../src/service.ts)、[release](../src/release.ts) | UI 查询不迁移库；保存后排空旧队列并自动应用；校验备份后切换不可变快照 |
+| 管理与发布 | [management](../src/management.ts)、[terminal-config](../src/terminal-config.ts)、[config-prompts](../src/config-prompts.ts)、[service](../src/service.ts)、[release](../src/release.ts) | 工作台和终端复用配置校验、版本检查与备份；查询不迁移库；保存后排空旧队列并自动应用；校验备份后切换不可变快照 |
 
 数值预算、状态枚举和完整字段以这些模块及 [test](../test/) 中的契约测试为准，不再逐份复制到文档。
 
@@ -97,7 +98,7 @@ flowchart TB
 
 静态 GitHub 令牌的已就绪等待恢复目前不重新查询远端授权；工具 RPC 成功返回但业务结果不明时，公开进度可能将其计为成功。runner 失联检测依赖 PID 是否存在，PID 复用可能使任务持续占位。数据目录为符号链接且白名单包含其真实路径的父目录时，私有目录拒绝规则的实际沙箱行为仍需验证。
 
-**管理与升级。** UI 仅绑定 loopback，使用一次性启动授权、HttpOnly 会话、Host / Origin 校验和 CSP；浏览器仅导入 [ui-contract](../src/ui-contract.ts)。接收器固定在校验过的发布快照。兼容的执行代码可通过 [runtime-host](../src/runtime-host.ts) 在线替换，接收连接持续存在，切换期间消息落库后才确认收件；新任务使用新执行版本，已运行的独立 worker 保留原版本。备份使用 WAL 一致性快照；校验、加载失败保留旧执行版本，发送结果未知的记录不重放。接收器、存储或依赖不兼容时保留在线服务并拒绝热更新。维护操作见[运维指南](operations.md)。
+**管理与升级。** `namo config` 在 TTY 中管理常用配置，复用管理层保存和自动切换；Esc 放弃当前草稿，MCP OAuth 通过隐藏输入接收本地回调地址并复用原有 state、PKCE 和配置版本检查。终端入口不启动接收器，也不替代工作台的全部管理功能。UI 仅绑定 loopback，使用一次性启动授权、HttpOnly 会话、Host / Origin 校验和 CSP；浏览器仅导入 [ui-contract](../src/ui-contract.ts)。接收器固定在校验过的发布快照。兼容的执行代码可通过 [runtime-host](../src/runtime-host.ts) 在线替换，接收连接持续存在，切换期间消息落库后才确认收件；新任务使用新执行版本，已运行的独立 worker 保留原版本。备份使用 WAL 一致性快照；校验、加载失败保留旧执行版本，发送结果未知的记录不重放。接收器、存储或依赖不兼容时保留在线服务并拒绝热更新。维护操作见[运维指南](operations.md)。
 
 **扩展。** [runtime-contract](../src/runtime-contract.ts) 预留执行、修订、等待、取消和证据接口；没有其他 Agent SDK、探针、注册 UI、动态加载器或多 Agent 路由。旧 Codex profile 绑定只为兼容，退休适配器不回退执行。未来插件也必须遵守统一权限、调度和投递。
 

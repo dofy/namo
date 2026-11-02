@@ -58,7 +58,7 @@ pnpm cli init
 
 ```sh
 pnpm pack
-npm install -g ./namo-0.4.1.tgz
+npm install -g ./namo-0.6.1.tgz
 namo init
 ```
 
@@ -67,7 +67,11 @@ namo init
 ```sh
 namo --help
 namo ui               # 本地工作台，不启动另一接收端
+namo config           # 交互式终端配置
+namo login --device-auth # 无桌面环境使用官方 Codex 设备登录
 ```
+
+终端菜单支持方向键和 Esc 放弃编辑。Docker、持久存储与 MCP OAuth 操作见[无桌面环境](docs/operations.md#无桌面环境)。
 
 ### 语言
 
@@ -106,7 +110,7 @@ NAMO_LANG=zh-CN namo ui
 - 主机休眠或断网时无法持续服务；当前没有离线历史消息补拉。
 - 禁止提交 `config.local.json`、`data/`、日志、令牌或认证文件。Namo 不会自动接入个人 MCP、插件或第三方模型网关。
 
-CLI 只保留 `init`、`login`、`start`、`service`、`ui`。状态、日志、诊断和 Git 推送与记录在工作台中操作；OpenClaw 来源检查在**连接设置 → 运行与维护**，实际导入使用 `namo init --import`。迁移不会自动切换接收端；推送绑定已配置目标，提交请求后直接执行。详见 [OpenClaw 迁移](docs/operations.md#openclaw-导入)与 [Git 推送](docs/operations.md#git-推送)。
+CLI 提供 `init`、`config`、`login`、`start`、`service`、`ui`。状态、日志、诊断和 Git 推送与记录在工作台中操作；OpenClaw 来源检查在**连接设置 → 运行与维护**，实际导入使用 `namo init --import`。迁移不会自动切换接收端；推送绑定已配置目标，提交请求后直接执行。详见 [OpenClaw 迁移](docs/operations.md#openclaw-导入)与 [Git 推送](docs/operations.md#git-推送)。
 
 后台服务管理当前支持 macOS；其他平台可前台运行，但尚未完成全部平台验收。当前仅接入 Codex；其他 Agent 仅保留未来插件扩展的可能性，不包含对应 SDK 或探测功能。
 

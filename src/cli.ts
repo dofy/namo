@@ -40,18 +40,19 @@ async function main(): Promise<void> {
   const requestedLocale = flag('--lang') ?? process.env.NAMO_LANG;
   const requestedProfile = flag('--profile');
   if (requestedLocale !== undefined && requestedLocale !== 'system' && !parseLocale(requestedLocale)) throw new Error(tr('cli.supportedLanguagesSystemEnZhCnSet'));
-  const moved = ['agent','doctor','check','status','logs','config','issues','issue','resolve','access','github','approval'];
+  const moved = ['agent','doctor','check','status','logs','issues','issue','resolve','access','github','approval'];
   if (moved.includes(command) || command === 'service' && positional[1] === 'status') throw new Error(tr('cli.useWorkbench', command));
   if (command === 'migrate') throw new Error(tr('cli.importMoved'));
   for (let i = 0; i < args.length; i++) {
     if (valueFlags.includes(args[i])) { flag(args[i]); i++; continue; }
-    if (args[i].startsWith('-') && !['--help','-h','--version','-v','--import'].includes(args[i])) throw new Error(tr('cli.unknownOptionRunNamoHelpUsage'));
+    if (args[i].startsWith('-') && !['--help','-h','--version','-v','--import','--device-auth'].includes(args[i])) throw new Error(tr('cli.unknownOptionRunNamoHelpUsage'));
   }
   if (args.includes('--version') || args.includes('-v')) { console.log(NAMO_VERSION); return; }
   if (args.includes('--help') || args.includes('-h') || command === 'help') { console.log(tr('cli.help') + '\n' + tr('cli.directory', REPOSITORY_URL)); return; }
-  if (!['init','login','start','service','ui'].includes(command)) throw new Error(tr('cli.unknownCommandRunNamoHelp', command));
+  if (!['init','config','login','start','service','ui'].includes(command)) throw new Error(tr('cli.unknownCommandRunNamoHelp', command));
   if (positional.length > (command === 'service' ? 2 : 1)) throw new Error(tr('cli.tooManyArgumentsRunNamoHelpUsage'));
   if (requestedProfile && command !== 'login') throw new Error(tr('cli.profileOnlyLogin'));
+  if (args.includes('--device-auth') && command !== 'login') throw new Error(tr('terminal.deviceLoginOnly'));
   if (args.includes('--import') && command !== 'init') throw new Error(tr('cli.importOnlyInit'));
   if (command === 'service' && !['install','start','stop','restart','upgrade','uninstall'].includes(positional[1])) throw new Error(tr('cli.serviceUsage'));
   const file = configFile(flag('--config'));
@@ -65,6 +66,14 @@ async function main(): Promise<void> {
     return;
   }
   if (!existsSync(file)) throw new Error(tr('cli.noConfigurationFoundRunNamoInitSpecify'));
+  if (command === 'config') {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error(tr('terminal.ttyRequired'));
+    const {ConfigTerminalPrompter} = await import('./config-prompts.js');
+    const prompt = new ConfigTerminalPrompter(); const manager = new Management(file);
+    try { await (await import('./terminal-config.js')).terminalConfig(manager, prompt); }
+    finally { prompt.close(); await manager.close(); }
+    return;
+  }
   if (command === 'ui') {
     const {startUi,openUi} = await import('./ui.js'); const ui = await startUi(new Management(file));
     try { await openUi(ui.entryUrl); } catch (error) { await ui.close(); throw error; }
@@ -77,7 +86,7 @@ async function main(): Promise<void> {
   let config = loadConfig(file); redact = makeRedactor([config.feishu.appSecret,config.github?.token??'',...(config.mcpConnections??[]).map(c=>c.token)]);
   const redactionSecrets=new Set([config.feishu.appSecret,config.github?.token??'',...(config.mcpConnections??[]).map(c=>c.token)]);
   if (configRevision !== digest(readFileSync(file,'utf8'))) throw new Error(tr('cli.configurationChangingPleaseRetry'));
-  if (command === 'login') { await loginAgent(config,requestedProfile); return; }
+  if (command === 'login') { await loginAgent(config,requestedProfile,args.includes('--device-auth')); return; }
   if (command === 'service') { console.log(JSON.stringify(await serviceAction(positional[1],config),null,2)); return; }
   ({config,revision:configRevision}=queuedConfiguration(config));
   for(const value of [config.feishu.appSecret,config.github?.token??'',...(config.mcpConnections??[]).map(c=>c.token)])redactionSecrets.add(value);

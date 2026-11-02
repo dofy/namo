@@ -60,7 +60,7 @@ To build a local CLI package:
 
 ```sh
 pnpm pack
-npm install -g ./namo-0.4.1.tgz
+npm install -g ./namo-0.6.1.tgz
 namo init
 ```
 
@@ -69,7 +69,11 @@ Existing configuration can be selected with `--config`. Namo also recognizes `NA
 ```sh
 namo --help
 namo ui               # Local workbench; does not start another receiver
+namo config           # Interactive terminal configuration
+namo login --device-auth # Official Codex device login for headless hosts
 ```
+
+The terminal menu supports arrow keys and Esc to discard an edit. See [headless operation](docs/operations.md#无桌面环境) for Docker, persistent storage and MCP OAuth setup.
 
 ### Language
 
@@ -108,7 +112,7 @@ See the [command reference (Chinese)](docs/getting-started.md#聊天命令) and 
 - A sleeping or disconnected host cannot provide continuous service. There is no offline history backfill.
 - Never commit `config.local.json`, `data/`, logs, tokens or authentication files. Namo does not automatically import personal MCP servers, plugins or third-party model gateways.
 
-The CLI keeps only `init`, `login`, `start`, `service`, and `ui`. Status, logs, diagnostics, and Git push records are available in the workbench. Inspect OpenClaw sources under **Connections → Runtime and maintenance**; import with `namo init --import`. Migration never switches receivers automatically. Pushes use configured targets and execute on submission without extra confirmation. See [OpenClaw migration](docs/operations.md#openclaw-导入) and [Git pushes](docs/operations.md#git-推送).
+The CLI provides `init`, `config`, `login`, `start`, `service`, and `ui`. Status, logs, diagnostics, and Git push records are available in the workbench. Inspect OpenClaw sources under **Connections → Runtime and maintenance**; import with `namo init --import`. Migration never switches receivers automatically. Pushes use configured targets and execute on submission without extra confirmation. See [OpenClaw migration](docs/operations.md#openclaw-导入) and [Git pushes](docs/operations.md#git-推送).
 
 Background service management currently supports macOS. Other systems can use foreground mode but have not completed full platform acceptance. Codex is the only execution backend. Other agents are reserved for future plugins; no additional agent SDKs or probes are included.
 

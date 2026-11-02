@@ -5,14 +5,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { discoverMcpOAuthScopes, beginMcpOAuth, resolveMcpCredential, saveMcpOAuth, isOAuthReference, LEGACY_LINEAR_URL } from '../src/mcp-oauth.js';
 const resource='https://mcp.example/mcp',issuer='https://login.example',redirect='http://127.0.0.1:45678/api/mcp-oauth/callback';
-function fakeOAuth(expectedScope='read'){
+function fakeOAuth(expectedScope='read', expectedRedirect=redirect){
  let registered=0,exchanged=0,refreshed=0;
  const fetcher:typeof fetch=async(input,init)=>{
   const url=new URL(String(input));assert.equal(init?.redirect,'error');
   if(url.href===resource)return new Response(null,{status:401,headers:{'www-authenticate':'Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource"'}});
   if(url.pathname.startsWith('/.well-known/oauth-protected-resource'))return Response.json({resource,authorization_servers:[issuer],scopes_supported:['read','write']});
   if(url.pathname.startsWith('/.well-known/'))return Response.json({issuer,authorization_endpoint:issuer+'/authorize',token_endpoint:issuer+'/token',registration_endpoint:issuer+'/register',response_types_supported:['code'],grant_types_supported:['authorization_code','refresh_token'],token_endpoint_auth_methods_supported:['none'],code_challenge_methods_supported:['S256']});
-  if(url.pathname==='/register'){registered++;const body=JSON.parse(String(init?.body));assert.equal(body.scope,expectedScope);assert.deepEqual(body.redirect_uris,[redirect]);return Response.json({client_id:'synthetic-client',client_id_issued_at:1,token_endpoint_auth_method:'none',redirect_uris:[redirect],grant_types:['authorization_code','refresh_token'],response_types:['code']});}
+  if(url.pathname==='/register'){registered++;const body=JSON.parse(String(init?.body));assert.equal(body.scope,expectedScope);assert.deepEqual(body.redirect_uris,[expectedRedirect]);return Response.json({client_id:'synthetic-client',client_id_issued_at:1,token_endpoint_auth_method:'none',redirect_uris:[expectedRedirect],grant_types:['authorization_code','refresh_token'],response_types:['code']});}
   if(url.pathname==='/token'){
     const body=new URLSearchParams(String(init?.body));
     if(body.get('grant_type')==='authorization_code'){exchanged++;assert.ok(body.get('code_verifier'));assert.equal(body.get('code'),'synthetic-code');return Response.json({access_token:'synthetic_access_1',token_type:'Bearer',expires_in:1,refresh_token:'synthetic_refresh_1',scope:expectedScope});}
@@ -163,4 +163,19 @@ test('cancelled OAuth drafts cannot later replace the saved connection',async t=
  const inFlight=await flow.begin(revision,'',draft),state2=new URL(inFlight.url).searchParams.get('state')!;
  const finishing=flow.finish(new URLSearchParams({state:state2,code:'synthetic-code',iss:issuer}));flow.cancel('');
  assert.equal(await finishing,false);assert.equal((await import('node:fs')).readFileSync(file,'utf8'),before);
+});
+
+
+test('terminal OAuth accepts only the matching callback and saves after authorization', async t=>{
+ const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js'),{terminalOAuth}=await import('../src/terminal-config.js');
+ const {dir}=storeFixture(t,'namo-terminal-oauth-'),file=join(dir,'config.json');
+ writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')}}));
+ const manager=new Management(file); let currentRedirect='',state='',fake:ReturnType<typeof fakeOAuth>;
+ const begin:typeof beginMcpOAuth=async(url,callback,scope)=>{currentRedirect=callback; fake=fakeOAuth('read',callback);const result=await beginMcpOAuth(url,callback,scope,fake.fetcher);state=result.state;return result;};
+ let wrong=true; const ui={info:(_message:string)=>{},close:()=>{},confirm:async()=>false,text:async(_label:string,_initial?:string,secret?:boolean)=>{assert.equal(secret,true);return `${wrong?'http://evil.example/callback':currentRedirect}?state=${state}&code=synthetic-code`;}};
+ const draft={id:'demo',type:'remote' as const,url:resource,oauthScope:'read'};
+ assert.equal(await terminalOAuth(manager,ui,manager.config().revision,'',draft,begin),false);
+ assert.equal(manager.config().mcpConnections.length,0);
+ wrong=false; assert.equal(await terminalOAuth(manager,ui,manager.config().revision,'',draft,begin),true);
+ assert.equal(manager.config().mcpConnections[0].credentialSource,'oauth');
 });

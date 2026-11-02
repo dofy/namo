@@ -44,12 +44,12 @@ export async function probeAgent(source: Config, profileId?: string): Promise<Ch
   checks.push({id:'agent.directories',status:(c.codex.directories??[]).every(existsSync)?'ok':'fail',message:tr('directories.paths')});
   return checks;
 }
-export async function loginAgent(source: Config, profileId?: string): Promise<void> {
+export async function loginAgent(source: Config, profileId?: string, deviceAuth = false): Promise<void> {
   const c = {...source, codex:agentCodexConfig(source, selectAgent(source, profileId))};
   const path = findExecutable(resolveCodexBinary(c.codex.bin,c.codex.home)); if (!path) throw new Error(tr("agents.codexNotFoundInstallOfficialCodexCli"));
   mkdirSync(c.codex.home, { recursive: true, mode: 0o700 });
   await new Promise<void>((resolve, reject) => {
-    const p = spawn(path, ['login'], { env: codexEnvironment(c.codex.home), stdio: 'inherit' });
+    const p = spawn(path, deviceAuth ? ['login', '--device-auth'] : ['login'], { env: codexEnvironment(c.codex.home), stdio: 'inherit' });
     p.once('error', () => reject(new Error(tr("agents.codexLoginProcessCouldNotStart"))));
     p.once('exit', code => code === 0 ? resolve() : reject(new Error(tr("agents.codexLoginIncompleteRunNamoLoginAgain"))));
   });

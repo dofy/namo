@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, realpathSync, readFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { detectAgents, findExecutable, probeAgent } from '../src/agents.js';
+import { detectAgents, findExecutable, probeAgent, loginAgent } from '../src/agents.js';
 import { initialConfig } from '../src/onboarding.js';
 import { atomicJson } from '../src/paths.js';
 import { loadConfig, parseConfig } from '../src/config.js';
@@ -195,4 +195,13 @@ test('management and CLI refuse retired agent registry writes without mutating c
   const result = spawnSync(process.execPath, [resolve('bin/namo.js'), 'login', '--profile', 'future', '--config', f.file], { encoding: 'utf8' });
   assert.equal(result.status, 1);
   assert.equal(readFileSync(f.file, 'utf8'), before);
+});
+
+
+test('device login invokes the official binary with the isolated Codex home',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-device-login-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const file=join(dir,'config.json'),raw=initialConfig(file,dir),bin=join(dir,'codex'),result=join(dir,'result.json');raw.codex.bin=bin;
+ writeFileSync(bin,`#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(result)},JSON.stringify({args:process.argv.slice(2),home:process.env.CODEX_HOME}));\n`,{mode:0o700});
+ atomicJson(file,raw);await loginAgent(loadConfig(file),undefined,true);const actual=JSON.parse(readFileSync(result,'utf8'));
+ assert.deepEqual(actual.args,['login','--device-auth']);assert.equal(actual.home,raw.codex.home);
 });
