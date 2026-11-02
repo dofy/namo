@@ -16,7 +16,7 @@ const HOST_FILES = ['cli', 'service-bootstrap', 'runtime-host', 'live-upgrade', 
   'feishu', 'access', 'store', 'schema', 'schema-migrations', 'config', 'paths', 'safety', 'richtext', 'codex-updates', 'codex-installation',
   // These modules read or write durable JSON shared with the pinned receiver.
   // A byte change requires restart until a versioned cross-release codec exists.
-  'engine','tasks','waits','external-waits','external-wait-bridge','business-storage','runner','runner-store',
+  'config-reload','engine','tasks','waits','external-waits','external-wait-bridge','business-storage','runner','runner-store',
   'memory','memory-access','auto-memory','schedules','feedback','cards','mcp-connections','mcp-write-approval',
   'github-api','github-access','github-review','approval-service','approvals','recovery','artifact-delivery','inbox-retention',
   'assistant','profiles','model-preferences','task-progress','public-progress','evidence','artifacts','model-catalog',

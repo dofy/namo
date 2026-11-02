@@ -11,11 +11,11 @@ import { DateTime, duration, Filters, LocalLink, Owner, Pagination, useRemote, t
 export type DetailTarget = { type: 'task' | 'issue'; id: string };
 export function TaskTable({ tasks, onOpen, navigate, compact = false }: { tasks: TaskListItem[]; onOpen: (target: DetailTarget) => void; navigate: Navigate; compact?: boolean }) {
   return <Table.Root variant="surface" className={`task-table browse-table ${compact ? 'compact-table' : ''}`}>
-    <Table.Header><Table.Row><Table.ColumnHeaderCell>{tr("nav.tasks")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.user")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.project")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.status")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.startedAt")}</Table.ColumnHeaderCell>{!compact && <Table.ColumnHeaderCell>{tr("tasks.duration")}</Table.ColumnHeaderCell>}</Table.Row></Table.Header>
+    <Table.Header><Table.Row><Table.ColumnHeaderCell>{tr("nav.tasks")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.user")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.status")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.startedAt")}</Table.ColumnHeaderCell>{!compact && <Table.ColumnHeaderCell>{tr("tasks.duration")}</Table.ColumnHeaderCell>}</Table.Row></Table.Header>
     <Table.Body>{tasks.map(task => <Table.Row key={task.id}>
       <Table.RowHeaderCell className="summary-cell"><Link asChild color="gray" highContrast underline="hover"><button type="button" className="task-title" title={task.title} onClick={() => onOpen({ type: 'task', id: task.id })}>{task.title}</button></Link><span className="secondary-id">{task.id}</span>
         {!compact && <LocalLink className="session-link" href={`/tasks?workstream=${encodeURIComponent(task.workstreamId)}`} navigate={navigate}>{tr("tasks.viewSession")}</LocalLink>}</Table.RowHeaderCell>
-      <Table.Cell><Owner id={task.ownerId} name={task.ownerName} /></Table.Cell><Table.Cell>{task.project || tr("common.isolatedDirectory")}</Table.Cell>
+      <Table.Cell><Owner id={task.ownerId} name={task.ownerName} /></Table.Cell>
       <Table.Cell><StatusBadge state={task.state} /></Table.Cell><Table.Cell><DateTime value={task.startedAt} />{task.startedAt == null && <span className="created-hint" title={new Date(task.createdAt).toLocaleString(getLocale())}>{tr("tasks.created")} {new Date(task.createdAt).toLocaleDateString(getLocale())}</span>}</Table.Cell>
       {!compact && <Table.Cell><span title={tr("tasks.firstStartCompletionIncludingTimeWaitingInput")}>{task.startedAt == null ? '—' : duration((task.finishedAt ?? Date.now()) - task.startedAt)}</span>{task.startedAt != null && task.finishedAt == null && <span className="created-hint">{task.state === 'waiting' ? tr("tasks.includesWaiting") : tr("common.notFinished")}</span>}</Table.Cell>}
     </Table.Row>)}</Table.Body>
@@ -39,7 +39,7 @@ export function TasksPage({ state, onOpen, navigate, search, kind, enabled }: {
     {!state.recoveryAvailable && <Notice>{tr("tasks.receiverUsesOlderDataSchemaBrowsingAvailable")}</Notice>}
     {new URLSearchParams(search).has('workstream') && <div className="session-context">
       <div><Text size="1" color="gray">{tr("tasks.tasksSession")}</Text><Heading as="h2" size="4">{session?.title || new URLSearchParams(search).get('workstream')}</Heading>
-        {session && <Text as="p" size="2" color="gray">{session.ownerName || session.ownerId} · {session.project || tr("common.isolatedDirectory")} · {session.taskCount}  {tr("tasks.tasks")}</Text>}</div>
+        {session && <Text as="p" size="2" color="gray">{session.ownerName || session.ownerId} · {session.taskCount}  {tr("tasks.tasks")}</Text>}</div>
       <LocalLink href="/sessions" navigate={navigate}>{tr("tasks.backSessions")}</LocalLink>
     </div>}
     <Filters kind={kind} search={search} options={options.data} onSearch={go} />
@@ -51,10 +51,10 @@ export function TasksPage({ state, onOpen, navigate, search, kind, enabled }: {
     {data && <div aria-busy={busy}>
       {data.items.length > 0 ? kind === 'tasks' ? <TaskTable tasks={(data as TaskList).items} onOpen={onOpen} navigate={navigate} /> :
         <Table.Root variant="surface" className="task-table browse-table session-table"><Table.Header><Table.Row>
-          <Table.ColumnHeaderCell>{tr("nav.sessions")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.user")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.project")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.status")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("tasks.taskCount")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("tasks.lastActive")}</Table.ColumnHeaderCell>
+          <Table.ColumnHeaderCell>{tr("nav.sessions")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.user")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.status")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("tasks.taskCount")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("tasks.lastActive")}</Table.ColumnHeaderCell>
         </Table.Row></Table.Header><Table.Body>{(data as PageResult<SessionSummary>).items.map(item => <Table.Row key={item.id}>
           <Table.RowHeaderCell className="summary-cell"><LocalLink className="task-title" title={item.title} href={`/tasks?workstream=${item.id}`} navigate={navigate}>{item.title}</LocalLink><span className="secondary-id">{item.id}</span><span className="session-latest" title={item.latestTitle}>{tr("tasks.latest")}{item.latestTitle}</span></Table.RowHeaderCell>
-          <Table.Cell><Owner id={item.ownerId} name={item.ownerName} /></Table.Cell><Table.Cell>{item.project || tr("common.isolatedDirectory")}</Table.Cell>
+          <Table.Cell><Owner id={item.ownerId} name={item.ownerName} /></Table.Cell>
           <Table.Cell><StatusBadge state={item.state} />{item.current && <span className="current-session"><Badge variant="outline" color="gray">{tr("tasks.currentSession")}</Badge></span>}</Table.Cell>
           <Table.Cell>{item.taskCount}</Table.Cell><Table.Cell><DateTime value={item.lastActiveAt} /><span className="created-hint" title={new Date(item.createdAt).toLocaleString(getLocale())}>{tr("tasks.created")} {new Date(item.createdAt).toLocaleDateString(getLocale())}</span></Table.Cell>
         </Table.Row>)}</Table.Body></Table.Root>

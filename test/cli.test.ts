@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -33,7 +33,7 @@ test('CLI keeps lifecycle commands and rejects invalid arguments before loading 
 });
 test('service render uses explicit installed entry and private config references without secrets',t=>{
  const dir=mkdtempSync(join(tmpdir(),'namo-service-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
- const file=join(dir,'config.json');const raw=initialConfig(file);raw.feishu.appSecret='SECRET_MUST_NOT_APPEAR';atomicJson(file,raw);
+ const file=join(dir,'config.json');const raw=initialConfig(file, file.slice(0, file.lastIndexOf('/')));raw.feishu.appSecret='SECRET_MUST_NOT_APPEAR';atomicJson(file,raw);
  const xml=renderLaunchAgent(loadConfig(file),'io.namo.0123456789ab','/installed/namo/bin.js','/stable/node','/tools/a&b');
  assert.ok(xml.includes('/installed/namo/bin.js'));assert.ok(xml.includes('/tools/a&amp;b'));assert.ok(!xml.includes(raw.feishu.appSecret));assert.ok(xml.includes(file));
 });
@@ -41,7 +41,7 @@ test('service render uses explicit installed entry and private config references
 test('status recognizes a foreground instance but needs matching health to report ready',async t=>{
  const {serviceStatus}=await import('../src/service.js');const {acquireLock}=await import('../src/safety.js');
  const dir=mkdtempSync(join(tmpdir(),'namo-foreground-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
- const file=join(dir,'config.json');atomicJson(file,initialConfig(file));const c=loadConfig(file);const release=acquireLock(c.dataDir);
+ const file=join(dir,'config.json');atomicJson(file,initialConfig(file, file.slice(0, file.lastIndexOf('/'))));const c=loadConfig(file);const release=acquireLock(c.dataDir);
  try{
   assert.equal(serviceStatus(c).running,true);assert.equal(serviceStatus(c).ready,false);
   atomicJson(join(c.dataDir,'health.json'),{pid:process.pid,connection:'connected',ready:true});
@@ -66,7 +66,7 @@ function fixture(t: { after(fn:()=>void):void }) {
   const oldHome=process.env.NAMO_HOME;process.env.NAMO_HOME=join(dir,'namo-home');
   t.after(()=>{if(oldHome===undefined)delete process.env.NAMO_HOME;else process.env.NAMO_HOME=oldHome;});
   t.after(()=>rmSync(dir,{recursive:true,force:true}));
-  const c=initialConfig(file);c.codex.projects={app:dir};c.codex.defaultProject='app';c.feishu.appId='cli_aaaaaaaaaaaaaaaa';c.feishu.appSecret='test-secret-do-not-print';c.custom={preserved:true};atomicJson(file,c);
+  const c=initialConfig(file, file.slice(0, file.lastIndexOf('/')));c.codex.directories=[dir];c.feishu.appId='cli_aaaaaaaaaaaaaaaa';c.feishu.appSecret='test-secret-do-not-print';c.custom={preserved:true};atomicJson(file,c);
   let accept:(e:FeishuEvent)=>void=()=>{};let calls=0,sends=0,closed=0;
   const connection:SetupConnection={async credentials(){return true},async connect(fn){accept=fn},async identity(){return{id:'bot',name:'Test Bot'}},async send(){sends++;return'receipt'},close(){closed++}};
   const deps:Partial<InitDeps>={async probe(){return[{id:'agent.protocol',status:'ok',message:'ready'}]},connection:()=>connection,async live(){calls++;return true},async install(){return{ready:true}}};
@@ -110,17 +110,17 @@ test('configuration paths preserve legacy selection and explicit/env precedence'
 
 test('fresh init creates private config and completes guided setup without developer JSON editing',async t=>{
   const f=fixture(t);rmSync(f.file);
-  const originalText=f.ui.text;
+  const originalText=f.ui.text;let directoryPrompts=0;
   f.ui.text=async(label,initial,secret)=>{
     if(label.startsWith('Codex'))return process.execPath;
-    if(label.startsWith('允许 Agent'))return f.dir;
+    if(label.startsWith('允许 Agent')){assert.equal(initial,'');return ++directoryPrompts===1?'':f.dir;}
     if(label==='App ID')return'cli_aaaaaaaaaaaaaaaa';
     if(secret)return'new-private-secret';
     return originalText(label,initial,secret);
   };
   f.ui.confirm=async label=>!label.includes('允许修改')&&!label.includes('命令联网')&&!label.includes('后台服务')&&!label.includes('再配对');
   const result=await onboard(f.file,f.ui,f.deps);assert.equal(result.verified,true);
-  const raw=readJson(f.file);assert.equal(raw.agent,'codex');assert.equal(raw.codex.sandbox,'read-only');assert.deepEqual(raw.feishu.allowedUserIds,['ou_owner']);
+  const raw=readJson(f.file);assert.equal(directoryPrompts,2);assert.deepEqual(raw.codex.directories,[realpathSync(f.dir)]);assert.equal(raw.codex.defaultProject,undefined);assert.equal(raw.dataDir,join(f.dir,'namo-home','data'));assert.equal(raw.agent,'codex');assert.equal(raw.codex.sandbox,'workspace-write');assert.deepEqual(raw.feishu.allowedUserIds,['ou_owner']);
 });
 test('aborting pairing leaves no authorized identity and releases both receiver locks',async t=>{
   const f=fixture(t);const abort=new AbortController();f.ui.signal=abort.signal;

@@ -59,6 +59,7 @@ async function main(): Promise<void> {
       const message=store.get(task.inboxKey)!;
       if (config.file !== file || !taskAuthorizationValid(config,current,message,task.project,task.cwd))
         throw new RuntimeError('task_configuration_changed');
+      if(config.codex.directories?.some(path=>!tasks.directories(task).includes(path)))throw new RuntimeError('task_directory_snapshot_changed');
       const policy = executionPolicy(config.codex,config.feishu,store.get(task.inboxKey)!,task.project??undefined,config.github);
       const effectiveConfig = {...config,codex:policy};
       const selection = tasks.selection(task.id) ?? selectAgent(effectiveConfig, 'codex');
@@ -119,14 +120,14 @@ async function main(): Promise<void> {
           const thread = store.thread(tasks.sessionKey(task))!;
           store.saveRun(task.inboxKey, thread, turn); tasks.saveRun(runId, thread, turn); runnerEvent(store, runId, 'turn_bound');
         }),
-        ...(config.mcpConnections?.length?{onMcp:async(args:unknown,signal:AbortSignal)=>{
+        onMcp:async(args:unknown,signal:AbortSignal)=>{
           const response=await mcpRead(store,file,task,args,signal,undefined,config);
           if(args&&typeof args==='object'&&(args as Record<string,unknown>).operation==='call') {
             const failed=!!(response as {data?:{isError?:boolean}})?.data?.isError;
             write(()=>runnerEvent(store,runId,`mcp_call_${failed?'failed':'completed'}`));
           }
           return response;
-        }}:{}),
+        },
         onReview: args => readReview(store,file,task,args,abort.signal),
         ...(config.github?.mode==='simple'?{onGitHub:(args:unknown,signal:AbortSignal)=>githubApi(store,file,task,args,signal)}:{}),
         onReady: next => { controls = next; steer(); },
@@ -152,6 +153,7 @@ async function main(): Promise<void> {
     write(() => {
       if (store.get(task.inboxKey)?.cancelRequested) error = 'cancelled';
       if (error) new Waits(store).close(task.id, error === 'cancelled');
+      if (!error) tasks.finishRefresh(task);
       evidence?.finish(!error);
       store.db.prepare('UPDATE runner_jobs SET state=?,result=?,error=?,updatedAt=? WHERE runId=?')
         .run(error ? 'failed' : 'completed', error ? null : JSON.stringify(result), error ?? null, Date.now(), runId);

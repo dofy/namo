@@ -65,7 +65,7 @@ test('registered and running release identity comes from registration and matchi
   t.after(() => { writable(temp); rmSync(temp, { recursive: true, force: true }); });
   const fixture = source(join(temp, 'source'));
   const file = join(temp, 'config.json');
-  atomicJson(file, initialConfig(file));
+  atomicJson(file, initialConfig(file, file.slice(0, file.lastIndexOf('/'))));
   const config = loadConfig(file);
   const release = createRuntimeRelease(fixture.root, join(config.dataDir, 'releases'));
   const record = { format: 2, label: 'io.namo.0123456789ab', config: file, node: process.execPath, path: '/usr/bin', release };

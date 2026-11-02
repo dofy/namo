@@ -69,8 +69,6 @@ export function Filters({ kind, search, options, onSearch }: { kind: 'tasks' | '
   const states = kind === 'tasks' ? taskStates() : sessionStates();
   const users = options?.users.map(user => ({ value: user.id, label: user.name ? `${user.name} (${user.id})` : user.id })) ?? [];
   if (draft.owner && !users.some(user => user.value === draft.owner)) users.push({ value: draft.owner, label: draft.owner });
-  const projects = options?.projects.map(project => ({ value: `named:${project}`, label: project })) ?? [];
-  if (draft.project.startsWith('named:') && !projects.some(project => project.value === draft.project)) projects.push({ value: draft.project, label: draft.project.slice(6) });
   const active = filterKeys.filter(key => key !== 'sort' && key !== 'dateField' && new URLSearchParams(search).has(key)).length;
   return <Card asChild size="2"><form className="browse-filters" aria-label={tr("browse.listFilters")} onSubmit={event => {
     event.preventDefault(); const query = new URLSearchParams(search); query.delete('page');
@@ -80,7 +78,6 @@ export function Filters({ kind, search, options, onSearch }: { kind: 'tasks' | '
     <SectionHeading icon="filter" title={tr("design.filters")} description={tr("design.filtersHelp")} /><div className="filter-primary">
       <Field label={tr("common.search")} htmlFor={`${id}-search`} className="filter-search"><TextField.Root id={`${id}-search`} type="search" value={draft.q} maxLength={200} onChange={e => change('q', e.target.value)} placeholder={kind === 'tasks' ? tr("browse.taskContentTaskSessionId") : tr("browse.sessionIdAnyTaskContent")}><TextField.Slot><Icon name="search" /></TextField.Slot></TextField.Root></Field>
       <Field label={tr("common.user")} htmlFor={`${id}-owner`}><Choice id={`${id}-owner`} value={draft.owner} onChange={value => change('owner', value)} options={[{ value: '', label: tr("browse.allUsers") }, ...users]} /></Field>
-      <Field label={tr("common.project")} htmlFor={`${id}-project`}><Choice id={`${id}-project`} value={draft.project} onChange={value => change('project', value)} options={[{ value: '', label: tr("browse.allProjects") }, { value: 'isolated', label: tr("common.isolatedDirectory") }, ...projects]} /></Field>
       <Field label={tr("common.status")} htmlFor={`${id}-state`}><Choice id={`${id}-state`} value={draft.state} onChange={value => change('state', value)} options={[{ value: '', label: tr("browse.allStatuses") }, ...states.map(([value, label]) => ({ value, label }))]} /></Field>
     </div>
     <div className="filter-secondary">

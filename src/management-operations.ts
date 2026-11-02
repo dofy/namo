@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config.js';
 import type { Store } from './store.js';
-import { ApprovalError, ExecFileGitRunner, GitApprovals, type GitApprovalRecord, type ApprovalTaskContext } from './approvals.js';
+import { approvalDirectory, ApprovalError, ExecFileGitRunner, GitApprovals, type GitApprovalRecord, type ApprovalTaskContext } from './approvals.js';
 import { selectAgent, selectedPolicyHash } from './agent-registry.js';
 import { Tasks } from './tasks.js';
 import type { ApprovalAction, ApprovalView, ServiceLog } from './ui-contract.js';
@@ -31,7 +31,7 @@ export function serviceLogs(dataDir: string, redact: (text: string) => string): 
 
 export function approvalView(record: GitApprovalRecord): ApprovalView {
   const { id, revision, task, target, configRevision, commitSummary, expiresAt, reason } = record;
-  return { id, revision, taskId: task.taskId, project: task.project, ownerId: task.ownerId,
+  return { id, revision, taskId: task.taskId, project: task.project, directory:task.cwd, ownerId: task.ownerId,
     state: ['pending', 'approved'].includes(record.state) && expiresAt <= Date.now() ? 'expired' : record.state,
     remote: target.remote, ref: target.ref, headSha: target.headSha, remoteBeforeSha: target.remoteBeforeSha,
     configRevision, commitSummary, expiresAt, reason };
@@ -46,14 +46,14 @@ export async function changeApproval(store: Store, config: Config, revision: str
   const policy = config.gitApprovals;
   if (!policy?.gitBin) throw new ApprovalError('approval_unconfigured', tr('operations.approvalsUnavailable'));
   const approvals = new GitApprovals(store, policy, new ExecFileGitRunner(policy.gitBin));
-  const task = (id: string): ApprovalTaskContext & { state: string } => {
+  const task = (id: string, directory?:string): ApprovalTaskContext & { state: string } => {
     const row = store.db.prepare('SELECT id,ownerId,chatKey,project,cwd,policyHash,state FROM tasks WHERE id=?').get(id) as Record<string, unknown> | undefined;
     if (!row) throw new ApprovalError('task_missing', tr('cli.taskNotExist'));
     const project = row.project == null ? undefined : String(row.project), cwd = String(row.cwd), projects = config.codex.projects ?? {};
     const selection = new Tasks(store).selection(id) ?? selectAgent(config, 'codex');
     if (row.policyHash !== selectedPolicyHash(config, selection)) throw new ApprovalError('task_configuration_changed', tr('cli.agentProfileProjectPermissionsChangedTaskWas'));
     if (project && (!Object.hasOwn(projects, project) || projects[project] !== cwd)) throw new ApprovalError('task_configuration_changed', tr('cli.taskProjectWasRemovedItsPathChanged'));
-    return { taskId: id, ownerId: String(row.ownerId), chatKey: String(row.chatKey), project, cwd, policyHash: String(row.policyHash), state: String(row.state) };
+    return { taskId: id, ownerId: String(row.ownerId), chatKey: String(row.chatKey), project, cwd:approvalDirectory(store,config,id,cwd,directory), policyHash: String(row.policyHash), state: String(row.state) };
   };
   const unchanged = () => {
     const current = currentRevision();
@@ -61,7 +61,7 @@ export async function changeApproval(store: Store, config: Config, revision: str
     return current;
   };
   if (input.action === 'request') {
-    const bound = task(input.taskId);
+    const bound = task(input.taskId,input.directory);
     if (bound.state !== 'succeeded') throw new ApprovalError('task_not_complete', tr('cli.taskNotCompletedSuccessfully'));
     const requested = await approvals.request(bound, { remote: input.remote, ref: input.ref, configRevision: unchanged() });
     return approvalView(approvals.get(requested.id)!);
@@ -71,10 +71,10 @@ export async function changeApproval(store: Store, config: Config, revision: str
   if (input.revision !== record.revision) throw new ApprovalError('approval_changed', tr('operations.approvalChanged'));
   if (input.action !== 'reject' && record.configRevision !== revision) throw new ApprovalError('approval_config_changed', tr('management.configurationChangedReviewAgainApplying'));
   const actor = { ownerId: record.task.ownerId, chatKey: record.task.chatKey, authority: 'local-management' as const };
-  if (input.action === 'approve') { unchanged(); task(record.task.taskId); approvals.approve(record.id, actor); }
+  if (input.action === 'approve') { unchanged(); task(record.task.taskId,record.task.cwd); approvals.approve(record.id, actor); }
   else if (input.action === 'reject') approvals.reject(record.id, actor);
-  else if (input.action === 'execute') await approvals.execute(record.id, task(record.task.taskId), unchanged);
-  else if (input.action === 'reconcile') await approvals.reconcile(record.id, task(record.task.taskId), unchanged());
+  else if (input.action === 'execute') await approvals.execute(record.id, task(record.task.taskId,record.task.cwd), unchanged);
+  else if (input.action === 'reconcile') await approvals.reconcile(record.id, task(record.task.taskId,record.task.cwd), unchanged());
   else throw new ApprovalError('approval_action_invalid', tr('common.actionNotFound'));
   return approvalView(approvals.get(record.id)!);
 }

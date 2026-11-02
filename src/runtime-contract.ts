@@ -34,7 +34,7 @@ export interface Runtime {
   /** Durable runtimes own their evidence and survive receiver detachment. */
   persistent?: boolean;
   run(request: RunRequest): Promise<RunResult>;
-  reservations?(): { runId: string; chatKey: string; cwd: string; slotKey?: string }[];
+  reservations?(): { runId: string; chatKey: string; cwd: string; slotKey?: string; paths?:string[] }[];
   extractMemory?(input: AutoMemoryInput, signal: AbortSignal): Promise<unknown>;
 }
 export class RuntimeError extends Error {

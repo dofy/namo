@@ -48,6 +48,10 @@ CREATE TABLE task_messages (
   role TEXT NOT NULL, version INTEGER NOT NULL, dispatch TEXT NOT NULL DEFAULT 'pending',
   PRIMARY KEY(taskId,inboxKey), UNIQUE(inboxKey)
 );
+CREATE TABLE task_directories (
+  taskId TEXT NOT NULL REFERENCES tasks(id), path TEXT NOT NULL,
+  PRIMARY KEY(taskId,path)
+) STRICT;
 CREATE TABLE task_runs (
   id TEXT PRIMARY KEY, taskId TEXT NOT NULL REFERENCES tasks(id), inputVersion INTEGER NOT NULL,
   state TEXT NOT NULL, threadId TEXT, turnId TEXT, startedAt INTEGER NOT NULL, finishedAt INTEGER, error TEXT

@@ -128,7 +128,7 @@ export function releaseUpgradeBlockers(database: string, allowSchema13Migration 
   try {
     db = new DatabaseSync(database, { readOnly: true });
     const schema = Number(db.prepare('PRAGMA user_version').get()?.user_version);
-    const compatible = schema === SCHEMA_VERSION || (allowSchema13Migration && schema === 13 && SCHEMA_VERSION === 14);
+    const compatible = schema === SCHEMA_VERSION || (allowSchema13Migration && [13,14].includes(schema) && SCHEMA_VERSION === 15);
     if (!compatible) return ['database-schema'];
     const checks: [string, string][] = [
       ['receiver-queue', "SELECT 1 FROM inbox WHERE state IN ('queued','running','waiting','awaiting_reply') LIMIT 1"],

@@ -30,7 +30,7 @@ export function authorizationRevision(c: Config): string {
   return digest(JSON.stringify({
     appId: c.feishu.appId, domain: c.feishu.domain, access: c.feishu.access,
     users: c.feishu.allowedUserIds, chats: c.feishu.allowedChatIds,
-    projects: c.codex.projects, projectAccess: c.codex.projectAccess,
+    projects: c.codex.projects, projectAccess: c.codex.projectAccess, directories:c.codex.directories,
     sandbox: c.codex.sandbox, network: c.codex.networkAccess, commits: c.codex.allowLocalCommits,
     // MCP has its own call and delivery authorization checks. Including all
     // connections here aborts unrelated work when a disabled connection changes.

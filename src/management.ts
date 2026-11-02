@@ -94,15 +94,15 @@ export class Management {
     const {raw,revision}=this.source(),c=raw.codex??{},f=raw.feishu??{};
     let valid=true;try{parseConfig(raw,this.file);}catch{valid=false;}
     let github=publicGitHubAccess();try {github=publicGitHubAccess(parseGitHubAccessConfig(raw.github,process.env));}catch{/* Keep an invalid credential out of the projection. */}
-    let mcpConnections:ReturnType<typeof publicMcpConnections>;try{mcpConnections=publicMcpConnections(parseMcpConnections(raw.mcpConnections));}catch{mcpConnections=[];}
-    const service=this.status();let applied:string|undefined;
-    try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid)applied=h.configRevision;}catch{/* Not yet instrumented. */}
+    let mcpConnections:ReturnType<typeof publicMcpConnections>;try{mcpConnections=publicMcpConnections(parseMcpConnections(raw.mcpConnections,raw.codex?.directories!==undefined));}catch{mcpConnections=[];}
+    const service=this.status();let applied:string|undefined,automaticConfiguration=false,configurationReload:string|undefined;
+    try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid){applied=h.configRevision;automaticConfiguration=h.automaticConfiguration===true;configurationReload=h.configurationReload;}}catch{/* Not yet instrumented. */}
     let activeModelDefault:{model:string;profile:string}|undefined;
     if(valid&&service.running&&applied===revision){
       try {const agent=resolveAgent(parseConfig(raw,this.file));activeModelDefault={model:agent.model??'',profile:agent.id};}catch{/* Unavailable profiles must not be presented as active. */}
     }
-    return {revision,valid,github,mcpConnections,activeModelDefault,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
-      values:{projectAccess:c.projectAccess??{},projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.allowLocalCommits??false,
+    return {revision,valid,github,mcpConnections,activeModelDefault,automaticConfiguration,configurationReload,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
+      values:{directories:c.directories??Object.values(c.projects??{}),projectAccess:c.projectAccess??{},projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.directories!==undefined?'workspace-write':c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.directories!==undefined?true:c.allowLocalCommits??false,
         concurrency:Number.isInteger(raw.concurrency)&&raw.concurrency>=1&&raw.concurrency<4?4:raw.concurrency??8,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
         reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??200,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},
       feishu:{appId:f.appId??'',domain:f.domain??'feishu',secretConfigured:!!f.appSecret||!!process.env[f.appSecretEnv??'FEISHU_APP_SECRET'],pairedUsers:Array.isArray(f.allowedUserIds)?f.allowedUserIds.length:0,
@@ -366,10 +366,11 @@ export class Management {
     try {
       const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError(tr("management.configurationChangedAnotherPageProgramRefreshTry"));
       if(!patch||typeof patch!=='object'||Array.isArray(patch))throw new ManagementError(tr("management.invalidConfigurationContent"));
-      const allowed=['serviceAccess','projectAccess','projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'];
+      const allowed=['directories','serviceAccess','projectAccess','projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'];
       if(Object.keys(patch).some(k=>!allowed.includes(k)))throw new ManagementError(tr("management.configurationIncludesFieldsCannotEdited"));
       const next=structuredClone(raw);next.codex??={};next.feishu??={};
       for(const key of allowed.filter(k=>!['serviceAccess','concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
+      if(patch.directories!==undefined){for(const key of ['projects','projectAccess','defaultProject','readPaths'])delete next.codex[key];next.codex.sandbox='workspace-write';next.codex.allowLocalCommits=true;}
       if(patch.serviceAccess!==undefined) {
         const a=patch.serviceAccess;
         if (!a || typeof a!=='object' || Array.isArray(a) || Object.keys(a).some(k=>!['access','allowedUserIds','allowedChatIds'].includes(k))) throw new ManagementError(tr("management.invalidOrganizationAccessSettings"),400);
@@ -505,7 +506,7 @@ export class Management {
     if (input.confirmed !== true) throw new ManagementError(tr('operations.confirmRequired'), 400);
     if (this.source().revision !== revision) throw new ManagementError(tr('management.configurationChangedReviewAgainApplying'));
     if (!/^[a-f0-9]{64}$/.test(input.configRevision??'') || (input.action === 'request'
-      ? typeof input.taskId !== 'string' || !/^N-[A-F0-9]{12}$/.test(input.taskId) || typeof input.remote !== 'string' || typeof input.ref !== 'string'
+      ? typeof input.taskId !== 'string' || !/^N-[A-F0-9]{12}$/.test(input.taskId) || typeof input.remote !== 'string' || typeof input.ref !== 'string' || input.directory!==undefined&&(typeof input.directory!=='string'||input.directory.length>4096)
       : typeof input.id !== 'string' || !/^AP-[A-F0-9]{12}$/.test(input.id) || !Number.isSafeInteger(input.revision))) throw new ManagementError(tr('operations.approvalInputInvalid'), 400);
     const schema = this.read(s => Number(s.db.prepare('PRAGMA user_version').get()?.user_version));
     if (schema !== SCHEMA_VERSION) throw new ManagementError(tr('management.databaseSchemaUnsupported'));

@@ -2,10 +2,11 @@ import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync,
   statSync, writeFileSync,
 } from 'node:fs';
+import { parseConfig } from './config.js';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { ConfigEditor, atomicJson, digest, readJson } from './paths.js';
+import { ConfigEditor, atomicJson, digest, readJson, userHome } from './paths.js';
 
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
 const MAX_CANDIDATE_BYTES = 256 * 1024;
@@ -97,6 +98,7 @@ export interface ImportProject {
 }
 
 export interface ImportOptions {
+  directories?:string[];
   conflictResolutions?: Partial<Record<MigrationConflict['path'], MigrationConflictResolution>>;
   permissions?: ImportPermissions;
   project?: ImportProject;
@@ -356,7 +358,7 @@ export function previewOpenClawMigration(input: { sourceFile: string; sourceInst
 
 function dataDirectory(target: JsonObject | undefined, targetFile: string): string {
   const configured = target?.dataDir;
-  const path = typeof configured === 'string' && configured ? expandPath(configured, dirname(targetFile)) : join(dirname(targetFile), 'data');
+  const path = typeof configured === 'string' && configured ? expandPath(configured, dirname(targetFile)) : join(userHome(), 'data');
   if (path === '/' || path === homedir()) throw new MigrationError('unsafe_data_directory', 'Migration state requires a specific private data directory, not root or the home directory.');
   if (existsSync(path)) {
     const info = lstatSync(path);
@@ -365,11 +367,11 @@ function dataDirectory(target: JsonObject | undefined, targetFile: string): stri
   return path;
 }
 
-function initialTarget(targetFile: string): JsonObject {
-  const dataDir = join(dirname(targetFile), 'data');
+function initialTarget(_targetFile: string): JsonObject {
+  const dataDir = join(userHome(), 'data');
   return { version: 1, agent: 'codex', dataDir, concurrency: 8,
     feishu: { appId: '', appSecret: '', allowedUserIds: [], allowedChatIds: [], requireMention: true, domain: 'feishu' },
-    codex: { bin: 'codex', home: join(dataDir, 'codex-home'), timeoutMs: 600_000, sandbox: 'read-only', projects: {}, networkAccess: false, readPaths: [], denyPaths: [], allowLocalCommits: false } };
+    codex: { bin: 'codex', home: join(dataDir, 'codex-home'), timeoutMs: 600_000, sandbox: 'workspace-write', directories: [], networkAccess: false, denyPaths: [], allowLocalCommits: true } };
 }
 
 function desiredFingerprint(value: unknown): string { return digest(JSON.stringify(value, null, 2) + '\n'); }
@@ -491,8 +493,17 @@ export function importOpenClawMigration(preview: OpenClawMigrationPreview, input
     const codex = object(next.codex)!;
     const projects = object(codex.projects) ?? {};
     if (projects[projectName] !== undefined && projects[projectName] !== source.workspace && options.conflictResolutions?.['codex.projects'] !== 'use-source') throw new MigrationError('conflict_unresolved', 'The selected project name is already in use.');
-    projects[projectName] = source.workspace; codex.projects = projects;
-    if (typeof codex.defaultProject !== 'string' || !codex.defaultProject) codex.defaultProject = projectName;
+    if(Array.isArray(codex.directories)){codex.directories=[...new Set([...codex.directories,source.workspace])];}
+    else {projects[projectName] = source.workspace; codex.projects = projects;}
+    if (codex.directories===undefined&&(typeof codex.defaultProject !== 'string' || !codex.defaultProject)) codex.defaultProject = projectName;
+  }
+  if(options.directories!==undefined) {
+    if(!Array.isArray(options.directories)||!options.directories.length)throw new MigrationError('directories_required','Choose at least one accessible directory.');
+    const codex=object(next.codex)!;
+    codex.directories=options.directories.map(value=>{const directory=realpathSync(expandPath(value,dirname(preview.targetConfigFile)));if(!statSync(directory).isDirectory()||directory==='/'||directory===realpathSync(homedir()))throw new MigrationError('directory_invalid','Choose a specific directory.');return directory;});
+    for(const key of ['projects','projectAccess','defaultProject','readPaths'])delete codex[key];
+    codex.sandbox='workspace-write';codex.allowLocalCommits=true;
+    parseConfig(next,preview.targetConfigFile);
   }
   const afterFingerprint = oldTarget && JSON.stringify(oldTarget) === JSON.stringify(next) ? fileFingerprint(preview.targetConfigFile) : desiredFingerprint(next);
   if (existing) {

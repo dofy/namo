@@ -61,8 +61,8 @@ test('schedule tasks keep their own workstream and do not consume a user convers
 
 test('version 13 upgrades in place and keeps existing rows', t=>{
  const dir=mkdtempSync(join(tmpdir(),'namo-schedule-migrate-')),path=join(dir,'db');t.after(()=>rmSync(dir,{recursive:true,force:true}));
- const old=new Store(path);old.enqueue(message('kept','hello'));old.db.exec('DROP TABLE schedules; PRAGMA user_version=13');old.close();
- const upgraded=new Store(path);assert.equal(upgraded.get('kept')?.text,'hello');assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version,14);
+ const old=new Store(path);old.enqueue(message('kept','hello'));old.db.exec('DROP TABLE task_directories; DROP TABLE schedules; PRAGMA user_version=13');old.close();
+ const upgraded=new Store(path);assert.equal(upgraded.get('kept')?.text,'hello');assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version,15);
  assert.deepEqual(upgraded.db.prepare('PRAGMA foreign_key_check').all(),[]);upgraded.close();
 });
 
@@ -118,7 +118,7 @@ test('a schedule paused by changed binding records a reason and notifies its own
  const engine=new Engine(store,{async run(){throw Error('unexpected');}},{async send(_chat,text,uuid){sent.push(text);return uuid;}},{dataDir:dir,concurrency:1,feishu:{allowedUserIds:['user'],allowedChatIds:[],progressUpdates:false,reactions:false}});
  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});engine.start();
  await waitFor(()=>sent.some(text=>text.includes('已暂停')),3000);
- assert.match(new Schedules(store).command(message('list','/schedule list'),()=>({}))!,/暂停原因：项目或权限绑定已变化/);
+ assert.match(new Schedules(store).command(message('list','/schedule list'),()=>({}))!,/暂停原因：目录或权限绑定已变化/);
  assert.match(new Schedules(store).command(message('wrong',`/schedule resume ${id}`),()=>({cwd:'/different',policyHash:'new'}))!,/切换回/);
  assert.equal(store.db.prepare('SELECT state FROM schedules WHERE id=?').get(id)?.state,'paused');
  assert.match(new Schedules(store).command(message('resume',`/schedule resume ${id}`),()=>({cwd:dir,policyHash:'new'}))!,/重新绑定/);

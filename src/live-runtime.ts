@@ -36,6 +36,7 @@ export function createLiveRuntime(options: LiveRuntimeOptions): HostedRuntime {
     acceptCard: event => withLocale('zh-CN', () => engine.acceptCard(event)),
     start: paused => withLocale('zh-CN', () => engine.start(paused)),
     resume: () => withLocale('zh-CN', () => engine.resume()),
+    drainConfiguration: value => engine.drainConfiguration(value),
     stop: () => engine.stop(),
   };
 }

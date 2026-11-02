@@ -99,7 +99,7 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
       </div>
       <div className="sidebar-foot"><div className="service-status"><span className={`dot ${state?.service.ready ? 'ready' : ''}`} />
         <Text weight="medium" size="2">{expired || !state ? tr("app.notAuthorized") : state.service.ready ? tr("app.feishuConnected") : state.service.running ? tr("app.connectionNotReady") : tr("app.serviceStopped")}</Text>
-        {state && state.config.application !== 'applied' && <Text as="p" size="1" color="gray">{application[state.config.application]}</Text>}</div>
+        {state && state.config.application !== 'applied' && <Text as="p" size="1" color="gray">{state.config.automaticConfiguration&&state.config.application==='pending'?tr(state.config.configurationReload==='error'?'settings.configurationReloadError':'settings.configurationDraining'):application[state.config.application]}</Text>}</div>
         <ThemeSwitch />
         <div className="language-control">
           <label className="sr-only" htmlFor="workbench-language">Language / 语言</label>

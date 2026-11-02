@@ -16,11 +16,11 @@ export class RunnerRuntime implements Runtime {
   readonly persistent = true;
   constructor(private store: Store, private config: Config) {}
   extractMemory(input: AutoMemoryInput, signal: AbortSignal): Promise<unknown> { return extractConversationMemory(this.config.codex,input,signal); }
-  reservations(): { runId: string; chatKey: string; cwd: string; slotKey: string }[] {
-    const rows=this.store.db.prepare(`SELECT j.runId,t.chatKey,t.cwd,t.scopeKey,t.ownerId,i.envelope FROM runner_jobs j JOIN task_runs r ON r.id=j.runId
+  reservations(): { runId: string; chatKey: string; cwd: string; slotKey: string;paths:string[] }[] {
+    const rows=this.store.db.prepare(`SELECT j.runId,t.id taskId,t.chatKey,t.cwd,t.scopeKey,t.ownerId,i.envelope FROM runner_jobs j JOIN task_runs r ON r.id=j.runId
       JOIN tasks t ON t.id=r.taskId JOIN inbox i ON i.key=t.inboxKey WHERE j.state IN ('starting','running','lost')`).all();
     return rows.map(row=>{let group=false;try{group=JSON.parse(String(row.envelope)).chatType==='group';}catch{}
-      return {runId:String(row.runId),chatKey:String(row.chatKey),cwd:String(row.cwd),slotKey:group?JSON.stringify(['group',row.chatKey,row.scopeKey,row.ownerId]):String(row.chatKey)};});
+      return {runId:String(row.runId),chatKey:String(row.chatKey),cwd:String(row.cwd),paths:this.store.db.prepare('SELECT path FROM task_directories WHERE taskId=?').all(row.taskId).map(p=>String(p.path)),slotKey:group?JSON.stringify(['group',row.chatKey,row.scopeKey,row.ownerId]):String(row.chatKey)};});
   }
   async run(r: RunRequest): Promise<RunResult> {
     if (!r.runId || !r.taskId) throw new RuntimeError('runner_identity_missing');

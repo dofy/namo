@@ -3,7 +3,7 @@ import { selectAgent, selectedPolicyHash } from './agent-registry.js';
 import type { Config } from './config.js';
 import type { Incoming } from './store.js';
 import { Store } from './store.js';
-import { ApprovalError, ExecFileGitRunner, GitApprovals, type ApprovalTaskContext, type GitRunner } from './approvals.js';
+import { approvalDirectory, ApprovalError, ExecFileGitRunner, GitApprovals, type ApprovalTaskContext, type GitRunner } from './approvals.js';
 import { Tasks } from './tasks.js';
 
 type Action = 'request' | 'approve' | 'reject' | 'status';
@@ -27,8 +27,8 @@ export class ApprovalService {
     this.schedule();
   }
   private syntax(text: string): { action: Action; args: string[] } | undefined {
-    let match = /^\/push-request\s+(N-[A-F0-9]+)\s+([A-Za-z0-9][A-Za-z0-9._-]{0,63})\s+(refs\/heads\/\S+)\s*$/i.exec(text);
-    if (match) return { action: 'request', args: [match[1]!.toUpperCase(), match[2]!, match[3]!] };
+    let match = /^\/push-request\s+(N-[A-F0-9]+)\s+([A-Za-z0-9][A-Za-z0-9._-]{0,63})\s+(refs\/heads\/\S+)(?:\s+--directory\s+(.+?))?\s*$/i.exec(text);
+    if (match) return { action: 'request', args: [match[1]!.toUpperCase(), match[2]!, match[3]!, ...(match[4]?[match[4]]:[])] };
     match = /^\/push-approve\s+(AP-[A-F0-9]{12})\s+--confirm\s*$/i.exec(text);
     if (match) return { action: 'approve', args: [match[1]!.toUpperCase()] };
     match = /^\/push-reject\s+(AP-[A-F0-9]{12})\s*$/i.exec(text);
@@ -43,7 +43,7 @@ export class ApprovalService {
     this.store.transaction(() => {
       if (!this.store.claim(message.key)) return;
       if (!acceptedIdentity) { this.store.finish(message.key, '受控 push 只接受已配对本人的私聊命令；本条未进入审批。', 'approval_identity_rejected'); return; }
-      if (!parsed) { this.store.finish(message.key, '用法：/push-request N-任务编号 remote refs/heads/分支；/push-approve AP-编号 --confirm；/push-reject AP-编号；/push-status AP-编号。', 'approval_command_invalid'); return; }
+      if (!parsed) { this.store.finish(message.key, '用法：/push-request N-任务编号 remote refs/heads/分支 --directory 仓库绝对路径；/push-approve AP-编号 --confirm；/push-reject AP-编号；/push-status AP-编号。', 'approval_command_invalid'); return; }
       const job: ApprovalJob = { version: 1, inboxKey: message.key, action: parsed.action, args: parsed.args, state: 'queued', createdAt: Date.now(), updatedAt: Date.now() };
       approvalJobs(this.store.db).save(job, 'ignore');
     });
@@ -67,7 +67,7 @@ export class ApprovalService {
   private next(): ApprovalJob | undefined {
     return approvalJobs(this.store.db).list("state='queued'", [], 'ORDER BY createdAt,inboxKey LIMIT 1')[0];
   }
-  private task(id: string): ApprovalTaskContext & { state: string } {
+  private task(id: string,directory?:string): ApprovalTaskContext & { state: string } {
     const row = this.store.db.prepare('SELECT id,ownerId,chatKey,project,cwd,policyHash,state FROM tasks WHERE id=?').get(id) as Record<string, unknown> | undefined;
     if (!row) throw new ApprovalError('task_missing', '任务不存在。');
     const project = row.project == null ? undefined : String(row.project), cwd = String(row.cwd), savedPolicy = String(row.policyHash);
@@ -77,11 +77,11 @@ export class ApprovalService {
       throw new ApprovalError('task_configuration_changed', '任务绑定的项目已移除或路径已更改，不能申请或执行 push。');
     }
     return { taskId: String(row.id), ownerId: String(row.ownerId), chatKey: String(row.chatKey), project,
-      cwd, policyHash: savedPolicy, state: String(row.state) };
+      cwd:approvalDirectory(this.store,this.config,id,cwd,directory), policyHash: savedPolicy, state: String(row.state) };
   }
   private view(id: string): string {
     const record = this.approvals.get(id); if (!record) throw new ApprovalError('approval_missing', '审批不存在。');
-    return JSON.stringify({ id: record.id, state: record.state, taskId: record.task.taskId, project: record.task.project,
+    return JSON.stringify({ id: record.id, state: record.state, taskId: record.task.taskId, project: record.task.project, directory:record.task.cwd,
       remote: record.target.remote, ref: record.target.ref, headSha: record.target.headSha, remoteBeforeSha: record.target.remoteBeforeSha,
       expiresAt: record.expiresAt, reason: record.reason, limitedProtection: true,
       limitation: '只保护本审批入口；通用 Agent 运行环境仍可能存在其他联网或凭据绕过路径。' });
@@ -94,7 +94,7 @@ export class ApprovalService {
     };
     if (job.action === 'request' || job.action === 'approve') revision();
     if (job.action === 'request') {
-      const task = this.task(job.args[0]!); const incoming = this.store.get(job.inboxKey)!;
+      const task = this.task(job.args[0]!,job.args[3]); const incoming = this.store.get(job.inboxKey)!;
       if (task.ownerId !== incoming.senderId || task.chatKey !== incoming.chatKey) throw new ApprovalError('task_owner_mismatch', '只能为本人在本聊天中的任务申请 push。');
       if (task.state !== 'succeeded') throw new ApprovalError('task_not_complete', '任务尚未成功完成，不能申请 push。');
       const preview = await this.approvals.request(task, { remote: job.args[1]!, ref: job.args[2]!, configRevision: revision() });
@@ -108,7 +108,7 @@ export class ApprovalService {
     if (job.action === 'reject') { this.approvals.reject(id, actor); return this.view(id); }
     if (record.state === 'pending') this.approvals.approve(id, actor);
     else if (record.state !== 'approved') throw new ApprovalError('approval_not_executable', '审批不是可执行状态，不能重复 push。');
-    const task = this.task(record.task.taskId);
+    const task = this.task(record.task.taskId,record.task.cwd);
     await this.approvals.execute(id, task, revision); return this.view(id);
   }
   private finish(job: ApprovalJob, text: string, error?: string): void {

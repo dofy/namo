@@ -7,6 +7,21 @@ import { join } from 'node:path';
 import { Engine, SendError, type Sender } from '../src/engine.js';
 import { RuntimeError, type Runtime } from '../src/runtime.js';
 import { Store, type Incoming } from '../src/store.js';
+import { Tasks } from '../src/tasks.js';
+
+test('shared writable directories serialize distinct chats while all tasks run in private scratch directories',async t=>{
+  const dir=realpathSync(mkdtempSync(join(tmpdir(),'namo-directory-engine-'))),store=new Store(join(dir,'bot.sqlite'));
+  const source=join(dir,'source');mkdirSync(source);
+  let active=0,max=0;const runs:string[]=[];
+  const engine=new Engine(store,{async run(r){runs.push(r.cwd);active++;max=Math.max(max,active);await new Promise(resolve=>setTimeout(resolve,40));active--;return{text:'done',threadId:r.cwd,turnId:'turn'};}},
+    {async send(_c,_text,id){return id;}},{dataDir:dir,concurrency:4,feishu:{appId:'app',appSecret:'test',domain:'feishu',requireMention:true,allowedUserIds:['user','bob'],allowedChatIds:[]},
+    codex:{bin:'codex',home:join(dir,'auth'),timeoutMs:1000,sandbox:'workspace-write',directories:[source],allowLocalCommits:true}});
+  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+  engine.start();engine.accept(msg('first'));engine.accept({...msg('second','other'),senderId:'bob'});
+  await wait(()=>store.get('first')?.state==='replied'&&store.get('second')?.state==='replied');
+  assert.equal(runs.length,2);assert.equal(max,1);assert.notEqual(runs[0],runs[1]);assert.ok(runs.every(path=>path.startsWith(join(dir,'workspaces'))));
+  const tasks=new Tasks(store);for(const key of ['first','second'])assert.ok(tasks.directories(tasks.get(store.get(key)!.taskId!)!).includes(source));
+});
 
 const msg = (key: string, chatKey = 'chat', text = 'hello'): Incoming => ({ key, chatKey, chatId: chatKey, messageId: key, senderId: 'user', text });
 const wait = (condition: () => boolean, timeoutMs = 4000) => waitFor(condition, timeoutMs);

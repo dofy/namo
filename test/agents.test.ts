@@ -22,7 +22,7 @@ import { CodexRuntime } from '../src/runtime.js';
 
 test('live diagnostics distinguish verified reply, mismatch and failed calls without leaking raw output', async t => {
  const dir=mkdtempSync(join(tmpdir(),'namo-live-diagnostic-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
- const file=join(dir,'config.json'),raw=initialConfig(file),bin=join(dir,'probe.mjs');
+ const file=join(dir,'config.json'),raw=initialConfig(file, file.slice(0, file.lastIndexOf('/'))),bin=join(dir,'probe.mjs');
  raw.codex.bin=bin;raw.feishu.appId='fixture-diagnostic';raw.feishu.appSecret='FAKE_DIAGNOSTIC_SECRET';mkdirSync(raw.codex.home,{recursive:true});atomicJson(file,raw);
  writeFileSync(bin,`#!/usr/bin/env node
 import{createInterface}from'node:readline';createInterface({input:process.stdin}).on('line',l=>{const m=JSON.parse(l);if(m.id)process.stdout.write(JSON.stringify({id:m.id,result:m.method==='skills/list'?{data:[{cwd:m.params.cwds[0],skills:[],errors:[]}]}:m.method==='permissionProfile/list'?{data:[{id:'feishu-bot',allowed:true}]}:m.method==='account/read'?{account:{type:'chatgpt'}}:{}})+'\\n')});`,{mode:0o700});
@@ -39,7 +39,7 @@ import{createInterface}from'node:readline';createInterface({input:process.stdin}
 
 test('probe distinguishes missing binary, login and protocol permission compatibility without inference',async t=>{
  const dir=mkdtempSync(join(tmpdir(),'namo-agent-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
- const file=join(dir,'config.json'),raw=initialConfig(file);raw.codex.bin=join(dir,'missing');atomicJson(file,raw);
+ const file=join(dir,'config.json'),raw=initialConfig(file, file.slice(0, file.lastIndexOf('/')));raw.codex.bin=join(dir,'missing');atomicJson(file,raw);
  assert.equal(findExecutable(raw.codex.bin),undefined);assert.equal((await probeAgent(loadConfig(file)))[0].status,'fail');
  const bin=join(dir,'agent.mjs');raw.codex.bin=bin;writeFileSync(bin,`#!/usr/bin/env node
 import {createInterface} from 'node:readline';

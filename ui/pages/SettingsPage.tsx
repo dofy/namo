@@ -3,14 +3,12 @@ import { Icon, type IconName } from '../Icon';
 import { useEffect, useRef, useState } from 'react';
 import { Button, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { ConfigValues, ConfigView, ProfileState } from '../../src/ui-contract';
-import type { ProjectAccess } from '../../src/access-contract';
 import { api, message } from '../api';
-import { Choice, ConfirmButton, Field, Notice } from '../components';
+import { ConfirmButton, Field, Notice } from '../components';
 import { PageSection } from '../components/PageSection';
 import { SettingToggle } from '../components/SettingToggle';
 import { ModelSelect } from '../components/ModelSelect';
 import { CodexUpdatePanel } from '../components/CodexUpdatePanel';
-import { ProjectAccessFields, accessSummary, emptyProjectAccess } from '../ProjectAccessFields';
 
 type MessageOption = 'requireMention' | 'cards' | 'reactions' | 'progressUpdates';
 const messageOptions: { key: MessageOption; icon: IconName; title: MessageKey; description: MessageKey }[] = [
@@ -20,39 +18,28 @@ const messageOptions: { key: MessageOption; icon: IconName; title: MessageKey; d
   { key: 'progressUpdates', icon: 'activity', title: 'settings.messageProgressTitle', description: 'settings.messageProgressDescription' },
 ];
 
-type ProjectRow = { id: string; name: string; path: string; access?:ProjectAccess };
-interface Draft extends Omit<ConfigValues, 'projects' | 'projectAccess' | 'readPaths' | 'denyPaths' | 'timeoutMs' | 'concurrency' | 'progressDelayMs' | 'progressIntervalMs' | 'progressHeartbeatMs'> {
-  projects: ProjectRow[]; readPaths: string; denyPaths: string; timeoutSeconds: string; concurrency: string; newSecret: string;
+interface Draft extends Omit<ConfigValues, 'directories' | 'readPaths' | 'denyPaths' | 'timeoutMs' | 'concurrency' | 'progressDelayMs' | 'progressIntervalMs' | 'progressHeartbeatMs'> {
+  directories:string; readPaths:string; denyPaths:string; timeoutSeconds:string; concurrency:string; newSecret:string;
   progressDelayMs:string;progressIntervalMs:string;progressHeartbeatMs:string;
 }
-function fromConfig(config: ConfigView): Draft {
-  const v = config.values, {projects,projectAccess,...values}=v;
-  return { ...values, projects: Object.entries(projects).map(([name, path]) => ({ id: crypto.randomUUID(), name, path, ...(projectAccess?.[name]?{access:structuredClone(projectAccess[name])}:{}) })),
-    reactions:v.reactions!==false,progressUpdates:v.progressUpdates!==false,
-    readPaths: v.readPaths.join('\n'), denyPaths: v.denyPaths.join('\n'), timeoutSeconds: String(v.timeoutMs / 1000), concurrency: String(v.concurrency), newSecret: '',
-    progressDelayMs:String(v.progressDelayMs??200),progressIntervalMs:String(v.progressIntervalMs??5000),progressHeartbeatMs:String(v.progressHeartbeatMs??30000) };
+function fromConfig(config:ConfigView):Draft {
+  const v=config.values;
+  return {...v,directories:(v.directories??Object.values(v.projects)).join('\n'),readPaths:'',denyPaths:v.denyPaths.join('\n'),
+    timeoutSeconds:String(v.timeoutMs/1000),concurrency:String(v.concurrency),newSecret:'',
+    progressDelayMs:String(v.progressDelayMs??200),progressIntervalMs:String(v.progressIntervalMs??5000),progressHeartbeatMs:String(v.progressHeartbeatMs??30000)};
 }
-function toPatch(draft: Draft): ConfigValues & { newSecret: string } {
-  const projects:Record<string,string>={}, projectAccess:Record<string,ProjectAccess>={};
-  for(const row of draft.projects){
-    const name=row.name.trim(),path=row.path.trim();
-    if(!name||!path)throw Error(tr('settings.enterCompleteProjectNameDirectoryRemoveEmpty'));
-    if(Object.hasOwn(projects,name)||['__proto__','constructor','prototype'].includes(name))throw Error(tr('settings.projectNameDuplicatedUnavailable'));
-    projects[name]=path;
-    if(row.access!==undefined)projectAccess[name]=structuredClone(row.access);
-  }
-  const { timeoutSeconds, projects:rows, ...values } = draft;
-  void rows;
-  return { ...values, projects, projectAccess, concurrency: Number(draft.concurrency), timeoutMs: Number(timeoutSeconds) * 1000,
-    progressDelayMs:Number(draft.progressDelayMs),progressIntervalMs:Number(draft.progressIntervalMs),progressHeartbeatMs:Number(draft.progressHeartbeatMs),
-    readPaths: draft.readPaths.split('\n').map(x => x.trim()).filter(Boolean), denyPaths: draft.denyPaths.split('\n').map(x => x.trim()).filter(Boolean) };
+function toPatch(draft:Draft):ConfigValues&{newSecret:string} {
+  const {timeoutSeconds,...values}=draft;
+  return {...values,directories:draft.directories.split('\n').map(x=>x.trim()).filter(Boolean),projects:{},projectAccess:{},defaultProject:'',
+    sandbox:'workspace-write',allowLocalCommits:true,readPaths:[],denyPaths:draft.denyPaths.split('\n').map(x=>x.trim()).filter(Boolean),
+    concurrency:Number(draft.concurrency),timeoutMs:Number(timeoutSeconds)*1000,
+    progressDelayMs:Number(draft.progressDelayMs),progressIntervalMs:Number(draft.progressIntervalMs),progressHeartbeatMs:Number(draft.progressHeartbeatMs)};
 }
-export function SettingsPage({ config, profiles, recoveryAvailable, refresh, notify }: {
+export function SettingsPage({ config, recoveryAvailable, refresh, notify }: {
   config: ConfigView; profiles?:ProfileState; recoveryAvailable: boolean; refresh: () => Promise<unknown>; notify: (text: string, error?: boolean) => void;
 }) {
   const [draft, setDraft] = useState(() => fromConfig(config)), [revision, setRevision] = useState(config.revision);
   const [dirty, setDirty] = useState(false), [saving, setSaving] = useState(false), [error, setError] = useState('');
-  const [openProjects,setOpenProjects]=useState<Set<string>>(()=>new Set());
   const observedRevision = useRef(config.revision);
   function reset(value: ConfigView) { setDraft(fromConfig(value)); setRevision(value.revision); setDirty(false); setError(''); }
   useEffect(() => {
@@ -67,7 +54,6 @@ export function SettingsPage({ config, profiles, recoveryAvailable, refresh, not
     window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
   function edit<K extends keyof Draft>(key: K, value: Draft[K]) { setDraft(d => ({ ...d, [key]: value })); setDirty(true); }
-  const projects = [...new Set(draft.projects.map(p => p.name.trim()).filter(Boolean))];
   return <div className="settings-page"><form onSubmit={async event => {
     event.preventDefault(); if (saving) return; setSaving(true); setError('');
     try { const saved = await api.save(revision, toPatch(draft)); reset(saved); notify(tr("settings.configurationSavedPreviousValuesBackedUpApply")); await refresh(); }
@@ -77,38 +63,12 @@ export function SettingsPage({ config, profiles, recoveryAvailable, refresh, not
     {!config.valid && <Notice>{tr("common.configurationValidationFailedCheckProjectDirectoriesPermissions")}</Notice>}
     {dirty && revision !== config.revision && <Notice>{tr("settings.configurationChangedAnotherPageProgramDraftPreserved")}</Notice>}
     <fieldset disabled={saving}>
-      <PageSection icon="settings" title={tr("settings.allowedProjects")} description={tr("settings.allowSpecificProjectDirectoriesChangingDefaultNot")} action={
-        <Button type="button" variant="soft" onClick={() => {const id=crypto.randomUUID();edit('projects', [...draft.projects, { id, name: '', path: '' }]);setOpenProjects(previous=>new Set([...previous,id]));}}><Icon name="plus" />{tr("settings.addProject")}</Button>}>
-      {config.feishu.access&&<Text as="p" size="2" color="gray" className="project-access-intro">{tr('projectAccess.help')}</Text>}
-      <div className="projects">{draft.projects.map((project, index) => <div className="project-card" key={project.id}>
-      <div className="project-row">
-        <TextField.Root aria-label={tr("settings.numberedProjectName", index + 1)} placeholder={tr("settings.projectName")} value={project.name} onChange={e => edit('projects', draft.projects.map(p => p.id === project.id ? { ...p, name: e.target.value } : p))} />
-        <TextField.Root aria-label={tr("settings.projectDirectory", index + 1)} placeholder={tr("settings.fullPathProjectDirectory")} value={project.path} onChange={e => edit('projects', draft.projects.map(p => p.id === project.id ? { ...p, path: e.target.value } : p))} />
-        <Button type="button" variant="soft" color="gray" aria-label={tr("settings.removeProject", project.name || index + 1)} onClick={() => edit('projects', draft.projects.filter(p => p.id !== project.id))}><Icon name="close" />{tr("common.remove")}</Button>
-      </div>
-      {config.feishu.access&&<details className="project-access" open={openProjects.has(project.id)} onToggle={event=>{const open=event.currentTarget.open;setOpenProjects(previous=>{if(previous.has(project.id)===open)return previous;const next=new Set(previous);if(open)next.add(project.id);else next.delete(project.id);return next;});}}><summary><span>{tr('projectAccess.edit')}</span><span className={!project.access||!project.access.organization&&!project.access.userIds.length&&!project.access.chatIds.length?'project-access-empty':'project-access-summary'}>{accessSummary(project.access)}</span></summary>
-        <ProjectAccessFields id={`project-${project.id}`} value={project.access??emptyProjectAccess()} config={config} profiles={profiles} onChange={access=>edit('projects',draft.projects.map(p=>p.id===project.id?{...p,access}:p))}/>
-      </details>}
-      </div>)}</div>
-      <Field label={tr("settings.defaultProject")} htmlFor="default-project"><Choice id="default-project" value={draft.defaultProject || '$isolated'}
-        onChange={value => edit('defaultProject', value === '$isolated' ? '' : value)} disabled={saving}
-        options={[{ value: '$isolated', label: tr("settings.useIsolatedDirectory") }, ...projects.map(value => ({ value, label: value }))]} /></Field>
+      <PageSection icon="settings" title={tr('directories.title')} description={tr('directories.help')}>
+        <Field label={tr('directories.paths')} htmlFor="directories"><TextArea id="directories" rows={6} value={draft.directories} onChange={e=>edit('directories',e.target.value)}/></Field>
+        <Text as="p" size="1" color="gray">{tr('settings.serviceConfigurationDataLoginDirectoriesRemainExcluded')}</Text>
       </PageSection>
-      <PageSection icon="check" title={tr("settings.executionPermissions")} description={tr("design.permissions")}>
-        {config.feishu.access&&<Text as="p" size="2" color="gray">{tr('projectAccess.organizationPolicy')}</Text>}
-        <Field label={tr("settings.fileAccess")} htmlFor="sandbox"><Choice id="sandbox" value={draft.sandbox} disabled={saving}
-          onChange={value => { setDraft(d => ({ ...d, sandbox: value as Draft['sandbox'], allowLocalCommits: value === 'read-only' ? false : d.allowLocalCommits })); setDirty(true); }}
-          options={[{ value: 'read-only', label: tr("common.read") }, { value: 'workspace-write', label: tr("common.allowProjectFileChanges") }]} /></Field>
-        <div className="setting-options">
-          <SettingToggle icon="connections" title={tr("settings.allowNetworkAccessCommands")} description={tr("design.network")} checked={draft.networkAccess !== false} disabled={saving} onChange={value => edit('networkAccess', value)} />
-          <SettingToggle icon="save" title={tr("settings.allowLocalGitCommits")} description={tr("design.commits")} checked={draft.allowLocalCommits !== false} disabled={saving || draft.sandbox === 'read-only'} onChange={value => edit('allowLocalCommits', value)} />
-        </div>
-        <Text as="p" size="1" color="gray">{tr("settings.pushesDeploymentsRequireSeparateConfirmationCurrentlyAgent")}</Text>
-        <details><summary>{tr("settings.additionalPathPermissions")}</summary>
-          <Field label={tr("settings.additionalReadableDirectoriesOnePerLine")} htmlFor="read-paths"><TextArea id="read-paths" rows={3} value={draft.readPaths} onChange={e => edit('readPaths', e.target.value)} /></Field>
-          <Field label={tr("settings.blockedDirectoriesOnePerLine")} htmlFor="deny-paths"><TextArea id="deny-paths" rows={3} value={draft.denyPaths} onChange={e => edit('denyPaths', e.target.value)} /></Field>
-          <Text as="p" size="1" color="gray">{tr("settings.serviceConfigurationDataLoginDirectoriesRemainExcluded")}</Text>
-        </details>
+      <PageSection icon="connections" title={tr('settings.executionPermissions')}>
+        <SettingToggle icon="connections" title={tr('settings.allowNetworkAccessCommands')} description={tr('design.network')} checked={draft.networkAccess!==false} disabled={saving} onChange={value=>edit('networkAccess',value)}/>
       </PageSection>
       <PageSection icon="play" title={tr("settings.executionSettings")} description={tr("design.execution")}><div className="form-grid">
         <div><ModelSelect id="model" label={tr('model.serviceDefault')} value={draft.model} onChange={value=>edit('model',value)} disabled={saving} inheritLabel={tr('model.codexDefault')} resetKey={revision} />
@@ -134,12 +94,12 @@ export function SettingsPage({ config, profiles, recoveryAvailable, refresh, not
         </details>
       </PageSection>
     </fieldset>
-    <div className="save-bar" data-dirty={dirty}><Text as="p" size="2" color="gray">{dirty ? tr("common.unsavedChanges") : tr("settings.applySavedConfigurationUpdateService")}</Text>
+    <div className="save-bar" data-dirty={dirty}><Text as="p" size="2" color="gray">{dirty ? tr("common.unsavedChanges") : tr(config.automaticConfiguration?'settings.automaticConfiguration':'settings.applySavedConfigurationUpdateService')}</Text>
       {dirty && <ConfirmButton title={tr("settings.discardUnsavedChanges")} description={tr("settings.loadSavedConfigurationDiscardUnsavedDraft")} action={tr("settings.discardChanges")} disabled={saving}
         onConfirm={async () => { const latest = await api.state(); reset(latest.config); await refresh(); }}><Icon name="reset" />{tr("settings.discardChanges")}</ConfirmButton>}
       <Button type="submit" loading={saving}><Icon name="save" />{tr("settings.saveConfiguration")}</Button>
-      <ConfirmButton title={tr("settings.confirmApplyConfiguration")} description={tr("settings.restartReceiverItsQueueIdleExistingConfiguration")} action={tr("settings.confirmApply")}
-        disabled={dirty || saving || !recoveryAvailable} onConfirm={async () => { const result = await api.apply(revision); notify(result.message, !result.ready); await refresh(); }}><Icon name="play" />{tr("settings.applyConfiguration")}</ConfirmButton>
+      {!config.automaticConfiguration&&<ConfirmButton title={tr("settings.confirmApplyConfiguration")} description={tr("settings.restartReceiverItsQueueIdleExistingConfiguration")} action={tr("settings.confirmApply")}
+        disabled={dirty || saving || !recoveryAvailable} onConfirm={async () => { const result = await api.apply(revision); notify(result.message, !result.ready); await refresh(); }}><Icon name="play" />{tr("settings.applyConfiguration")}</ConfirmButton>}
     </div>
   </form>
     <CodexUpdatePanel configRevision={config.revision} disabled={dirty || saving || !config.valid} pendingApplication={config.application==='pending'} />

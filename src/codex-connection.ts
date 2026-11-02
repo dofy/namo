@@ -30,6 +30,7 @@ export class Rpc {
         ? { '.': 'write', '.git': 'write' } : access,
     };
     for (const path of policy?.readPaths ?? []) files[path] = 'read';
+    if(!extraction)for (const path of policy?.directories ?? []) files[path] = sandbox==='workspace-write'?{'.':'write','.git':'write'}:'read';
     // The sandboxed instruction loader re-executes Codex. Standalone installs
     // outside system directories need explicit read/execute access to the
     // launcher and its canonical binary, without granting the rest of HOME.

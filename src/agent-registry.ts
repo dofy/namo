@@ -17,7 +17,7 @@ const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).dige
 /** Kept byte-compatible with pre-registry tasks and native Codex sessions. */
 export function legacyPolicyHash(c?: Config['codex']): string {
   return hash(c ? { agent: 'codex', sandbox: c.sandbox, network: c.networkAccess ?? false,
-    commits: c.allowLocalCommits ?? false, read: c.readPaths ?? [], deny: c.denyPaths ?? [], home: c.home, bin: c.bin, model: c.model, ...(c.accessScope?{accessScope:c.accessScope}:{}) } : {});
+    commits: c.allowLocalCommits ?? false, read: c.readPaths ?? [], deny: c.denyPaths ?? [], home: c.home, bin: c.bin, model: c.model, ...(c.accessScope?{accessScope:c.accessScope}:{}), ...(c.directories?{directories:c.directories}:{}) } : {});
 }
 const object = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value);
 export function parseAgentRegistry(value: unknown, configDir: string): AgentRegistryConfig | undefined {

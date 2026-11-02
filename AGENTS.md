@@ -51,7 +51,7 @@ Tests are archived by feature with shared fixtures in `test/helpers.ts`. Add bou
 - Persist inbound messages before acknowledging Feishu. Keep per-chat serialization, the global concurrency limit, and mutual exclusion over overlapping real directories.
 - Model completion, platform acceptance and user receipt are three distinct facts; never infer one from another. Do not replay interrupted model turns or resend on unknown delivery results.
 - Official Codex provider with an isolated auth/config home. No third-party gateways, no extra agent SDKs or probes, no automatic broad host access.
-- Schema version 14 — tables in `src/schema.ts`, init/migration in `src/schema-migrations.ts`. v13 is the baseline; v0–12 compat is gone. Incompatible databases are rejected, never auto-deleted. UI queries must not trigger migrations.
+- Schema version 15 — tables in `src/schema.ts`, init/migration in `src/schema-migrations.ts`. v13 is the baseline; v0–12 compat is gone. Incompatible databases are rejected, never auto-deleted. UI queries must not trigger migrations.
 - Do not modify an existing OpenClaw service or start a second receiver for the same Feishu app without an explicit switch instruction from the user. Builds never switch a running service.
 - UI binds loopback only, with one-time startup authorization, HttpOnly session, Host/Origin checks and CSP. Keep all of it.
 - Background service management is macOS-only; other platforms are foreground-only and unaccepted.

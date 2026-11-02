@@ -35,8 +35,8 @@ export class Schedules {
       let nextBinding=row.binding,rebound=false;
       if(change[1]==='resume' && row.state==='paused' && row.kind==='task') {
         try {
-          const previous=JSON.parse(row.binding??'null'),current=binding() as {project?:unknown;cwd?:unknown};
-          if(!previous||!current||typeof previous.cwd!=='string'||typeof current.cwd!=='string'||previous.project!==current.project||previous.cwd!==current.cwd)return '请先切换回该定时任务原来的项目，再恢复；原绑定和任务均已保留。';
+          const previous=JSON.parse(row.binding??'null'),current=binding() as {project?:unknown;cwd?:unknown;directories?:unknown};
+          if(!previous||!current||typeof previous.cwd!=='string'||typeof current.cwd!=='string'||current.directories===undefined&&(previous.project!==current.project||previous.cwd!==current.cwd))return '请先切换回该定时任务原来的项目，再恢复；原绑定和任务均已保留。';
           nextBinding=JSON.stringify(current);rebound=nextBinding!==row.binding;
         } catch {return '当前项目或权限不可用，定时任务仍保持暂停。';}
       }

@@ -139,15 +139,17 @@ test('deferred receipts survive a process restart and regain feedback without a 
   const reopened = new Store(join(dir, 'bot.sqlite'));
   const next = new Engine(reopened, runtime, sender, { dataDir: dir, concurrency: 1 });
   next.start(true);
+  assert.equal(reopened.get('persisted')?.taskId,null);
+  next.resume();
   assert.ok(reopened.get('persisted')?.taskId);
   assert.equal(reopened.db.prepare('SELECT COUNT(*) AS n FROM message_feedback').get()?.n, 1);
-  next.resume(); await until(() => reopened.get('persisted')?.state === 'replied');
+  await until(() => reopened.get('persisted')?.state === 'replied');
   await next.stop(); reopened.close();
 });
 
 test('online backup uses a consistent snapshot without blocking or overwriting newer receipts', async t => {
   const { dir, store } = fixture(t), file = join(dir, 'config.json'), plist = join(dir, 'service.plist');
-  const raw = initialConfig(file); raw.dataDir = dir; atomicJson(file, raw); put(plist, 'fixture');
+  const raw = initialConfig(file, file.slice(0, file.lastIndexOf('/'))); raw.dataDir = dir; atomicJson(file, raw); put(plist, 'fixture');
   store.enqueue(input('before'));
   const work = createUpgradeBackup(loadConfig(file), plist, 'live-upgrade');
   store.enqueue(input('during'));
@@ -157,7 +159,7 @@ test('online backup uses a consistent snapshot without blocking or overwriting n
 });
 
 test('an unconfirmed upgrade leaves one durable request and refuses blind resubmission', async t => {
-  const { dir } = fixture(t), file = join(dir, 'config.json'), raw = initialConfig(file);
+  const { dir } = fixture(t), file = join(dir, 'config.json'), raw = initialConfig(file, file.slice(0, file.lastIndexOf('/')));
   raw.dataDir = dir; atomicJson(file, raw); const config = loadConfig(file);
   await assert.rejects(requestLiveUpgrade(config, 'a'.repeat(64), 'a'.repeat(64), 'b'.repeat(64), 1), /outcome_unconfirmed/);
   const request = readFileSync(join(dir, 'live-upgrade-request.json'), 'utf8');
@@ -167,7 +169,7 @@ test('an unconfirmed upgrade leaves one durable request and refuses blind resubm
 
 test('verified runtime updates preserve the receiver pin and recover the active runtime on restart', async t => {
   const { dir, store } = fixture(t), source = join(dir, 'source'), file = join(dir, 'config.json');
-  const raw = initialConfig(file); raw.dataDir = dir; atomicJson(file, raw); const config = loadConfig(file);
+  const raw = initialConfig(file, file.slice(0, file.lastIndexOf('/'))); raw.dataDir = dir; atomicJson(file, raw); const config = loadConfig(file);
   cpSync(new URL('../src/', import.meta.url), join(source, 'dist/src'), { recursive: true });
   put(join(source, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.0.0', type: 'module', dependencies: {} }));
   put(join(source, 'bin/namo.js'), 'export {};'); put(join(source, 'dist/ui/index.html'), 'fixture');

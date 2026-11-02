@@ -12,6 +12,26 @@ import { authorizationRevision } from '../src/runtime-config.js';
 import { Engine } from '../src/engine.js';
 const token='lin_test_readonly_123';
 const request={connection:'linear',operation:'list'};
+test('shared directory mode makes authorized MCPs discoverable to any admitted group member without an enable switch',async t=>{
+  const f=fixture(t,'group','bob');f.edit(c=>{c.codex.directories=[];c.mcpConnections[0].enabled=false;c.mcpConnections[0].audience={organization:false,userIds:[],chatIds:[]};});
+  const discovered=await mcpRead(f.store,f.file,f.task,{operation:'connections'},new AbortController().signal);
+  assert.match(JSON.stringify(discovered),/linear/);
+  f.edit(c=>{c.mcpConnections[0].token='';});
+  assert.doesNotMatch(JSON.stringify(await mcpRead(f.store,f.file,f.task,{operation:'connections'},new AbortController().signal)),/linear/);
+});
+test('shared MCP calls wait for the requesting member approval in the original group',async t=>{
+  const f=fixture(t,'group','bob');f.edit(c=>{c.codex.directories=[];});f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);let calls=0;
+  const tool={name:'update_issue',inputSchema:{type:'object' as const},annotations:{readOnlyHint:false}};
+  const waiting=mcpRead(f.store,f.file,f.task,{connection:'linear',operation:'call',tool:'update_issue',arguments:{}},new AbortController().signal,async(_c,r,_s,before)=>{
+    if(r.operation==='list')return[tool];before?.(tool);calls++;return{content:[{type:'text',text:'done'}]};
+  });
+  const {waitFor}=await import('./helpers.js');await waitFor(()=>!!f.store.db.prepare("SELECT 1 FROM settings WHERE key LIKE 'mcp-approval:%'").get());
+  assert.equal(calls,0);const row=f.store.db.prepare("SELECT key FROM settings WHERE key LIKE 'mcp-approval:%'").get()!,id=String(row.key).slice('mcp-approval:'.length);
+  assert.equal(f.store.db.prepare('SELECT chatId FROM outbox WHERE kind=?').get(`mcp-approval:${id}`)?.chatId,'group1');
+  const {mcpApprovalCommand}=await import('../src/mcp-write-approval.js');
+  f.store.enqueue({...f.store.get('input')!,key:'approve',messageId:'approve',text:`/mcp-approve ${id} --confirm`});mcpApprovalCommand(f.store,f.store.get('approve')!);
+  await waiting;assert.equal(calls,1);
+});
 function fixture(t:any,chatType:'p2p'|'group'='p2p',sender='alice',tenant='tenant'){
   const {dir,store}=storeFixture(t,'namo-mcp-');const file=join(dir,'config.json');
   const config={dataDir:dir,feishu:{appId:'app',appSecret:'synthetic-feishu-secret',allowedUserIds:['alice'],access:{mode:'organization',tenantKey:'tenant'}},

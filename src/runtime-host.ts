@@ -7,6 +7,7 @@ export interface HostedRuntime {
   start(paused?: boolean): void;
   resume(): void;
   stop(): Promise<void>;
+  drainConfiguration?(value:boolean): void;
 }
 export type RuntimeFactory = () => HostedRuntime;
 
@@ -17,9 +18,11 @@ export class RuntimeHost {
   private switching?: Promise<void>;
   private closing = false;
   private unavailable = false;
+  private draining = false;
   constructor(private factory: RuntimeFactory) { this.runtime = factory(); }
   get available(): boolean { return !this.unavailable; }
   start(): void { this.runtime.start(); }
+  drainConfiguration(value:boolean): void { this.draining=value;this.runtime.drainConfiguration?.(value); }
   accept(message: Incoming): boolean {
     return this.runtime.accept(message, !!this.switching || this.closing || this.unavailable);
   }
@@ -27,7 +30,7 @@ export class RuntimeHost {
     if (this.switching || this.closing || this.unavailable) return { toast: { type: 'error', content: '正在更新，按钮操作未处理。请稍后重新点击。' } };
     return this.runtime.acceptCard(event);
   }
-  replace(factory: RuntimeFactory, commit: () => void): Promise<void> {
+  replace(factory: RuntimeFactory, commit: () => void | Promise<void>): Promise<void> {
     if (this.switching || this.closing || this.unavailable) return Promise.reject(Error('live_upgrade_busy'));
     // Defer the first operation until switching is set, including synchronous callbacks.
     const operation = Promise.resolve().then(async () => {
@@ -39,11 +42,12 @@ export class RuntimeHost {
         if (this.closing) throw Error('live_upgrade_closing');
         next = factory();
         next.start(true);
-        commit();
+        await commit();
       } catch (error) {
         try {
           await next?.stop();
           this.runtime = previous();
+          this.runtime.drainConfiguration?.(this.draining);
           this.runtime.start(true);
         } catch { this.unavailable = true; throw Error('live_upgrade_runtime_unsettled'); }
         throw error;

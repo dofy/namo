@@ -2,9 +2,21 @@ import { approvals } from './business-storage.js';
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdtempSync, realpathSync, statSync } from 'node:fs';
-import { delimiter, dirname, isAbsolute, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, relative, sep } from 'node:path';
+import type { Config } from './config.js';
 import { tmpdir, homedir } from 'node:os';
 import type { Store } from './store.js';
+
+/** Push targets are explicit repository roots, independent of the conversation cwd. */
+export function approvalDirectory(store:Store,config:Config,taskId:string,fallback:string,requested?:string):string {
+  if(config.codex.directories===undefined)return fallback;
+  if(!requested||!isAbsolute(requested))throw new ApprovalError('directory_required','请指定白名单内的 Git 仓库绝对路径（--directory）。');
+  const directory=realpathSync(requested);
+  const contains=(root:string)=>{const r=relative(root,directory);return !r||r!=='..'&&!r.startsWith(`..${sep}`)&&!isAbsolute(r);};
+  const snapshot=store.db.prepare('SELECT path FROM task_directories WHERE taskId=?').all(taskId).map(row=>String(row.path));
+  if(!snapshot.some(contains)||!config.codex.directories.some(contains)||(config.codex.denyPaths??[]).some(contains))throw new ApprovalError('directory_denied','该仓库不在任务和当前配置共同允许的目录内。');
+  return directory;
+}
 
 const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const REMOTE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;

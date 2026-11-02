@@ -63,6 +63,7 @@ function ApprovalPanel({disabled}: {disabled: boolean}) {
     catch(error){setError(message(error));try{await load();}catch{/* Preserve the action error. */}}
     finally{setBusy(false);}
   };
+  const [directory,setDirectory]=useState('');
   return <details onToggle={event=>{if(event.currentTarget.open&&!list&&!busy&&!disabled)void refresh();}}>
     <summary>{tr('operations.approvals')}</summary>
     <Text as="p" size="2" color="gray">{tr('operations.approvalHelp')}</Text>
@@ -71,13 +72,14 @@ function ApprovalPanel({disabled}: {disabled: boolean}) {
     {list&&!list.configured&&<Notice>{tr('operations.approvalsUnavailable')}</Notice>}
     {list?.configured&&<form onSubmit={async event=>{
       event.preventDefault();setBusy(true);setError('');
-      try {await api.approval({action:'request',taskId:task.trim().toUpperCase(),remote:remote||list.remotes[0],ref:branch.startsWith('refs/heads/')?branch:`refs/heads/${branch}`,configRevision:list.configRevision,confirmed:true});await load();}
+      try {await api.approval({action:'request',directory:directory.trim()||undefined,taskId:task.trim().toUpperCase(),remote:remote||list.remotes[0],ref:branch.startsWith('refs/heads/')?branch:`refs/heads/${branch}`,configRevision:list.configRevision,confirmed:true});await load();}
       catch(error){setError(message(error));}finally{setBusy(false);}
     }}><fieldset disabled={busy||disabled}>
       <div className="form-grid">
         <Field label={tr('operations.completedTask')} htmlFor="approval-task"><TextField.Root id="approval-task" list="approval-task-options" placeholder="N-…" value={task} onChange={event=>setTask(event.target.value)}/><datalist id="approval-task-options">{tasks.map(task=><option key={task.id} value={task.id}>{task.title}</option>)}</datalist></Field>
         <Field label={tr('operations.remote')} htmlFor="approval-remote"><Choice id="approval-remote" value={remote||list.remotes[0]} onChange={setRemote} options={list.remotes.map(remote=>({value:remote,label:remote}))}/></Field>
       </div>
+      <Field label={tr('directories.repository')} htmlFor="approval-directory"><TextField.Root id="approval-directory" value={directory} onChange={event=>setDirectory(event.target.value)}/></Field>
       <Field label={tr('operations.branch')} htmlFor="approval-branch"><TextField.Root id="approval-branch" value={branch} onChange={event=>setBranch(event.target.value)}/></Field>
       <Button type="submit" variant="soft" disabled={!task.trim()||!branch.trim()}>{tr('operations.previewPush')}</Button>
     </fieldset></form>}
@@ -86,7 +88,7 @@ function ApprovalPanel({disabled}: {disabled: boolean}) {
       <Text as="p" size="2">{record.commitSummary}</Text>
       <dl className="operations-info">
         <div><dt>{tr('operations.approvalId')}</dt><dd>{record.id}</dd></div>
-        <div><dt>{tr('operations.project')}</dt><dd>{record.project??'—'}</dd></div>
+        <div><dt>{tr('directories.repository')}</dt><dd>{record.directory??record.project??'—'}</dd></div>
         <div><dt>{tr('operations.completedTask')}</dt><dd>{record.taskId}</dd></div>
         <div><dt>{tr('operations.expires')}</dt><dd>{new Date(record.expiresAt).toLocaleString(getLocale())}</dd></div>
         <div className="operations-wide"><dt>{tr('operations.commit')}</dt><dd><Code variant="ghost">{record.headSha}</Code></dd></div>

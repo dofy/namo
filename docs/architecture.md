@@ -2,7 +2,7 @@
 
 Namo 负责身份、权限、任务调度和交付，官方 Codex app-server 负责推理与工具执行。当前只支持 Codex；其他 Agent 仅保留内部扩展接口。
 
-技术栈：TypeScript、Node.js 24.15+、SQLite、飞书官方 SDK；本地 UI 使用 React、Radix Themes、Lucide 和 Vite。当前 schema 为 14：表与索引集中在 [schema.ts](../src/schema.ts)，初始化和版本检查集中在 [schema-migrations.ts](../src/schema-migrations.ts)。
+技术栈：TypeScript、Node.js 24.15+、SQLite、飞书官方 SDK；本地 UI 使用 React、Radix Themes、Lucide 和 Vite。当前 schema 为 15：表与索引集中在 [schema.ts](../src/schema.ts)，初始化和版本检查集中在 [schema-migrations.ts](../src/schema-migrations.ts)。
 
 ## 主链路
 
@@ -30,14 +30,14 @@ flowchart LR
 | --- | --- | --- |
 | 入站与调度 | [engine](../src/engine.ts)、[tasks](../src/tasks.ts) | 先落库再确认；同聊天串行、全局限流、重叠真实目录互斥 |
 | 独立执行 | [runner](../src/runner.ts)、[worker](../src/runner-worker.ts) | 唯一运行归属；接收端重启后关联原运行，失联不重启模型；取消只停止所属进程组 |
-| Codex 协议 | [connection](../src/codex-connection.ts)、[runtime](../src/runtime.ts) | 官方 provider、独立认证、项目权限；修订回执未知时不自动重送 |
+| Codex 协议 | [connection](../src/codex-connection.ts)、[runtime](../src/runtime.ts) | 官方 provider、独立认证、目录白名单；修订回执未知时不自动重送 |
 | 人工 / 外部等待 | [waits](../src/waits.ts)、[external-waits](../src/external-waits.ts) | 等待释放执行资源，保留聊天顺序；回答绑定身份和版本；GitHub 固定 HEAD，恢复只消费一次 |
-| 身份与资源 | [access](../src/access.ts)、[path-policy](../src/path-policy.ts)、[skill-access](../src/skill-access.ts) | 组织准入和项目授权分开；续接与交付重验权限；Skills 仅只读开放启用的具体目录 |
+| 身份与资源 | [access](../src/access.ts)、[path-policy](../src/path-policy.ts)、[skill-access](../src/skill-access.ts) | 组织准入保留；已准入成员共享目录与 MCP；续接与交付重验权限；Skills 仅只读开放启用的具体目录 |
 | 档案与记忆 | [assistant](../src/assistant.ts)、[memory](../src/memory.ts)、[extractor](../src/memory-extractor.ts) | 档案显式启用；长期事实带来源和范围；人工纠正、停用、删除不能被自动恢复 |
 | 材料与产物 | [materials](../src/materials.ts)、[image-inputs](../src/image-inputs.ts)、[artifacts](../src/artifacts.ts) | 有界读取授权原消息；图片和交付文件冻结内容；正文不能生成授权，拒绝越界及敏感路径 |
 | 展示与投递 | [public-progress](../src/public-progress.ts)、[feedback](../src/feedback.ts)、[recovery](../src/recovery.ts) | 只展示公开进展与有界证据；结果先保存再发送；未知投递不重试模型或盲重发 |
 | GitHub / 推送 | [github-api](../src/github-api.ts)、[github-review](../src/github-review.ts)、[approvals](../src/approvals.ts) | 固定身份与目标；写操作先存回执，未知结果不自动重试；推送批准只消费一次 |
-| 管理与发布 | [management](../src/management.ts)、[service](../src/service.ts)、[release](../src/release.ts) | UI 查询不迁移库；保存与应用分离；校验备份后切换不可变快照 |
+| 管理与发布 | [management](../src/management.ts)、[service](../src/service.ts)、[release](../src/release.ts) | UI 查询不迁移库；保存后排空旧队列并自动应用；校验备份后切换不可变快照 |
 
 数值预算、状态枚举和完整字段以这些模块及 [test](../test/) 中的契约测试为准，不再逐份复制到文档。
 
@@ -45,7 +45,7 @@ flowchart LR
 
 **数据与恢复。** SQLite 保存 inbox、task、run、wait、outbox 和审计。取消、回答、恢复以事务顺序决定归属；心跳过期不转移执行权，失联进程及后代核对完成前保留目录占位。模型完成、平台接受、用户收件是三类事实，不能相互推断。
 
-开发期采用 v13 基线，不再维护 v0–12 的兼容转换。v13 可在停机备份后事务迁移到 v14。空库在一个事务中初始化，失败整体回滚；不兼容旧库明确拒绝写入，绝不自动删库。重建步骤见[运维指南](operations.md)。
+开发期采用 v13 基线，不再维护 v0–12 的兼容转换。v13 / v14 可在停机备份后事务迁移到 v15。空库在一个事务中初始化，失败整体回滚；不兼容旧库明确拒绝写入，绝不自动删库。重建步骤见[运维指南](operations.md)。
 
 | 数据域 | 独立表与约束 |
 | --- | --- |
@@ -53,11 +53,14 @@ flowchart LR
 | 自动提取 | `memory_jobs` 存状态、重试和租约；来源去重键与来源消息分别关联，不伪装成模型运行 ID |
 | Git 审批 | `git_approvals` 关联任务并冻结目标与权限；`approval_jobs` 关联入站命令，按状态调度 |
 | 外部等待 | `external_waits` 关联任务 / 运行；同任务只能有一个活动等待，`external_wait_links` 与人工等待一对一关联 |
+| 目录快照 | `task_directories` 按任务保存规范路径；v14 历史任务以原 cwd 回填，不修改任务、消息及回执 |
 | 文件交付 | `artifact_intents` 关联任务指令，`artifact_deliveries` 保存文件身份、发送 UUID 和回执状态 |
 
 新业务表使用 STRICT 类型、外键和状态约束；状态队列、归属查询和历史排序有对应索引。JSON 仅用于有界列表、证据和冻结快照；这些业务记录不再存入 `settings`。
 
-**上下文。** 每次运行冻结输入、项目、权限、助手设置和记忆版本。普通配置保存不改变既有运行；组织授权撤销仍会阻断执行及交付。worker 通过私有管道接收生效配置，模型不继承宿主飞书 / GitHub 凭据。
+**目录。** `codex.directories` 是唯一外部目录白名单，所有准入成员及群聊均可读写；MCP 保存授权后统一可用，不再配置资源受众、项目或任务启用开关。新任务的 cwd 始终为独立会话目录，白名单目录只用于用户要求的文件操作。初始化必须明确输入白名单，不能默认采用进程当前目录；新实例的数据与工作目录默认在系统用户级 Namo 目录。旧 `projects` 仅为排队快照和历史兼容，转换时有私有备份，旧 `readPaths` 不升级为写权限。`task_directories` 冻结每个任务的 cwd 与完整可写目录集；运行及失联占位均按这些路径互斥。共享白名单时，不同聊天也会因可写目录重叠而串行。
+
+**上下文。** 每次运行冻结输入、可写目录、权限、助手设置和记忆版本。普通配置保存不改变既有运行及已创建的排队任务；接收器暂缓创建新任务，待旧队列完成后自动切换配置并处理已持久化的新请求。仅默认模型变化保留原生上下文；目录或执行策略变化时，在同一工作线内重建模型会话并携带有界历史摘录，旧任务保持原记录；组织授权撤销仍会阻断执行及交付。worker 通过私有管道接收生效配置，模型不继承宿主飞书 / GitHub 凭据。
 
 **记忆。** 默认在前台任务空闲时，从直接用户消息提取有证据的长期事实；独立临时 Codex 轮次关闭项目工具、hooks、插件及沙箱网络。`global / local` 知识层级与 `shared / private / chat` 披露范围、来源项目授权分别检查；全局存储不代表公开。临时要求不写长期记忆，迁移候选须人工启用。既有 session 与历史副本不会随删除自动清除。
 

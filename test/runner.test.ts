@@ -16,6 +16,8 @@ import { Recovery } from '../src/recovery.js';
 import { digest } from '../src/paths.js';
 import { Management } from '../src/management.js';
 import { Cards } from '../src/cards.js';
+import { queuedConfiguration, watchConfiguration } from '../src/config-reload.js';
+import { RuntimeHost } from '../src/runtime-host.js';
 import { setUserModel } from '../src/model-preferences.js';
 
 const wait = (condition: () => boolean, timeoutMs = 7000) => waitFor(condition, timeoutMs);
@@ -28,19 +30,22 @@ process.on('SIGTERM',()=>{if(!cwd||!existsSync(join(cwd,'hold-close')))process.e
 const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
 const done=text=>{clearInterval(timer);send({method:'item/completed',params:{threadId:thread,turnId:turn,item:{id:'command',type:'commandExecution',command:'node --test',cwd,status:'completed',exitCode:0,durationMs:12}}});send({method:'turn/completed',params:{threadId:thread,turn:{id:turn,status:'completed',items:[{id:'final',type:'agentMessage',phase:'final_answer',text}]}}});};
 createInterface({input:process.stdin}).on('line',line=>{
- const m=JSON.parse(line);if(m.id===undefined)return;
+ const m=JSON.parse(line);if(m.id===99&&!m.method){appendFileSync(join(cwd,'mcp-discovery'),m.result?.contentItems?.[0]?.text??'error');return done('discovered');}if(m.id===undefined)return;
  if(m.method==='initialize')return send({id:m.id,result:{}});
- if(m.method==='config/read')return send({id:m.id,result:{config:{}}});
+ if(m.method==='config/read')return send({id:m.id,result:{config:{features:{plugins:false,apps:false}}}});
  if(m.method==='model/list')return send({id:m.id,result:{data:[{model:'default-model',isDefault:true}],nextCursor:null}});
  if(m.method==='plugin/list')return send({id:m.id,result:{marketplaces:[]}});
  if(m.method==='skills/list')return send({id:m.id,result:{data:[{cwd:m.params.cwds[0],skills:[],errors:[]}]}});
- if(m.method==='thread/start'||m.method==='thread/resume'){cwd=m.params.cwd;appendFileSync(join(cwd,'model-params'),JSON.stringify({thread:m.params.model})+'\\n');return send({id:m.id,result:{thread:{id:thread}}});}
+ if(m.method==='thread/start'||m.method==='thread/resume'){cwd=m.params.cwd;appendFileSync(join(cwd,'model-params'),JSON.stringify({thread:m.params.model})+'\\n');if(m.method==='thread/start')appendFileSync(join(cwd,'thread-tools'),JSON.stringify((m.params.dynamicTools??[]).map(x=>x.name))+'\\n');return send({id:m.id,result:{thread:{id:thread}}});}
  if(m.method==='turn/start'){
   appendFileSync(join(cwd,'model-params'),JSON.stringify({turn:m.params.model})+'\\n');
   appendFileSync(join(cwd,'calls'),'turn\\n');send({id:m.id,result:{turn:{id:turn}}});
   send({method:'item/started',params:{threadId:thread,turnId:turn,item:{id:'command',type:'commandExecution',command:'node --test',cwd,status:'inProgress'}}});
   const prompt=JSON.parse(m.params.input[0].text);
-  if(prompt.messages[0].text==='instant')return done('saved answer');
+  appendFileSync(join(cwd,'task-prompts'),JSON.stringify(prompt)+'\\n');
+  const actual=prompt.task?.messages?prompt.task:prompt;
+  if(actual.messages[0].text==='mcp-check'){send({id:99,method:'item/tool/call',params:{namespace:null,tool:'mcp_read',threadId:thread,turnId:turn,callId:'mcp',arguments:{operation:'connections'}}});return;}
+  if(actual.messages[0].text==='instant')return done('saved answer');
   timer=setInterval(()=>{if(existsSync(join(cwd,'release')))done('saved answer');},30);return;
  }
  if(m.method==='turn/steer'){const finish=()=>{send({id:m.id,result:{turnId:turn}});done('steered answer');};if(m.params.input[0].text.includes('delayed'))setTimeout(finish,700);else finish();}
@@ -59,12 +64,12 @@ function fixture(t: { after(fn: () => Promise<void>): void }) {
     concurrency: 2, codex: { bin, home: join(data, 'home'), timeoutMs: 12000, sandbox: 'workspace-write', projects: { one: project }, defaultProject: 'one' } }));
   const config = loadConfig(file), store = new Store(join(data, 'bot.sqlite')), tasks = new Tasks(store);
   const engines: Engine[] = [], deliveries: string[] = [];
-  const receiver = () => {
-    const engine = new Engine(store, new RunnerRuntime(store, config), { async send(_chat, text, uuid) { deliveries.push(text); return uuid; } }, config);
+  const receiver = (selectedConfig = config) => {
+    const engine = new Engine(store, new RunnerRuntime(store, selectedConfig), { async send(_chat, text, uuid) { deliveries.push(text); return uuid; } }, selectedConfig);
     engines.push(engine); return engine;
   };
   const job = () => store.db.prepare('SELECT * FROM runner_jobs ORDER BY createdAt DESC LIMIT 1').get() as any;
-  const calls = () => existsSync(join(project, 'calls')) ? readFileSync(join(project, 'calls'), 'utf8').trim().split('\n').length : 0;
+  const calls = () => [...new Set([project,...store.db.prepare('SELECT cwd FROM tasks').all().map(row=>String(row.cwd))])].reduce((n,path)=>n+(existsSync(join(path,'calls'))?readFileSync(join(path,'calls'),'utf8').trim().split('\n').length:0),0);
   t.after(async () => {
     for (const engine of engines) await engine.stop();
     store.db.prepare("UPDATE inbox SET cancelRequested=1 WHERE state='running'").run();
@@ -96,6 +101,93 @@ test('queued task keeps its user model through detached worker startup', async t
   await wait(()=>f.store.get('model-task')?.state==='replied');
   const rows=readFileSync(join(f.project,'model-params'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
   assert.deepEqual(rows,[{thread:'model-one'},{turn:'model-one'}]);
+});
+
+test('new workstreams register MCP discovery even before a connection exists', async t => {
+  const f=fixture(t), receiver=f.receiver();
+  receiver.start(); receiver.accept(message('no-mcp','instant'));
+  await wait(()=>f.store.get('no-mcp')?.state==='replied');
+  assert.ok(JSON.parse(readFileSync(join(f.project,'thread-tools'),'utf8').trim()).includes('mcp_read'));
+});
+
+test('refresh keeps the workstream and supplies bounded history to a fresh thread', async t => {
+  const f=fixture(t), receiver=f.receiver(); receiver.start();
+  receiver.accept(message('first','instant'));
+  await wait(()=>f.store.get('first')?.state==='replied');
+  const workstream=f.tasks.binding(message('lookup'))!.id;
+  receiver.accept(message('refresh','/refresh'));
+  await wait(()=>f.store.get('refresh')?.state==='replied');
+  assert.equal(f.tasks.binding(message('lookup'))!.id,workstream);
+  receiver.accept(message('second','instant'));
+  await wait(()=>f.store.get('second')?.state==='replied');
+  const prompts=readFileSync(join(f.project,'task-prompts'),'utf8').trim().split('\n').map(x=>JSON.parse(x));
+  assert.equal(prompts[1].prior_context[0].request,'instant');
+  assert.match(prompts[1].prior_context[0].result,/^saved answer/);
+  assert.equal(f.tasks.binding(message('lookup'))!.id,workstream);
+});
+
+test('new runs discover saved MCP grants without restarting the receiver', async t => {
+  let watcher:ReturnType<typeof watchConfiguration>|undefined;t.after(async()=>{await watcher?.stop();});
+  const f=fixture(t), receiver=new RuntimeHost(()=>f.receiver()); receiver.start();
+  watcher=watchConfiguration(f.store,receiver,f.config,digest(readFileSync(f.file,'utf8')),async next=>()=>f.receiver(next),()=>{},()=>{});
+  receiver.accept(message('before','instant')); await wait(()=>f.store.get('before')?.state==='replied');
+  const raw=JSON.parse(readFileSync(f.file,'utf8'));
+  raw.mcpConnections=[{id:'linear',type:'remote',url:'https://mcp.linear.app/mcp',enabled:true,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:[],token:'test_authorized_token'}];
+  writeFileSync(f.file,JSON.stringify(raw));
+  watcher.observe(); receiver.accept(message('after','mcp-check')); await wait(()=>f.store.get('after')?.state==='replied');
+  assert.deepEqual(JSON.parse(readFileSync(join(f.tasks.get(f.store.get('after')!.taskId!)!.cwd,'mcp-discovery'),'utf8')),{connections:[{id:'linear',type:'remote'}]});
+});
+
+test('configuration drains accepted tasks with their model and admits deferred requests with the new model', async t=>{
+  let watcher:ReturnType<typeof watchConfiguration>|undefined;t.after(async()=>{await watcher?.stop();});
+  const f=fixture(t), raw=JSON.parse(readFileSync(f.file,'utf8'));
+  raw.codex.model='old-model';writeFileSync(f.file,JSON.stringify(raw));Object.assign(f.config,loadConfig(f.file));
+  const host=new RuntimeHost(()=>f.receiver());host.start();
+  let applied=false;
+  watcher=watchConfiguration(f.store,host,f.config,digest(readFileSync(f.file,'utf8')),async next=>()=>f.receiver(next),()=>{applied=true;},()=>{});
+  host.accept(message('running'));await wait(()=>f.calls()===1);
+  const originalStream=f.tasks.binding(message('lookup'))!.id;
+  host.accept(message('queued','instant'));
+  raw.codex.model='new-model';writeFileSync(f.file,JSON.stringify(raw));watcher.observe();
+  host.accept(message('deferred','instant'));
+  assert.equal(f.store.get('deferred')?.taskId,null);
+  assert.equal(applied,false);
+  writeFileSync(join(f.project,'release'),'yes');
+  await wait(()=>f.store.get('deferred')?.state==='replied');
+  assert.equal(f.store.db.prepare("SELECT error FROM inbox WHERE key='deferred'").get()?.error,null,JSON.stringify(f.store.db.prepare('SELECT error FROM runner_jobs').all()));
+  const models=[...new Set([f.project,f.tasks.get(f.store.get('deferred')!.taskId!)!.cwd])].map(path=>readFileSync(join(path,'model-params'),'utf8').trim()).join('\n').split('\n').map(x=>JSON.parse(x)).filter(x=>x.turn).map(x=>x.turn);
+  assert.deepEqual(models,['old-model','old-model','new-model']);assert.equal(applied,true);
+  assert.equal(f.tasks.binding(message('lookup'))!.id,originalStream);
+});
+
+test('failed configuration commit retains deferred input and retries without invoking the model twice',async t=>{
+  let watcher:ReturnType<typeof watchConfiguration>|undefined;t.after(async()=>{await watcher?.stop();});
+  const f=fixture(t),host=new RuntimeHost(()=>f.receiver());host.start();let fail=true,failed=false;
+  watcher=watchConfiguration(f.store,host,f.config,digest(readFileSync(f.file,'utf8')),async next=>()=>f.receiver(next),()=>{if(fail)throw Error('test');},state=>{if(state==='error')failed=true;});
+  const raw=JSON.parse(readFileSync(f.file,'utf8'));raw.codex.model='next';writeFileSync(f.file,JSON.stringify(raw));watcher.observe();host.accept(message('held','instant'));
+  await wait(()=>failed);assert.equal(f.calls(),0);assert.equal(f.store.get('held')?.state,'queued');
+  fail=false;await wait(()=>f.store.get('held')?.state==='replied');assert.equal(f.calls(),1);
+});
+
+test('cancel remains available while new configuration waits for the old queue',async t=>{
+  let watcher:ReturnType<typeof watchConfiguration>|undefined;t.after(async()=>{await watcher?.stop();});
+  const f=fixture(t),host=new RuntimeHost(()=>f.receiver());host.start();
+  watcher=watchConfiguration(f.store,host,f.config,digest(readFileSync(f.file,'utf8')),async next=>()=>f.receiver(next),()=>{},()=>{});
+  host.accept(message('held'));await wait(()=>f.calls()===1);
+  const raw=JSON.parse(readFileSync(f.file,'utf8'));raw.codex.model='next';writeFileSync(f.file,JSON.stringify(raw));watcher.observe();
+  host.accept(message('later','instant'));host.accept(message('cancel','/cancel'));
+  await wait(()=>f.store.get('later')?.state==='replied');assert.equal(f.calls(),2);
+});
+
+test('restart recovers the queued configuration from the existing save backup',t=>{
+  const f=fixture(t),receiver=f.receiver(),revision=digest(readFileSync(f.file,'utf8'));
+  receiver.accept(message('queued','instant'));
+  writeFileSync(join(f.data,'health.json'),JSON.stringify({automaticConfiguration:true,configRevision:revision}));
+  const manager=new Management(f.file,{status:()=>({running:false,mode:'stopped'})});
+  manager.save(manager.config().revision,{model:'next-model'});
+  const recovered=queuedConfiguration(loadConfig(f.file));
+  assert.equal(recovered.revision,revision);assert.equal(recovered.config.codex.model,undefined);
+  assert.equal(loadConfig(f.file).codex.model,'next-model');
 });
 
 test('saving presentation settings does not cancel an organization worker; revocation still does', async t => {

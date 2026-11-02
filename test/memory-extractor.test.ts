@@ -51,7 +51,7 @@ record({kind:'ready'});
 
 test('memory extraction uses an ephemeral constrained official-provider turn and handles completion before start response', async t => {
   const f = fixture(t);
-  assert.deepEqual(await extractConversationMemory(f.config, input, new AbortController().signal), { memories: [] });
+  assert.deepEqual(await extractConversationMemory({...f.config,directories:['/fixture-host-path']}, input, new AbortController().signal), { memories: [] });
   const records = f.records(), spawn = records.find(row => row.kind === 'spawn');
   assert.equal(spawn.home, f.home);
   for (const setting of ['model_provider="openai"', 'features.shell_tool=false', 'features.plugins=false', 'features.apps=false',

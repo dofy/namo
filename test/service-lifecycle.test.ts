@@ -63,7 +63,7 @@ createInterface({input:process.stdin}).on('line', line => {
     spawnMock.mock.restore(); spawnSyncMock.mock.restore(); homeMock.mock.restore(); syncBuiltinESMExports();
     writable(dir); rmSync(dir, { recursive: true, force: true });
   });
-  const file = join(dir, 'config.json'), raw = initialConfig(file);
+  const file = join(dir, 'config.json'), raw = initialConfig(file, file.slice(0, file.lastIndexOf('/')));
   raw.feishu.appId = 'cli_aaaaaaaaaaaaaaaa'; raw.feishu.appSecret = 'lifecycle-fixture-secret';
   raw.feishu.allowedUserIds = ['ou_fixture']; raw.codex.bin = fake;
   mkdirSync(raw.codex.home, { recursive: true }); atomicJson(file, raw);

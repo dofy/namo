@@ -171,7 +171,7 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
           onChange={value => setKind(value as typeof kind)} options={(['preference', 'user_fact', 'project_knowledge', 'task_summary', 'history_quote'] as const).map(value => ({ value, label: names[value] }))} /></Field>
         <Field label={c.scope} htmlFor="memory-scope"><Choice id="memory-scope" value={scopeKind} disabled={!editable || busy}
           onChange={value => {const next=value as MemoryPageScope['kind'];setScopeKind(next);if(next==='project')setProject(state?.projects[0]??'');if(next==='chat'){const first=state?.chats[0];setChatKey(first?.chatKey??'');setProject(first?.project??'');}}}
-          options={(['owner', 'project', 'chat'] as const).map(value => ({ value, label: scopeNames[value] }))} /></Field>
+          options={(['owner', ...(state?.projects.length?['project' as const]:[]), 'chat'] as const).map(value => ({ value, label: scopeNames[value] }))} /></Field>
         {scopeKind === 'project' && <Field label={c.project} htmlFor="memory-project"><Choice id="memory-project" value={project} disabled={!editable||busy||!state?.projects.length}
           onChange={setProject} options={(state?.projects??[]).map(value=>({value,label:value}))} /></Field>}
         {scopeKind === 'chat' && <Field label={c.chat} htmlFor="memory-chat"><Choice id="memory-chat" value={JSON.stringify([chatKey,project||null])} disabled={!editable||busy||!state?.chats.length}

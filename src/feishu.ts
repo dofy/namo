@@ -73,6 +73,10 @@ export function normalizeEvent(event: FeishuEvent, config: Config['feishu'], bot
 }
 
 export class FeishuTransport implements Sender {
+  updatePolicy(config:Config['feishu']):void {
+    if(config.appId!==this.config.appId||config.appSecret!==this.config.appSecret||config.domain!==this.config.domain)throw Error('transport_identity_changed');
+    this.config=config;
+  }
   private client: lark.Client;
   private ws?: lark.WSClient;
   constructor(private config: Config['feishu'], private log: (event: string, fields?: Record<string, unknown>) => void) {
@@ -107,7 +111,8 @@ export class FeishuTransport implements Sender {
       onError: () => this.log('feishu_connection_failed'),
     });
     const dispatcher = new lark.EventDispatcher({ logger: { error: silent, warn: silent, info: silent, debug: silent, trace: silent } }).register({
-      ...(this.config.cards&&cardAction?{'card.action.trigger': async (event: CardEvent) => {
+      ...(cardAction?{'card.action.trigger': async (event: CardEvent) => {
+        if(!this.config.cards)return {toast:{type:'error',content:'卡片操作已停用'}};
         // Cards additionally verify the operator against the original durable
         // task and its admitted tenant. Some card schemas omit tenant_key.
         if(!event.operator?.open_id || !this.config.access && !admitted(this.config,event.operator.open_id,event.context?.open_chat_id??'')) return {toast:{type:'error',content:'无权操作这项任务'}};

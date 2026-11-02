@@ -1,7 +1,7 @@
 {
   "version": 1,
   "agent": "codex",
-  "dataDir": "./data",
+  "dataDir": "~/.namo/data",
   "concurrency": 8,
   "feishu": {
     "appId": "",
@@ -15,15 +15,14 @@
   },
   "codex": {
     "bin": "codex",
-    "home": "./data/codex-home",
+    "home": "~/.namo/data/codex-home",
     "model": "",
-    "sandbox": "read-only",
+    "sandbox": "workspace-write",
     "timeoutMs": 600000,
-    "projects": {},
     "networkAccess": false,
-    "readPaths": [],
     "denyPaths": [],
-    "allowLocalCommits": false
+    "allowLocalCommits": true,
+    "directories": []
   },
   "github": {
     "repositories": [],

@@ -16,6 +16,8 @@ const TARGET_SECRET = 'FAKE_EXISTING_NAMO_SECRET_FOR_TESTS_ONLY';
 
 function fixture(t: { after(fn: () => void): void }, extra: Record<string, unknown> = {}) {
   const root = mkdtempSync(join(tmpdir(), 'namo-migration-'));
+  const priorHome=process.env.NAMO_HOME;process.env.NAMO_HOME=root;
+  t.after(()=>{if(priorHome===undefined)delete process.env.NAMO_HOME;else process.env.NAMO_HOME=priorHome;});
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const workspace = join(root, 'workspace'); mkdirSync(workspace);
   writeFileSync(join(workspace, 'SOUL.md'), '# Sail carefully\n');
@@ -81,7 +83,7 @@ test('fresh import is restrictive, excludes runtime authority, and stages only a
   const config = raw(f.targetFile);
   assert.equal(config.feishu.appId, 'cli_source_main_1234'); assert.equal(config.feishu.appSecret, SOURCE_SECRET);
   assert.deepEqual(config.feishu.allowedUserIds, []); assert.deepEqual(config.feishu.allowedChatIds, []); assert.equal(config.feishu.requireMention, true);
-  assert.equal(config.codex.sandbox, 'read-only'); assert.equal(config.codex.networkAccess, false); assert.equal(config.codex.allowLocalCommits, false);
+  assert.equal(config.codex.sandbox, 'workspace-write'); assert.equal(config.codex.networkAccess, false); assert.equal(config.codex.allowLocalCommits, true);
   for (const key of ['gateway', 'plugins', 'cron', 'auth', 'sessions', 'tasks']) assert.equal(config[key], undefined);
   assert.equal(statSync(f.targetFile).mode & 0o777, 0o600); assert.equal(statSync(result.stateFile).mode & 0o777, 0o600);
   const artifact = result.record.reviewArtifacts[0]!;
@@ -99,7 +101,7 @@ test('permissions and workspace import require explicit opt-in and discard wildc
   assert.deepEqual(config.feishu.allowedUserIds, ['ou_allowed']);
   assert.deepEqual(config.feishu.allowedChatIds.sort(), ['oc_allowed', 'oc_explicit']);
   assert.equal(config.feishu.requireMention, false);
-  assert.equal(config.codex.projects.legacy, realpathSync(f.workspace)); assert.equal(config.codex.defaultProject, 'legacy');
+  assert.deepEqual(config.codex.directories,[realpathSync(f.workspace)]);assert.equal(config.codex.defaultProject,undefined);
   assert.equal(result.record.phase, 'imported'); assert.equal(plan.proposed.wildcardPermissionsExcluded, true);
 });
 

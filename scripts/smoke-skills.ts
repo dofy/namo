@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,7 +11,8 @@ const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 async function main(): Promise<void> {
   if (process.platform === 'win32') throw new Error('posix_probe_required');
   const config = loadConfig();
-  const cwd = config.codex.projects?.[config.codex.defaultProject ?? ''] ?? process.cwd();
+  const cwd = join(config.dataDir,'probe-workspace');
+  mkdirSync(cwd,{recursive:true,mode:0o700});
   const rpc = await connectCodex(config.codex, cwd);
   try {
     await rpc.request('plugin/list', { cwds: [cwd], forceRefetch: false });

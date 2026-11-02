@@ -9,6 +9,17 @@ import { Store, type Incoming, SCHEMA_VERSION } from '../src/store.js';
 import { BackgroundWork } from '../src/background-work.js';
 import { storeFixture } from './helpers.js';
 import { databaseFingerprint } from '../src/upgrade-backup.js';
+import { Tasks } from '../src/tasks.js';
+
+test('schema 14 migration snapshots historical task directories without changing messages or task identity',t=>{
+  const {store}=storeFixture(t,'namo-directory-schema-'),tasks=new Tasks(store);
+  store.enqueue(message('historical'));const task=tasks.create(store.get('historical')!,{cwd:'/old/workspace',project:'legacy',policyHash:'old'});
+  store.db.exec('DROP TABLE task_directories; PRAGMA user_version=14');
+  migrateSchema(store.db);
+  assert.equal(store.db.prepare('PRAGMA user_version').get()?.user_version,SCHEMA_VERSION);
+  assert.deepEqual(tasks.get(task.id),task);assert.equal(store.get('historical')?.text,'hi');assert.deepEqual(tasks.directories(task),['/old/workspace']);
+  migrateSchema(store.db);assert.equal(store.db.prepare('SELECT count(*) AS n FROM task_directories').get()?.n,1);
+});
 
 const message = (key: string, chatKey = 'chat'): Incoming => ({ key, chatKey, chatId: chatKey, messageId: key, senderId: 'user', text: 'hi' });
 

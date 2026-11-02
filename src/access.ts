@@ -32,9 +32,14 @@ export function audienceAllows(a: Audience, m: Incoming): boolean {
     : m.envelope?.chatType === 'p2p' && (a.organization || a.userIds.includes(m.senderId));
 }
 export function projectAllowed(c: Config['codex'], f: Config['feishu'], m: Incoming, name: string): boolean {
+  if(c.directories!==undefined)return admitted(f,m.senderId,m.chatId,m.envelope?.tenantKey);
   return !f.access || !!c.projectAccess?.[name] && audienceAllows(c.projectAccess[name], m);
 }
 export function executionPolicy(c: Config['codex'], f: Config['feishu'], m: Incoming, project?: string, github?: Config['github']): Config['codex'] {
+  if(c.directories!==undefined) {
+    if(!admitted(f,m.senderId,m.chatId,m.envelope?.tenantKey))throw Error('organization_access_denied');
+    return {...c,sandbox:'workspace-write',allowLocalCommits:true,readPaths:[]};
+  }
   if (!f.access && github?.mode!=='simple') return c;
   if (!admitted(f, m.senderId, m.chatId, m.envelope?.tenantKey) || project && !projectAllowed(c,f,m,project)) throw new Error('organization_access_denied');
   const group = github?.mode==='simple' && m.envelope?.chatType==='group';
@@ -48,7 +53,7 @@ export function taskAuthorizationValid(applied:Config, current:Config, message:I
   try {
     if(applied.feishu.appId!==current.feishu.appId || applied.feishu.domain!==current.feishu.domain
       || !admitted(current.feishu,message.senderId,message.chatId,message.envelope?.tenantKey)
-      || project && current.feishu.access && (current.codex.projects?.[project]!==cwd || !projectAllowed(current.codex,current.feishu,message,project))) return false;
+      || project && current.codex.directories===undefined && current.feishu.access && (current.codex.projects?.[project]!==cwd || !projectAllowed(current.codex,current.feishu,message,project))) return false;
     const before=executionPolicy(applied.codex,applied.feishu,message,project??undefined,applied.github);
     const after=executionPolicy(current.codex,current.feishu,message,project??undefined,current.github);
     // The task keeps its original sandbox; a later broadening cannot grant it
@@ -57,6 +62,7 @@ export function taskAuthorizationValid(applied:Config, current:Config, message:I
       && (!before.networkAccess || !!after.networkAccess)
       && (!before.allowLocalCommits || !!after.allowLocalCommits)
       && (before.readPaths??[]).every(path=>(after.readPaths??[]).includes(path))
+      && (before.directories??[]).every(path=>(after.directories??[]).includes(path))
       && JSON.stringify(before.denyPaths??[])===JSON.stringify(after.denyPaths??[]);
   } catch { return false; }
 }

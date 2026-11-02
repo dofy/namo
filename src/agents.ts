@@ -41,7 +41,9 @@ export async function probeAgent(source: Config, profileId?: string): Promise<Ch
   } catch (e) {
     checks.push({ id: 'agent.protocol', status: 'fail', message: tr("agents.appServerProbeFailed", e instanceof RuntimeError ? e.code : 'probe_failed'), next: tr("agents.runCodexVersionCheckInstallationProtocolBaseline") });
   }
-  if (c.codex.defaultProject) {
+  if(c.codex.directories!==undefined) {
+    checks.push({id:'agent.directories',status:c.codex.directories.every(existsSync)?'ok':'fail',message:tr('directories.paths')});
+  } else if (c.codex.defaultProject) {
     const cwd = c.codex.projects?.[c.codex.defaultProject];
     checks.push({ id: 'agent.project', status: cwd && existsSync(cwd) ? 'ok' : 'fail', message: cwd ? tr("cli.workingDirectory", cwd) : tr("agents.defaultProjectNotFound") });
   } else checks.push({ id: 'agent.project', status: 'warn', message: tr("agents.noProjectConfiguredUsingIsolatedSessionDirectory"), next: tr("agents.runNamoInitSelectProject") });
@@ -58,7 +60,8 @@ export async function loginAgent(source: Config, profileId?: string): Promise<vo
   });
 }
 export async function liveAgentTest(c: Config, profileId?: string): Promise<boolean> {
-  const cwd = c.codex.defaultProject && c.codex.projects?.[c.codex.defaultProject] || join(c.dataDir, 'workspaces', 'health');
+  const cwd = join(c.dataDir, 'workspaces', 'health');
+  mkdirSync(cwd,{recursive:true,mode:0o700});
   const result = await runtimeFor(c, profileId).run({ cwd, prompt: 'Do not call tools. Reply with exactly NAMO_AGENT_OK.', signal: new AbortController().signal, onThread() {}, onTurn() {} });
   return result.text === 'NAMO_AGENT_OK';
 }

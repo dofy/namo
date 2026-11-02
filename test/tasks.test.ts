@@ -18,6 +18,17 @@ function msg(key: string, text = '开发任务', scope = 'chat', owner = 'alice'
     envelope: { version: 1, type: 'text', kind: 'instruction', scopeKey: scope, materials: [], limitations: [] } };
 }
 const result = { text: 'answer', threadId: 'thread', turnId: 'turn' };
+
+test('new directory configuration refreshes the native session in the same workstream and retains historical snapshots',t=>{
+  const {store}=storeFixture(t,'namo-directory-context-'),tasks=new Tasks(store);
+  store.enqueue(msg('old'));const old=tasks.create(store.get('old')!,{cwd:'/old/project',project:'legacy',policyHash:'old'});
+  store.saveThread(tasks.sessionKey(old),'old-native-session');
+  store.db.prepare("UPDATE tasks SET state='succeeded',finishedAt=? WHERE id=?").run(Date.now(),old.id);
+  store.enqueue(msg('new'));const next=tasks.create(store.get('new')!,{cwd:'/namo/scratch',directories:['/shared/source'],policyHash:'new'});
+  assert.equal(next.workstreamId,old.workstreamId);assert.equal(tasks.thread(next),undefined);assert.equal(next.project,null);
+  assert.deepEqual(tasks.directories(next),['/namo/scratch','/shared/source']);assert.deepEqual(tasks.directories(old),['/old/project']);
+  assert.equal(tasks.refreshContext(next).length,1);assert.equal(tasks.get(old.id)?.cwd,'/old/project');
+});
 function setup(t: { after: (fn: () => void | Promise<void>) => void }, runtime?: Runtime, projects = false) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'namo-tasks-')));
   for (const p of ['one', 'two']) mkdirSync(join(dir, p));

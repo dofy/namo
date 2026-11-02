@@ -10,6 +10,7 @@ export interface CodexUpdateStatus {
 }
 
 export interface ConfigValues {
+  directories?:string[];
   projectAccess?: Record<string, ProjectAccess>;
   projects: Record<string, string>;
   defaultProject: string;
@@ -37,6 +38,8 @@ export interface ConfigView {
   mcpConnections: McpConnectionView[];
   valid: boolean;
   application: 'stopped' | 'unknown' | 'applied' | 'pending';
+  automaticConfiguration?:boolean;
+  configurationReload?:string;
   /** Present only when the running receiver's configuration matches this projection. */
   activeModelDefault?: { model: string; profile: string };
   values: ConfigValues;
@@ -176,14 +179,14 @@ export interface ServiceAccessPatch { serviceAccess: {access:OrganizationAccess|
 
 export interface ServiceLog { name: string; status: 'ready' | 'missing' | 'unavailable'; text: string; truncated: boolean }
 export interface ApprovalView {
-  id: string; revision: number; taskId: string; project: string | null; ownerId: string;
+  id: string; revision: number; taskId: string; project: string | null; directory?:string; ownerId: string;
   state: 'pending' | 'approved' | 'rejected' | 'expired' | 'invalidated' | 'executing' | 'succeeded' | 'failed' | 'unknown';
   remote: string; ref: string; headSha: string; remoteBeforeSha: string | null; configRevision: string;
   commitSummary: string; expiresAt: number; reason?: string;
 }
 export interface ApprovalList { configured: boolean; configRevision: string; remotes: string[]; items: ApprovalView[] }
 export type ApprovalAction = { configRevision: string; confirmed: boolean } & (
-  { action: 'request'; taskId: string; remote: string; ref: string } |
+  { action: 'request'; taskId: string; remote: string; ref: string; directory?:string } |
   { action: 'approve' | 'reject' | 'execute' | 'reconcile'; id: string; revision: number }
 );
 export interface MigrationInspection {

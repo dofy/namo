@@ -1,17 +1,15 @@
 import {SettingsPanelDialog} from './SettingsPanelDialog';
 import type {ReactNode} from 'react';
 import { useEffect, useState, useRef } from 'react';
-import { Button, Flex, Heading, Text, TextField } from '@radix-ui/themes';
+import { Button, Flex, Text, TextField } from '@radix-ui/themes';
 import type { ConfigView, ProfileState } from '../src/ui-contract';
-import type { ProjectAccess } from '../src/access-contract';
-import { emptyAudience, IdentityInput } from './AudienceFields';
-import { ProjectAccessFields, accessSummary } from './ProjectAccessFields';
+import { IdentityInput } from './AudienceFields';
 import { Choice, ConfirmButton, Field, Notice } from './components';
 import { api, message } from './api';
 import { t as tr } from './i18n';
 
-const draftFrom=(c:ConfigView)=>({mode:c.feishu.access?'organization':'selected',tenantKey:c.feishu.access?.tenantKey??'',users:c.feishu.allowedUserIds??[],chats:c.feishu.allowedChatIds??[],projects:c.values.projectAccess??{}});
-function ServiceAccessEditor({config,profiles,refresh,expired,onStateChange,cancelControl}:{config:ConfigView;profiles?:ProfileState;refresh:()=>Promise<unknown>;expired:boolean;onStateChange:(dirty:boolean,busy:boolean)=>void;cancelControl:ReactNode}) {
+const draftFrom=(c:ConfigView)=>({mode:c.feishu.access?'organization':'selected',tenantKey:c.feishu.access?.tenantKey??'',users:c.feishu.allowedUserIds??[],chats:c.feishu.allowedChatIds??[]});
+function ServiceAccessEditor({config,refresh,expired,onStateChange,cancelControl}:{config:ConfigView;profiles?:ProfileState;refresh:()=>Promise<unknown>;expired:boolean;onStateChange:(dirty:boolean,busy:boolean)=>void;cancelControl:ReactNode}) {
   const [draft,setDraft]=useState(()=>draftFrom(config)),[revision,setRevision]=useState(config.revision),[dirty,setDirty]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const observedRevision=useRef(config.revision);
   useEffect(()=>{onStateChange(dirty,busy);},[dirty,busy]);
@@ -20,11 +18,10 @@ function ServiceAccessEditor({config,profiles,refresh,expired,onStateChange,canc
   useEffect(()=>{if(observedRevision.current!==config.revision){if(!dirty&&!busy)reset(config);observedRevision.current=config.revision;}},[config,dirty,busy]);
 
   const edit=(patch:Partial<typeof draft>)=>{setDraft(d=>({...d,...patch}));setDirty(true);setNotice('');};
-  const project=(name:string,value:ProjectAccess)=>edit({projects:{...draft.projects,[name]:value}});
   return <section className="form-section">
     {error&&<Notice error>{error}</Notice>}{notice&&<Notice>{notice}</Notice>}{conflict&&<Notice>{tr("serviceAccess.settingsChangedDraftPreservedReloadEditing")}</Notice>}
     <form onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');try{
-      const saved=await api.saveAccess(revision,{serviceAccess:{access:draft.mode==='organization'?{mode:'organization',tenantKey:draft.tenantKey.trim()}:null,allowedUserIds:draft.users,allowedChatIds:draft.chats},projectAccess:draft.projects});reset(saved);setNotice(tr("common.settingsSavedApplyConfigurationActivateOrganizationAccess"));await refresh();
+      const saved=await api.saveAccess(revision,{serviceAccess:{access:draft.mode==='organization'?{mode:'organization',tenantKey:draft.tenantKey.trim()}:null,allowedUserIds:draft.users,allowedChatIds:draft.chats}});reset(saved);setNotice(tr("common.settingsSavedApplyConfigurationActivateOrganizationAccess"));await refresh();
     }catch(e){setError(message(e));}finally{setBusy(false);}}}>
       <fieldset disabled={busy||expired}>
         <Field label={tr("serviceAccess.serviceAudience")} htmlFor="service-mode"><Choice id="service-mode" value={draft.mode} onChange={mode=>edit({mode})} options={[{value:'organization',label:tr("serviceAccess.feishuOrganizationMembers")},{value:'selected',label:tr("serviceAccess.selectedMembersLegacyMode")}]}/></Field>
@@ -36,11 +33,7 @@ function ServiceAccessEditor({config,profiles,refresh,expired,onStateChange,canc
           <Text as="p" id="service-tenant-help" size="1" color="gray">{tr("serviceAccess.userEventsOrganizationAcceptedFeishuAppAvailability")}</Text>
         </Field>:<Field label={tr("common.allowedMembersOpenId")} htmlFor="service-users"><IdentityInput id="service-users" value={draft.users} onChange={users=>edit({users})}/></Field>}
         <Field label={tr("common.restrictChatsLeaveEmptyAllChats")} htmlFor="service-chats"><IdentityInput id="service-chats" value={draft.chats} onChange={chats=>edit({chats})}/></Field>
-        <Heading as="h3" size="3" mt="4">{tr("serviceAccess.localProjectSharing")}</Heading>
-        <Text as="p" size="2" color="gray">{tr("serviceAccess.organizationMembersUseIsolatedWorkspacesDefaultWithout")}</Text>
-        {Object.keys(config.values.projects).map(name=>{const value=draft.projects[name]??{...emptyAudience(),permission:'read-only' as const};return <details className="service-project-access" key={name}><summary>{name} <span className="project-access-summary">{accessSummary(draft.projects[name])}</span></summary>
-          <ProjectAccessFields id={`service-project-${name}`} value={value} config={config} profiles={profiles} onChange={a=>project(name,a)}/>
-        </details>;})}
+        <Text as="p" size="2" color="gray">{tr('directories.sharedAccess')}</Text>
       </fieldset>
       <Flex gap="3" mt="4" wrap="wrap" className="settings-editor-footer">{cancelControl}<Button type="submit" loading={busy} disabled={!dirty||expired||conflict}>{tr("serviceAccess.saveAccessSettings")}</Button><ConfirmButton disabled={busy||expired} title={tr("editor.discardTitle")} description={tr("editor.discardHelp")} action={tr("common.reload")} onConfirm={async()=>{setBusy(true);try{reset((await api.state()).config);}finally{setBusy(false);}}}>{tr("common.reload")}</ConfirmButton></Flex>
     </form>

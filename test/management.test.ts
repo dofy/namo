@@ -308,10 +308,10 @@ test('workbench approvals retain exact targets, confirmation, stale-state reject
   const repo = join(root, 'repo'), bare = join(root, 'remote.git'); mkdirSync(repo);
   command(root, ['init', '--bare', bare], testEnv); command(repo, ['init'], testEnv); command(repo, ['config', 'user.name', 'Test'], testEnv); command(repo, ['config', 'user.email', 'test@example.invalid'], testEnv);
   writeFileSync(join(repo, 'file.txt'), 'ui\n'); command(repo, ['add', '.'], testEnv); command(repo, ['commit', '-m', 'ui commit'], testEnv); command(repo, ['remote', 'add', 'origin', bare], testEnv);
-  const file = join(root, 'config.json'), raw = initialConfig(file); raw.feishu.appId = 'cli_test'; raw.feishu.appSecret = 'test-only'; raw.feishu.allowedUserIds = ['ou_owner'];
-  raw.codex.projects = { app: realpathSync(repo) }; raw.codex.defaultProject = 'app'; raw.gitApprovals = { gitBin: testGit, maxTtlMs: 900000, remotes: [{ name: 'origin', url: bare, transport: 'local-test' }] }; atomicJson(file, raw);
+  const file = join(root, 'config.json'), raw = initialConfig(file, file.slice(0, file.lastIndexOf('/'))); raw.feishu.appId = 'cli_test'; raw.feishu.appSecret = 'test-only'; raw.feishu.allowedUserIds = ['ou_owner'];
+  raw.codex.directories=[realpathSync(repo)]; raw.gitApprovals = { gitBin: testGit, maxTtlMs: 900000, remotes: [{ name: 'origin', url: bare, transport: 'local-test' }] }; atomicJson(file, raw);
   const store = new Store(join(raw.dataDir, 'bot.sqlite')); const message: Incoming = { key: 'instruction', messageId: 'm1', chatKey: 'chat', chatId: 'chat', senderId: 'ou_owner', text: 'work' };
-  store.enqueue(message); const task = new Tasks(store).create(store.get(message.key)!, { project: 'app', cwd: realpathSync(repo), policyHash: policyHash(loadConfig(file).codex) }); store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(task.id); store.close();
+  store.enqueue(message); const task = new Tasks(store).create(store.get(message.key)!, { cwd: realpathSync(root), directories:[realpathSync(repo)], policyHash: policyHash(loadConfig(file).codex) }); store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(task.id); store.close();
   const manager=new Management(file,{status:()=>({running:false,mode:'stopped'})});
   const ui=await startUi(manager);t.after(()=>ui.close());
   const headers={Origin:ui.url,'Content-Type':'application/json','Accept-Language':'en'};
@@ -321,7 +321,9 @@ test('workbench approvals retain exact targets, confirmation, stale-state reject
   const get=async()=>await (await fetch(ui.url+'/api/approvals',{headers:{Cookie:cookie}})).json() as any;
   const post=(input:object,origin=ui.url)=>fetch(ui.url+'/api/approvals',{method:'POST',headers:{...headers,Origin:origin,Cookie:cookie},body:JSON.stringify(input)});
   const view=await get();assert.equal(view.configured,true);assert.deepEqual(view.remotes,['origin']);assert.deepEqual(view.items,[]);
-  const request={action:'request',taskId:task.id,remote:'origin',ref:'refs/heads/main',configRevision:view.configRevision,confirmed:true};
+  const request={action:'request',directory:realpathSync(repo),taskId:task.id,remote:'origin',ref:'refs/heads/main',configRevision:view.configRevision,confirmed:true};
+  assert.equal((await post({...request,directory:undefined})).status,409,'a repository must be chosen independently of the task scratch directory');
+  assert.equal((await post({...request,directory:realpathSync(root)})).status,409,'a parent outside the whitelist cannot become a push target');
   const response=await post(request);assert.equal(response.status,200,await response.clone().text());const preview=await response.json() as any;
   assert.equal(preview.taskId,task.id);assert.equal(preview.remote,'origin');assert.equal('url' in preview,false);
   assert.equal(preview.headSha,command(repo,['rev-parse','HEAD'],testEnv));
@@ -339,7 +341,7 @@ test('workbench approvals retain exact targets, confirmation, stale-state reject
   const before=readFileSync(join(raw.dataDir,'bot.sqlite'));
   assert.equal((await get()).items[0].state,'succeeded');
   assert.deepEqual(readFileSync(join(raw.dataDir,'bot.sqlite')),before,'queries do not mutate approval records');
-  raw.codex.sandbox='workspace-write';atomicJson(file,raw);
+  raw.codex.networkAccess=true;atomicJson(file,raw);
   const changed=await post({...request,configRevision:manager.config().revision});assert.equal(changed.status,409);
   assert.match(await changed.text(),/permissions changed/i);
   assert.equal((await post(request)).status,409,'configuration revisions remain binding');
@@ -358,7 +360,7 @@ test('logs are bounded, redacted and never follow symlinks', t => {
 
 test('workbench logs, source inspection and optional inference share local authorization', async t => {
   const root=mkdtempSync(join(tmpdir(),'namo-operations-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
-  const file=join(root,'config.json'),raw=initialConfig(file);raw.feishu.appId='operations';raw.feishu.appSecret='FAKE_RUNTIME_SECRET';atomicJson(file,raw);mkdirSync(raw.dataDir,{recursive:true});
+  const file=join(root,'config.json'),raw=initialConfig(file, file.slice(0, file.lastIndexOf('/')));raw.feishu.appId='operations';raw.feishu.appSecret='FAKE_RUNTIME_SECRET';atomicJson(file,raw);mkdirSync(raw.dataDir,{recursive:true});
   writeFileSync(join(raw.dataDir,'service.log'),'FAKE_RUNTIME_SECRET logged');
   const source=join(root,'openclaw.json');writeFileSync(source,JSON.stringify({meta:{lastTouchedVersion:'2026.10.6'},channels:{feishu:{appId:'fixture_1234',appSecret:'FAKE_SOURCE_SECRET'}}}));
   const modes:boolean[]=[];

@@ -1,5 +1,6 @@
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { resolve, isAbsolute } from 'node:path';
+import { homedir } from 'node:os';
 import { t as tr } from './locale.js';
 import type { Prompter } from './prompts.js';
 import { loadConfig } from './config.js';
@@ -20,7 +21,12 @@ export async function migrateInteractive(file:string,ui:Prompter):Promise<void>{
   for(const conflict of preview.conflicts)options.conflictResolutions![conflict.path]=await ui.confirm(tr("migration.replaceSourceValue",conflict.path),false)?'use-source':'keep-target';
   if(await ui.confirm(tr("migration.importReviewedSourceUserAllowlist"),false))options.permissions!.users='use-source';
   if(await ui.confirm(tr("migration.importReviewedSourceChatAllowlist"),false))options.permissions!.chats='use-source';
-  if(preview.proposed.workspaceProjectAvailable)options.project={importWorkspace:await ui.confirm(tr("migration.importSourceWorkspaceProject"),false),projectName:preview.proposed.projectName};
+  for(;;) {
+    const answer=await ui.text(tr('onboarding.projectDirectoryAgentMayWork'));
+    try {const paths=answer.split(';').map(p=>p.trim()).filter(Boolean);if(!paths.length)throw Error();
+      options.directories=paths.map(path=>{if(!isAbsolute(path))throw Error();const resolved=realpathSync(path);if(!statSync(resolved).isDirectory()||resolved==='/'||resolved===realpathSync(homedir()))throw Error();return resolved;});break;
+    } catch {ui.info(tr('onboarding.chooseExistingSpecificProjectDirectoryRootHome'));}
+  }
   for(const candidate of preview.candidates)if(await ui.confirm(tr("migration.copyReviewCandidate",candidate.name),false))options.approvedCandidateIds!.push(candidate.id);
   if(!await ui.confirm(tr("migration.applyExactPreviewTargetConfiguration"),false))return;
   idle();const result=importOpenClawMigration(preview,{sourceFile,options});ui.info(JSON.stringify(result,null,2));
