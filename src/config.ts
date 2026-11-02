@@ -142,7 +142,7 @@ export function parseConfig(d: any, absolute: string): Config {
       ...(directories?{directories}:{}),
       bin: c.bin && (c.bin.includes('/') || c.bin.includes('\\')) ? path(c.bin) : c.bin ?? 'codex', home: path(c.home ?? `${dataDir}/codex-home`),
       model: c.model || undefined, allowedModels, dailyTurnLimit:c.dailyTurnLimit??(access?100:0), timeoutMs, sandbox: 'workspace-write',
-      networkAccess: c.networkAccess ?? false,
+      networkAccess: c.networkAccess ?? true,
       allowLocalCommits: true,
       readPaths: [],
       explicitDenyPaths:list(c.denyPaths??[], 'codex.denyPaths').map(path),

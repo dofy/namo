@@ -18,18 +18,18 @@ test('shared directory mode makes authorized MCPs discoverable to any admitted g
   f.edit(c=>{c.mcpConnections[0].token='';});
   assert.doesNotMatch(JSON.stringify(await mcpRead(f.store,f.file,f.task,{operation:'connections'},new AbortController().signal)),/linear/);
 });
-test('shared MCP calls wait for the requesting member approval in the original group',async t=>{
-  const f=fixture(t,'group','bob');f.edit(c=>{c.codex.directories=[];});f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);let calls=0;
-  const tool={name:'update_issue',inputSchema:{type:'object' as const},annotations:{readOnlyHint:false}};
-  const waiting=mcpRead(f.store,f.file,f.task,{connection:'linear',operation:'call',tool:'update_issue',arguments:{}},new AbortController().signal,async(_c,r,_s,before)=>{
+test('authorized members execute reads and writes directly in private and group chats without approval',async t=>{
+ for(const chat of ['p2p','group'] as const)for(const readOnly of [true,false]) {
+  const f=fixture(t,chat,'bob');f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);let calls=0;
+  const tool={name:readOnly?'get_issue':'update_issue',inputSchema:{type:'object' as const},annotations:{readOnlyHint:readOnly}};
+  const result=await mcpRead(f.store,f.file,f.task,{connection:'linear',operation:'call',tool:tool.name,arguments:{}},new AbortController().signal,async(_c,r,_s,before)=>{
     if(r.operation==='list')return[tool];before?.(tool);calls++;return{content:[{type:'text',text:'done'}]};
   });
-  const {waitFor}=await import('./helpers.js');await waitFor(()=>!!f.store.db.prepare("SELECT 1 FROM settings WHERE key LIKE 'mcp-approval:%'").get());
-  assert.equal(calls,0);const row=f.store.db.prepare("SELECT key FROM settings WHERE key LIKE 'mcp-approval:%'").get()!,id=String(row.key).slice('mcp-approval:'.length);
-  assert.equal(f.store.db.prepare('SELECT chatId FROM outbox WHERE kind=?').get(`mcp-approval:${id}`)?.chatId,'group1');
-  const {mcpApprovalCommand}=await import('../src/mcp-write-approval.js');
-  f.store.enqueue({...f.store.get('input')!,key:'approve',messageId:'approve',text:`/mcp-approve ${id} --confirm`});mcpApprovalCommand(f.store,f.store.get('approve')!);
-  await waiting;assert.equal(calls,1);
+  assert.equal(calls,1);assert.match(JSON.stringify(result),/done/);
+  assert.equal(f.store.db.prepare("SELECT 1 FROM settings WHERE key LIKE 'mcp-approval:%'").get(),undefined);
+  assert.equal(f.store.db.prepare('SELECT count(*) n FROM outbox').get()?.n,0);
+  assert.equal(JSON.parse(String(f.store.db.prepare("SELECT value FROM settings WHERE key LIKE 'mcp-operation:%'").get()!.value)).state,'completed');
+ }
 });
 function fixture(t:any,chatType:'p2p'|'group'='p2p',sender='alice',tenant='tenant'){
   const {dir,store}=storeFixture(t,'namo-mcp-');const file=join(dir,'config.json');
@@ -142,18 +142,31 @@ test('connection discovery exposes only currently authorized, applied connection
  await assert.rejects(mcpRead(f.store,f.file,f.task,{operation:'connections',connection:'linear'},signal),/mcp_invalid_request/);
 });
 
-test('remote calls require a bound one-time approval and recheck tool metadata before dispatch',async t=>{
- const f=fixture(t),signal=new AbortController().signal;
- f.edit(c=>{c.mcpConnections=[{id:'remote',type:'remote',ownerUserId:'alice',url:'https://mcp.example/mcp',token:'remote_token_123'}];});
- f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);
- let calls=0;const tool={name:'update',description:'Update',inputSchema:{type:'object'},approvalRequired:true};
- const fake=async(_connection:any,request:any,_signal:AbortSignal,beforeCall?:(tool:unknown)=>void)=>{if(request.operation==='list')return [tool];beforeCall?.(tool);calls++;return {content:[{type:'text',text:'ok'}]};};
- const waiting=mcpRead(f.store,f.file,f.task,{operation:'call',connection:'remote',tool:'update',arguments:{title:'Example'}},signal,undefined,undefined,fake);
- await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,0);
- const id=String(f.store.db.prepare("SELECT key FROM settings WHERE key LIKE 'mcp-approval:%'").get()?.key).slice('mcp-approval:'.length);
- const {mcpApprovalCommand}=await import('../src/mcp-write-approval.js');
- f.store.enqueue({key:'approval',messageId:'approval',chatKey:f.task.chatKey,chatId:'chat',senderId:'alice',text:`/mcp-approve ${id} --confirm`});mcpApprovalCommand(f.store,f.store.get('approval')!);
- const result=await waiting;assert.equal(calls,1);assert.match(JSON.stringify(result),/ok/);
+test('revocation, cancellation and completed tasks stop direct calls immediately before dispatch',async t=>{
+ for(const change of ['revoke','cancel','complete','abort']) {
+  const f=fixture(t),controller=new AbortController();f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);
+  const tool={name:'update',inputSchema:{type:'object'}};let calls=0;
+  await assert.rejects(mcpRead(f.store,f.file,f.task,{operation:'call',connection:'linear',tool:'update'},controller.signal,async(_c,r,_s,before)=>{
+    if(r.operation==='list')return[tool];
+    if(change==='revoke')f.edit(c=>{c.mcpConnections[0].token='';});
+    if(change==='cancel')f.store.db.prepare('UPDATE inbox SET cancelRequested=1 WHERE key=?').run(f.task.inboxKey);
+    if(change==='complete')f.store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(f.task.id);
+    if(change==='abort')controller.abort();
+    before?.(tool);calls++;return{};
+  }),/mcp_(access|cancelled)/);
+  assert.equal(calls,0);
+ }
+});
+
+test('an uncertain direct call records its outcome and cannot be dispatched again in the same task',async t=>{
+ const f=fixture(t);f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);
+ const tool={name:'update',inputSchema:{type:'object'}};let calls=0;
+ const reader=async(_c:any,r:any,_s:AbortSignal,before?:(tool:unknown)=>void)=>{if(r.operation==='list')return[tool];before?.(tool);calls++;throw Error('connection lost');};
+ const call=()=>mcpRead(f.store,f.file,f.task,{operation:'call',connection:'linear',tool:'update',arguments:{title:'Example'}},new AbortController().signal,reader);
+ await assert.rejects(call(),/mcp_operation_outcome_unknown/);
+ await assert.rejects(call(),/mcp_operation_outcome_unknown/);assert.equal(calls,1);
+ const receipt=String(f.store.db.prepare("SELECT value FROM settings WHERE key LIKE 'mcp-operation:%'").get()!.value);
+ assert.equal(JSON.parse(receipt).state,'unknown');assert.doesNotMatch(receipt,/Example|lin_test/);
 });
 
 test('remote connections accept only public HTTPS endpoints and preserve credentials only for their original target',t=>{
@@ -164,17 +177,15 @@ test('remote connections accept only public HTTPS endpoints and preserve credent
  assert.throws(()=>f.manager.save(saved.revision,{mcpConnections:[{id:'remote',type:'remote',url:'https://elsewhere.example/mcp'}]}),/mcp_credential_target_changed/);
 });
 
-test('remote tool changes after approval never reach the remote dispatch',async t=>{
+test('tool definition changes never reach the direct remote dispatch',async t=>{
  const f=fixture(t),signal=new AbortController().signal;
  f.edit(c=>{c.mcpConnections=[{id:'remote',type:'remote',ownerUserId:'alice',url:'https://mcp.example/mcp',token:'remote_token_123'}];});
  f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);
- let dispatched=false;const tool={name:'update',description:'original',inputSchema:{type:'object'},approvalRequired:true};
+ let dispatched=false;const tool={name:'update',description:'original',inputSchema:{type:'object'},approvalRequired:false};
  const fake=async(_connection:any,request:any,_signal:AbortSignal,beforeCall?:(tool:unknown)=>void)=>{if(request.operation==='list')return [tool];beforeCall?.({...tool,description:'changed'});dispatched=true;return {};};
- const waiting=mcpRead(f.store,f.file,f.task,{operation:'call',connection:'remote',tool:'update'},signal,undefined,undefined,fake);
- await new Promise(resolve=>setImmediate(resolve));const id=String(f.store.db.prepare("SELECT key FROM settings WHERE key LIKE 'mcp-approval:%'").get()?.key).slice('mcp-approval:'.length);
- const {mcpApprovalCommand}=await import('../src/mcp-write-approval.js');f.store.enqueue({key:'approval',messageId:'approval',chatKey:f.task.chatKey,chatId:'chat',senderId:'alice',text:`/mcp-approve ${id} --confirm`});mcpApprovalCommand(f.store,f.store.get('approval')!);
- await assert.rejects(waiting,/mcp_tool_changed/);assert.equal(dispatched,false);
- assert.equal(JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`mcp-approval:${id}`)!.value)).state,'not_sent');
+ await assert.rejects(mcpRead(f.store,f.file,f.task,{operation:'call',connection:'remote',tool:'update'},signal,undefined,undefined,fake),/mcp_tool_changed/);
+ assert.equal(dispatched,false);assert.equal(f.store.db.prepare("SELECT 1 FROM settings WHERE key LIKE 'mcp-operation:%'").get(),undefined);
+
 });
 
 
@@ -241,4 +252,27 @@ test('v15 receipt keeps its original identity check across directory migration a
   const receipt=JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key)!.value))[0];
   assert.equal(receipt.version,3);assert.equal('legacyContext' in receipt,false);
   assert.notEqual(receipt.scope,scope);assert.doesNotThrow(()=>assertMcpDelivery(f.store,c,f.task));
+});
+
+test('direct dispatch rejects leaked credentials, missing tools and failed durable recording',async t=>{
+ for(const mode of ['secret','missing','storage']) {
+  const f=fixture(t);f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);
+  if(mode==='storage')f.store.db.exec("CREATE TRIGGER fail_operation BEFORE INSERT ON settings WHEN NEW.key LIKE 'mcp-operation:%' BEGIN SELECT RAISE(ABORT,'operation_storage_failed'); END");
+  const tool={name:'write',inputSchema:{type:'object'}};let calls=0;
+  await assert.rejects(mcpRead(f.store,f.file,f.task,{operation:'call',connection:'linear',tool:'write',arguments:{value:mode==='secret'?token:'safe'}},new AbortController().signal,async(_c,r,_s,before)=>{
+    if(r.operation==='list')return mode==='missing'?[]:[tool];before?.(tool);calls++;return{};
+  }),mode==='secret'?/mcp_secret_in_arguments/:mode==='missing'?/mcp_tool_not_found/:/operation_storage_failed/);
+  assert.equal(calls,0);
+ }
+});
+
+test('legacy executing and unknown MCP records block repeat dispatch after an upgrade',async t=>{
+ const {beginMcpOperation}=await import('../src/mcp-operation.js');
+ for(const state of ['executing','unknown']){
+  const f=fixture(t),url='https://mcp.linear.app/mcp',args={id:'issue',title:'requested change'};
+  const prior={taskId:'old-task',connection:'linear',url,tool:'update_issue',arguments:args,state};
+  f.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run('mcp-approval:MA-OLD',JSON.stringify(prior));
+  assert.throws(()=>beginMcpOperation(f.store,f.task,'linear',url,'update_issue',args),/mcp_operation_outcome_unknown/);
+  assert.equal(f.store.db.prepare("SELECT 1 FROM settings WHERE key LIKE 'mcp-operation:%'").get(),undefined);
+ }
 });

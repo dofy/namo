@@ -128,7 +128,7 @@ async function main(): Promise<void> {
           return response;
         },
         onReview: args => readReview(store,file,task,args,abort.signal),
-        ...(config.github?.mode==='simple'?{onGitHub:(args:unknown,signal:AbortSignal)=>githubApi(store,file,task,args,signal)}:{}),
+        ...(config.github && (config.github.source==='gh'||!!config.github.token)?{onGitHub:(args:unknown,signal:AbortSignal)=>githubApi(store,file,task,args,signal)}:{}),
         onReady: next => { controls = next; steer(); },
         onActivity: phase => write(() => recordActivity(store, runId, phase)),
         onProgress: event => write(() => recordProgress(store, runId, event, redact)),

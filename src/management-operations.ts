@@ -58,10 +58,14 @@ export async function changeApproval(store: Store, config: Config, revision: str
     if (current !== revision) throw new ApprovalError('approval_config_changed', tr('management.configurationChangedReviewAgainApplying'));
     return current;
   };
-  if (input.action === 'request') {
+  if (input.action === 'request' || input.action === 'push') {
     const bound = task(input.taskId,input.directory);
     if (bound.state !== 'succeeded') throw new ApprovalError('task_not_complete', tr('cli.taskNotCompletedSuccessfully'));
     const requested = await approvals.request(bound, { remote: input.remote, ref: input.ref, configRevision: unchanged() });
+    // Older workbench clients still submit preview requests.
+    if(input.action==='request')return approvalView(approvals.get(requested.id)!);
+    approvals.approve(requested.id,{ownerId:bound.ownerId,chatKey:bound.chatKey,authority:'local-management'});
+    await approvals.execute(requested.id,bound,unchanged);
     return approvalView(approvals.get(requested.id)!);
   }
   const record = approvals.get(input.id);
@@ -71,7 +75,7 @@ export async function changeApproval(store: Store, config: Config, revision: str
   const actor = { ownerId: record.task.ownerId, chatKey: record.task.chatKey, authority: 'local-management' as const };
   if (input.action === 'approve') { unchanged(); task(record.task.taskId,record.task.cwd); approvals.approve(record.id, actor); }
   else if (input.action === 'reject') approvals.reject(record.id, actor);
-  else if (input.action === 'execute') await approvals.execute(record.id, task(record.task.taskId,record.task.cwd), unchanged);
+  else if (input.action === 'execute') { if(record.state==='pending')approvals.approve(record.id,actor);await approvals.execute(record.id, task(record.task.taskId,record.task.cwd), unchanged); }
   else if (input.action === 'reconcile') await approvals.reconcile(record.id, task(record.task.taskId,record.task.cwd), unchanged());
   else throw new ApprovalError('approval_action_invalid', tr('common.actionNotFound'));
   return approvalView(approvals.get(record.id)!);

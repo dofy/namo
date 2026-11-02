@@ -11,10 +11,8 @@ import { executionPolicy } from '../src/access.js';
 import { githubApi, assertGitHubApiDelivery } from '../src/github-api.js';
 import { ScopedGitHubAdapter, parseGitHubAccessConfig, publicGitHubAccess } from '../src/github-access.js';
 import { Management } from '../src/management.js';
-import { awaitMcpApproval, mcpApprovalCommand } from '../src/mcp-write-approval.js';
 
 const credential='synthetic-github-account-token';
-const autoApprove:typeof awaitMcpApproval=async()=>()=>{};
 function fixture(t:any,chatType:'p2p'|'group'='p2p',owner='alice',tenant='tenant'){
   const { dir, store } = storeFixture(t, 'namo-github-simple-');
   const file = join(dir, 'config.json');
@@ -23,44 +21,42 @@ function fixture(t:any,chatType:'p2p'|'group'='p2p',owner='alice',tenant='tenant
     github:{mode:'simple',ownerUserId:'alice',token:credential,repositories:[],allowedUserIds:[],...(chatType==='group'?{grants:[{repository:'org/repo',organization:false,userIds:[],chatIds:['chat']}]}:{})}}));
   store.enqueue({key:'input',messageId:'input',chatKey:'app:chat',chatId:'chat',senderId:owner,text:'GitHub task',envelope:{version:1,type:'text',kind:'instruction',scopeKey:'app:chat',chatType,tenantKey:tenant,materials:[],limitations:[]}});
   const task=new Tasks(store).create(store.get('input')!,{cwd:dir,policyHash:'test'});
+  new Tasks(store).start(task);
   const edit=(fn:(c:any)=>void)=>{const c=JSON.parse(readFileSync(file,'utf8'));fn(c);writeFileSync(file,JSON.stringify(c));};
-  return {dir,file,store,task,edit,call:(args:unknown,fetcher:typeof fetch,signal=new AbortController().signal)=>githubApi(store,file,task,args,signal,{fetch:fetcher,approve:autoApprove})};
+  return {dir,file,store,task,edit,call:(args:unknown,fetcher:typeof fetch,signal=new AbortController().signal)=>githubApi(store,file,task,args,signal,{fetch:fetcher})};
 }
 const get={requestId:'read',method:'GET',endpoint:'/repos/org/repo/pulls?per_page=10'};
 const post={requestId:'comment-1',method:'POST',endpoint:'/repos/org/repo/issues/1/comments',body:{body:'requested comment'}};
 
-test('owner GitHub writes require a bound one-time approval before dispatch',async t=>{
- const f=fixture(t);new Tasks(f.store).start(f.task);let calls=0;
- const pending=githubApi(f.store,f.file,f.task,post,new AbortController().signal,{fetch:async()=>{calls++;return Response.json({ok:true});}});
- await new Promise(resolve=>setImmediate(resolve));
- const row=f.store.db.prepare("SELECT key FROM settings WHERE key LIKE 'mcp-approval:%'").get();assert.ok(row);assert.equal(calls,0);
- const id=String(row.key).slice('mcp-approval:'.length),cmd=(key:string,senderId:string)=>{
-  const original=f.store.get('input')!;f.store.enqueue({...original,key,messageId:key,senderId,text:`/mcp-approve ${id} --confirm`});
-  mcpApprovalCommand(f.store,f.store.get(key)!);
- };
- cmd('bad','bob');assert.equal(calls,0);cmd('approved','alice');
- assert.equal((await pending as any).state,'completed');assert.equal(calls,1);
- assert.equal(JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`mcp-approval:${id}`)!.value)).state,'completed');
-});
-test('revoking GitHub access while approval is pending prevents dispatch',async t=>{
- const f=fixture(t);new Tasks(f.store).start(f.task);let calls=0;
- const pending=githubApi(f.store,f.file,f.task,post,new AbortController().signal,{fetch:async()=>{calls++;return Response.json({ok:true});}});
- await new Promise(resolve=>setImmediate(resolve));
- const row=f.store.db.prepare("SELECT key FROM settings WHERE key LIKE 'mcp-approval:%'").get()!;const id=String(row.key).slice('mcp-approval:'.length);
- f.edit(c=>{c.feishu.allowedChatIds=['other'];});
- const original=f.store.get('input')!;f.store.enqueue({...original,key:'approval',messageId:'approval',text:`/mcp-approve ${id} --confirm`});mcpApprovalCommand(f.store,f.store.get('approval')!);
- await assert.rejects(pending,/mcp_approval_changed/);assert.equal(calls,0);
+test('owner GitHub writes execute directly without approval messages',async t=>{
+ const f=fixture(t);let calls=0;
+ const result=await githubApi(f.store,f.file,f.task,post,new AbortController().signal,{fetch:async()=>{calls++;return Response.json({ok:true});}});
+ assert.equal((result as any).state,'completed');assert.equal(calls,1);
+ assert.equal(f.store.db.prepare("SELECT 1 FROM settings WHERE key LIKE 'mcp-approval:%'").get(),undefined);
+ assert.equal(f.store.db.prepare('SELECT count(*) n FROM outbox').get()?.n,0);
 });
 
-test('scheduled owner tasks may read but cannot dispatch writes, including GraphQL',async t=>{
-  const f=fixture(t); const original=f.store.get('input')!;
-  f.store.enqueue({...original,key:'schedule:S-1:123',messageId:'scheduled'});
-  f.store.db.prepare('UPDATE tasks SET inboxKey=? WHERE id=?').run('schedule:S-1:123',f.task.id);
-  const task={...f.task,inboxKey:'schedule:S-1:123'}; let calls=0;
-  const call=(args:unknown)=>githubApi(f.store,f.file,task,args,new AbortController().signal,{fetch:async()=>{calls++;return Response.json({ok:true});}});
-  await call(get);
-  for(const args of [post,{...post,endpoint:'/graphql'}]) await assert.rejects(call(args),/github_scheduled_write_denied/);
-  assert.equal(calls,1);
+test('cancelled and finished tasks cannot dispatch GitHub writes',async t=>{
+ for(const change of ['cancel','finish']) {
+  const f=fixture(t);let calls=0;
+  if(change==='cancel')f.store.db.prepare('UPDATE inbox SET cancelRequested=1 WHERE key=?').run(f.task.inboxKey);
+  else f.store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(f.task.id);
+  await assert.rejects(f.call(post,async()=>{calls++;return Response.json({ok:true});}),/github_api_cancelled/);
+  assert.equal(calls,0);
+ }
+});
+
+test('authorized scheduled owner tasks retain read and write permissions including GraphQL',async t=>{
+ const f=fixture(t),original=f.store.get('input')!;
+ f.store.enqueue({...original,key:'schedule:S-1:123',messageId:'scheduled'});
+ f.store.db.prepare('UPDATE tasks SET inboxKey=? WHERE id=?').run('schedule:S-1:123',f.task.id);
+ const task={...f.task,inboxKey:'schedule:S-1:123'};let calls=0;
+ for(const args of [get,post,{...post,requestId:'graphql',endpoint:'/graphql'}]) {
+  const result=await githubApi(f.store,f.file,task,args,new AbortController().signal,{fetch:async()=>{calls++;return Response.json({ok:true});}});
+  assert.equal((result as any).state,'completed');
+ }
+ assert.equal(calls,3);f.edit(c=>{c.feishu.allowedChatIds=['other'];});
+ await assert.rejects(githubApi(f.store,f.file,task,{...post,requestId:'revoked'},new AbortController().signal,{fetch:async()=>{throw Error('must not send');}}),/access/);
 });
 
 test('simple scopes require one paired owner and never silently replace legacy grants',t=>{
@@ -73,30 +69,26 @@ test('simple scopes require one paired owner and never silently replace legacy g
   assert.equal(legacy?.mode,undefined);
 });
 
-test('groups may read only explicitly granted repositories, but cannot write or query account data',async t=>{
-  const f=fixture(t,'group','bob');let requests=0;
-  const fetcher:typeof fetch=async(url,options)=>{requests++;assert.equal(options?.method,'GET');assert.equal(options?.redirect,'error');assert.ok(String(url).startsWith('https://api.github.com/repos/'));return Response.json({title:'reference only'});};
-  assert.equal((await f.call(get,fetcher) as any).state,'completed');
-  const savedScope=String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`github-api-scope:${f.task.workstreamId}`)?.value);
-  assert.doesNotMatch(savedScope,/per_page/);
-  const c=loadConfig(f.file),adapter=new ScopedGitHubAdapter(f.store,c.github,fetcher,undefined,c.feishu);
-  assert.ok(adapter.authorize({owner:'org',repo:'repo',pullNumber:7,headSha:'a'.repeat(40)},{taskId:f.task.id,ownerId:'bob',chatId:'chat'}));
-  assert.throws(()=>adapter.authorize({owner:'any',repo:'private',pullNumber:7,headSha:'a'.repeat(40)},{taskId:f.task.id,ownerId:'bob',chatId:'chat'}),/access_denied/);
-  await assert.rejects(f.call({...get,endpoint:'/repos/any/private/contents/file'},fetcher),/access_denied/);
-  for(const args of [post,{...post,method:'PATCH'},{...post,method:'PUT'},{...post,method:'DELETE'},{...post,endpoint:'/graphql'},{...get,endpoint:'/user'},{...get,endpoint:'/orgs/org/members'}])await assert.rejects(f.call(args,fetcher),/github_read_only/);
-  assertGitHubApiDelivery(f.store,c,f.task);
-  f.edit(c=>{c.github.grants.push({repository:'other/repo',organization:false,userIds:[],chatIds:['other']});});
-  assert.doesNotThrow(()=>assertGitHubApiDelivery(f.store,loadConfig(f.file),f.task));
-  f.edit(c=>{c.github.grants=[];});
-  assert.throws(()=>assertGitHubApiDelivery(f.store,loadConfig(f.file),f.task),/access_denied|access_changed/);
-  assert.equal(requests,1);
-  const policy=executionPolicy(c.codex,c.feishu,f.store.get('input')!);
+test('all admitted private and group members can read, write and use GraphQL without repository grants',async t=>{
+ for(const type of ['p2p','group'] as const){
+  const f=fixture(t,type,'bob');f.edit(c=>{c.github.grants=[];});let requests=0;
+  const fetcher:typeof fetch=async(_url,options)=>{requests++;assert.equal(options?.redirect,'error');return Response.json({ok:true});};
+  const inputs=[get,{...get,endpoint:'/repos/any/private/contents/file'},post,{...post,method:'PATCH'},{...post,method:'PUT'},{...post,method:'DELETE'},{...post,endpoint:'/graphql'},{...get,endpoint:'/user'},{...get,endpoint:'/orgs/org/members'}];
+  for(const [index,args] of inputs.entries())assert.equal((await f.call({...args,requestId:`operation-${index}`},fetcher) as any).state,'completed');
+  assert.equal(requests,inputs.length);assertGitHubApiDelivery(f.store,loadConfig(f.file),f.task);
+  assert.equal(f.store.db.prepare("SELECT count(*) n FROM settings WHERE key LIKE 'mcp-approval:%'").get()?.n,0);
+  const policy=executionPolicy(loadConfig(f.file).codex,loadConfig(f.file).feishu,f.store.get('input')!);
   assert.equal(policy.sandbox,'workspace-write');assert.equal(policy.networkAccess,true);assert.equal(policy.allowLocalCommits,true);
+  f.edit(c=>{c.feishu.allowedChatIds=['different'];});
+  await assert.rejects(f.call({...post,requestId:'revoked'},fetcher),/access_denied/);
+  assert.throws(()=>assertGitHubApiDelivery(f.store,loadConfig(f.file),f.task),/access_denied|access_changed/);
+  assert.equal(requests,inputs.length);
+ }
 });
 
-test('only the bound owner private chat can use the credential; spoofed identity and foreign organizations fail before HTTP',async t=>{
+test('spoofed task identity and foreign organizations fail before HTTP',async t=>{
   let requests=0;const fetcher:typeof fetch=async()=>{requests++;return Response.json({ok:true});};
-  for(const [type,user,tenant] of [['p2p','bob','tenant'],['p2p','alice','foreign'],['group','bob','foreign']] as const){const f=fixture(t,type,user,tenant);await assert.rejects(f.call(get,fetcher),/github_access_denied/);}
+  for(const [type,user,tenant] of [['p2p','alice','foreign'],['group','bob','foreign']] as const){const f=fixture(t,type,user,tenant);await assert.rejects(f.call(get,fetcher),/github_access_denied/);}
   const f=fixture(t);f.store.db.prepare("UPDATE tasks SET ownerId='bob' WHERE id=?").run(f.task.id);
   await assert.rejects(f.call(post,fetcher),/github_access_denied/);assert.equal(requests,0);
 });
@@ -119,7 +111,7 @@ test('owner writes execute once, redact secrets and reuse persisted receipts wit
   assert.deepEqual(second,first);assert.equal(writes,1);assert.doesNotMatch(JSON.stringify(first),/synthetic-github-account-token|fresh-secret|hidden/);
   await assert.rejects(f.call({...post,body:{body:'different'}},fetcher),/request_conflict/);
   assertGitHubApiDelivery(f.store,loadConfig(f.file),f.task);
-  f.edit(c=>{c.feishu.allowedUserIds.push('bob');c.github.ownerUserId='bob';});
+  f.edit(c=>{c.feishu.allowedChatIds=['different'];});
   await assert.rejects(f.call(post,fetcher),/access_denied/);
   assert.throws(()=>assertGitHubApiDelivery(f.store,loadConfig(f.file),f.task),/access_denied|access_changed/);assert.equal(writes,1);
 });
@@ -128,18 +120,18 @@ test('unknown writes survive a new connection and block both repeated and rename
   const f=fixture(t);let calls=0;const failing:typeof fetch=async()=>{calls++;throw Error('private transport error '+credential);};
   const result=await f.call(post,failing) as any;assert.equal(result.state,'unknown');
   const another=new Store(join(f.dir,'bot.sqlite'));
-  try{assert.equal((await githubApi(another,f.file,f.task,post,new AbortController().signal,{fetch:failing,approve:autoApprove}) as any).state,'unknown');}finally{another.close();}
+  try{assert.equal((await githubApi(another,f.file,f.task,post,new AbortController().signal,{fetch:failing}) as any).state,'unknown');}finally{another.close();}
   await assert.rejects(f.call({...post,requestId:'new-id'},failing),/github_api_unknown_write/);assert.equal(calls,1);
   assert.equal((await f.call(get,async()=>Response.json({id:1})) as any).state,'completed');
 });
 
-test('concurrent duplicate writes share one reservation, and group cannot use an owner receipt',async t=>{
+test('concurrent duplicate writes share one reservation and forged identities cannot use receipts',async t=>{
   const f=fixture(t);let release!:()=>void;const barrier=new Promise<void>(r=>{release=r;});let calls=0;
   const pending=f.call(post,async()=>{calls++;await barrier;return Response.json({id:1});});
   await new Promise(r=>setTimeout(r,5));assert.equal((await f.call(post,async()=>{throw Error('duplicate');}) as any).state,'unknown');
   release();await pending;assert.equal(calls,1);
-  const row=f.store.get('input')!;row.envelope!.chatType='group';f.store.db.prepare('UPDATE inbox SET envelope=? WHERE key=?').run(JSON.stringify(row.envelope),'input');
-  await assert.rejects(f.call(post,async()=>{throw Error('must not fetch');}),/github_read_only/);
+  f.store.db.prepare("UPDATE inbox SET senderId='impostor' WHERE key='input'").run();
+  await assert.rejects(f.call(post,async()=>{throw Error('must not fetch');}),/github_access_denied/);
 });
 
 test('ambiguous HTTP failures are not retried, and accepted writes with oversized responses remain accepted',async t=>{
@@ -166,7 +158,7 @@ test('authorization is rechecked after account discovery and before private resu
   const f=fixture(t);f.edit(c=>{delete c.github.token;c.github.source='gh';c.github.localGh={executable:'/usr/bin/gh',configDir:'/tmp/gh',login:'owner',userId:42};});
   let requests=0;
   const fetcher:typeof fetch=async()=>{requests++;f.edit(c=>{c.feishu.allowedChatIds=['different'];});return Response.json({id:42,login:'owner'});};
-  await assert.rejects(githubApi(f.store,f.file,f.task,post,new AbortController().signal,{fetch:fetcher,token:async()=>credential,approve:autoApprove}),/access_denied|access_changed/);assert.equal(requests,1);
+  await assert.rejects(githubApi(f.store,f.file,f.task,post,new AbortController().signal,{fetch:fetcher,token:async()=>credential}),/access_denied|access_changed/);assert.equal(requests,1);
   const read=fixture(t);
   await assert.rejects(read.call(get,async()=>{read.edit(c=>{c.feishu.allowedChatIds=['different'];});return Response.json({body:'private'});}),/access_denied|access_changed/);
 });
@@ -186,4 +178,18 @@ test('saving existing simple GitHub settings preserves a configured group reposi
  const grants=structuredClone(before.github.grants);
  await manager.saveGitHub(before.revision,{github:{mode:'simple',source:'token',ownerUserId:'alice',repositories:[],allowedUserIds:[]}});
  assert.deepEqual(loadConfig(f.file).github?.grants,grants);
+});
+
+test('shared GitHub settings need no owner binding and preserve the credential when migrating old scopes',async t=>{
+ const f=fixture(t,'group','bob'),manager=new Management(f.file),before=manager.config();
+ const saved=await manager.saveGitHub(before.revision,{github:{mode:'shared',source:'token',repositories:[],allowedUserIds:[]}});
+ assert.equal(saved.github.mode,'shared');assert.equal(saved.github.ownerUserId,undefined);assert.equal(saved.github.grants,undefined);
+ assert.equal(loadConfig(f.file).github?.token,credential);
+ const result=await f.call(post,async()=>Response.json({ok:true}));assert.equal((result as any).state,'completed');
+});
+
+test('public PR reads still work without connected credentials in admitted bot chats',t=>{
+ const f=fixture(t),c=loadConfig(f.file),target={owner:'org',repo:'public',pullNumber:1,headSha:'a'.repeat(40)};
+ const context={taskId:f.task.id,ownerId:f.task.ownerId,chatId:'chat'};
+ for(const github of [undefined,{source:'anonymous' as const,repositories:[],allowedUserIds:[]}])assert.equal(new ScopedGitHubAdapter(f.store,github,undefined,undefined,c.feishu).authorize(target,context),undefined);
 });

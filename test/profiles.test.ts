@@ -160,6 +160,6 @@ test('help groups available commands with copyable examples', t => {
   const f=engine(t);f.e.accept(message('help-readable','/help'));
   const help=f.reply('help-readable');
   for(const heading of ['**任务**','**会话与目录**','**材料与文件**','**个人设置与记忆 · 私聊**','**异常与受控推送**']) assert.ok(help.includes(heading));
-  for(const command of ['/model','/resume WAIT-编号 回答','/push-approve AP-编号 --confirm','/memory-correct 编号 版本 内容']) assert.ok(help.includes(`\`${command}\``));
+  for(const command of ['/model','/resume WAIT-编号 回答','/push-status AP-编号','/memory-correct 编号 版本 内容']) assert.ok(help.includes(`\`${command}\``));
   assert.equal(f.calls(),0);
 });

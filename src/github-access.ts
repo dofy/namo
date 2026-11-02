@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Store } from './store.js';
 import { localGhToken, parseLocalGh, type LocalGhConfig } from './github-local.js';
-import { admitted, audienceAllows, parseAudience, type Audience } from './access.js';
+import { admitted, parseAudience, type Audience } from './access.js';
 import type { Config } from './config.js';
 import type { Incoming } from './store.js';
 import { GitHubReadError, GitHubRestAdapter, type GitHubObservation, type GitHubObservationAdapter,
@@ -9,7 +9,7 @@ import { GitHubReadError, GitHubRestAdapter, type GitHubObservation, type GitHub
 
 /** Explicit protected configuration; resolved credentials must never enter a prompt or public view. */
 export interface GitHubAccessConfig {
-  mode?: 'simple';
+  mode?: 'simple' | 'shared';
   ownerUserId?: string;
   source?: 'token' | 'gh' | 'anonymous';
   localGh?: LocalGhConfig;
@@ -65,7 +65,7 @@ export function parseGitHubAccessConfig(raw: unknown, env: Readonly<Record<strin
     throw new GitHubAccessError('github_access_invalid_config');
   if (value.token !== undefined && value.tokenEnv !== undefined) throw new GitHubAccessError('github_access_ambiguous_credential');
   const repositories = list(value.repositories, 'repository'), allowedUserIds = list(value.allowedUserIds, 'user');
-  if (value.mode !== undefined && value.mode !== 'simple') throw new GitHubAccessError('github_access_invalid_config');
+  if (value.mode !== undefined && !['simple','shared'].includes(String(value.mode))) throw new GitHubAccessError('github_access_invalid_config');
   if (value.mode === 'simple' ? typeof value.ownerUserId !== 'string' || !USER.test(value.ownerUserId) || value.ownerUserId === '*'
     || repositories.length > 0 || allowedUserIds.length > 0 || value.source === 'anonymous'
     : value.ownerUserId !== undefined) throw new GitHubAccessError('github_access_invalid_scope');
@@ -75,10 +75,10 @@ export function parseGitHubAccessConfig(raw: unknown, env: Readonly<Record<strin
     grants = value.grants.map(v=>({...parseAudience(v),repository:repository(v.repository)}));
     if (new Set(grants.map(g=>g.repository)).size!==grants.length) throw new GitHubAccessError('github_access_invalid_scope');
   }
-  const shared = value.mode === 'simple' ? {mode:'simple' as const,ownerUserId:value.ownerUserId as string,...(grants===undefined?{}:{grants})} : grants === undefined ? {} : {grants};
+  const shared = value.mode === 'shared' ? {mode:'shared' as const} : value.mode === 'simple' ? {mode:'simple' as const,ownerUserId:value.ownerUserId as string,...(grants===undefined?{}:{grants})} : grants === undefined ? {} : {grants};
   if (value.source !== undefined && (typeof value.source!=='string' || !['token','gh','anonymous'].includes(value.source))) throw new GitHubAccessError('github_access_invalid_config');
   if (value.source === 'gh') {
-    if (value.token !== undefined || value.tokenEnv !== undefined || repositories.length || value.mode !== 'simple' && grants===undefined && allowedUserIds.length !== 1)
+    if (value.token !== undefined || value.tokenEnv !== undefined || repositories.length || !['simple','shared'].includes(String(value.mode)) && grants===undefined && allowedUserIds.length !== 1)
       throw new GitHubAccessError('github_access_invalid_config');
     try { return { source:'gh', localGh:parseLocalGh(value.localGh), repositories, allowedUserIds, ...shared }; }
     catch { throw new GitHubAccessError('github_access_invalid_config'); }
@@ -105,7 +105,7 @@ export function publicGitHubAccess(config?: GitHubAccessConfig) {
     ...(config?.grants ? {grants:structuredClone(config.grants)} : {}) };
 }
 
-/** Shared access binds a durable task to an explicit repository audience; legacy grants remain DM-only. */
+/** Connected credentials are shared by admitted bot members; bind every call to its durable task. */
 export class ScopedGitHubAdapter implements GitHubObservationAdapter {
   private readonly config: GitHubAccessConfig | undefined;
   constructor(private readonly store: Store, config?: GitHubAccessConfig, private readonly fetcher?: typeof globalThis.fetch,
@@ -117,8 +117,9 @@ export class ScopedGitHubAdapter implements GitHubObservationAdapter {
 
   authorize(target: Readonly<GitHubTarget>, context?: GitHubAccessContext): string | undefined {
     const selected = repository(`${target.owner}/${target.repo}`);
-    if (this.config?.mode !== 'simple' && !this.config?.grants && this.config?.source!=='gh' && !this.config?.repositories.includes(selected)) return undefined;
-    if (!context || !this.config || this.config.mode !== 'simple' && !this.config.grants && !this.config.allowedUserIds.includes(context.ownerId)) throw new GitHubAccessError('github_access_denied');
+    if(!this.config || this.config.source==='anonymous')return undefined;
+    if (!this.feishu && this.config?.mode !== 'shared' && this.config?.mode !== 'simple' && !this.config?.grants && this.config?.source!=='gh' && !this.config?.repositories.includes(selected)) return undefined;
+    if (!context || !this.config || !this.feishu && this.config.mode !== 'shared' && this.config.mode !== 'simple' && !this.config.grants && !this.config.allowedUserIds.includes(context.ownerId)) throw new GitHubAccessError('github_access_denied');
     const row = this.store.db.prepare(`SELECT t.ownerId,t.chatKey,i.senderId,i.chatId,i.chatKey AS inboxChatKey,i.envelope
       FROM tasks t JOIN inbox i ON i.key=t.inboxKey WHERE t.id=?`).get(context.taskId);
     if (!row || row.ownerId !== context.ownerId || row.senderId !== context.ownerId || row.chatId !== context.chatId
@@ -126,20 +127,14 @@ export class ScopedGitHubAdapter implements GitHubObservationAdapter {
     let envelope: unknown;
     try { envelope = typeof row.envelope === 'string' ? JSON.parse(row.envelope) : undefined; } catch { /* Fail closed below. */ }
     if (!envelope || typeof envelope !== 'object') throw new GitHubAccessError('github_access_denied');
-    if (this.config.mode === 'simple') {
+    if (this.feishu) {
       const m = {senderId:context.ownerId,chatId:context.chatId,envelope} as Incoming;
-      if (!this.feishu || row.chatKey!==`${this.feishu.appId}:${context.chatId}`
-        || !admitted(this.feishu,m.senderId,m.chatId,m.envelope?.tenantKey)
-        || !this.feishu.allowedUserIds.includes(this.config.ownerUserId!)
-        || !(m.envelope?.chatType==='group' && !!this.config.grants?.some(g=>g.repository===selected&&audienceAllows(g,m)) || m.envelope?.chatType==='p2p' && m.senderId===this.config.ownerUserId))
+      if (row.chatKey!==`${this.feishu.appId}:${context.chatId}`
+        || !['p2p','group'].includes(String(m.envelope?.chatType))
+        || !admitted(this.feishu,m.senderId,m.chatId,m.envelope?.tenantKey))
         throw new GitHubAccessError('github_access_denied');
-    } else if (this.config.grants) {
-      const m = {senderId:context.ownerId,chatId:context.chatId,envelope} as Incoming;
-      const grant = this.config.grants.find(g=>g.repository===selected);
-      if (!this.feishu || row.chatKey!==`${this.feishu.appId}:${context.chatId}` || !admitted(this.feishu,m.senderId,m.chatId,m.envelope?.tenantKey)
-        || !grant || !audienceAllows(grant,m)) throw new GitHubAccessError('github_access_denied');
-    } else if ((envelope as {chatType?:unknown}).chatType!=='p2p') throw new GitHubAccessError('github_access_denied');
-    if (this.config.source!=='gh' && this.config.source!=='anonymous' && !this.config.token) throw new GitHubAccessError('github_access_credential_missing');
+    } else if (this.config.grants || this.config.mode || (envelope as {chatType?:unknown}).chatType!=='p2p') throw new GitHubAccessError('github_access_denied');
+    if (this.config.source!=='gh' && !this.config.token) throw new GitHubAccessError('github_access_credential_missing');
     return createHash('sha256').update(JSON.stringify({ version: 1, token: this.config.token,
       ...(this.config.localGh ? {localGh:this.config.localGh} : {}),
       repositories: this.config.repositories, allowedUserIds: this.config.allowedUserIds, repository: selected,

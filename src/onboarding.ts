@@ -30,7 +30,7 @@ export function initialConfig(_file: string, storage = userHome()): any {
   return { version: 1, agent: 'codex', dataDir: join(storage, 'data'), concurrency: 8,
     feishu: { appId: '', appSecret: '', appSecretEnv: 'FEISHU_APP_SECRET', allowedUserIds: [], allowedChatIds: [], requireMention: true, cards:true, domain: 'feishu' },
     codex: { bin: 'codex', home: join(storage, 'data', 'codex-home'), sandbox: 'workspace-write', timeoutMs: 600_000,
-      directories: [], networkAccess: false, denyPaths: [], allowLocalCommits: true } };
+      directories: [], networkAccess: true, denyPaths: [], allowLocalCommits: true } };
 }
 export function waitForPairing(register: (fn: (event: FeishuEvent) => void) => () => void, ui: Prompter, allowed?: string[]): Promise<Candidate> {
   const challenge = new PairingChallenge();

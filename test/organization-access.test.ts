@@ -37,14 +37,14 @@ test('organization admits unpaired members, rejects outsiders/missing tenant/bot
   assert.equal(normalizeEvent(event(),{...f,access:undefined},'bot'),undefined);
   validateFeishu(parseConfig({feishu:{...f,allowedUserIds:[]}},'/tmp/namo-test/config.json'));
 });
-test('private member grants do not permit group disclosure and resource grants do not bypass tenant admission',t=>{
+test('GitHub is shared by admitted members while tenant and task identity remain enforced',t=>{
   const{store,dir}=fixture(t);store.enqueue(member());const task=new Tasks(store).create(store.get(member().key)!,{cwd:dir,policyHash:'test'});
   const context={taskId:task.id,ownerId:'alice',chatId:'group'};
   assert.equal(audienceAllows({...grant,chatIds:[]},member()),false);
   const adapter=new ScopedGitHubAdapter(store,github,undefined,undefined,f);
   assert.match(adapter.authorize(target,context)!,/^[a-f0-9]{64}$/);
-  for(const denied of [{...github,grants:[{...grant,chatIds:[]}]},{...github,grants:[]}]) assert.throws(()=>new ScopedGitHubAdapter(store,denied,undefined,undefined,f).authorize(target,context),/access_denied/);
-  assert.throws(()=>adapter.authorize({...target,repo:'another'},context),/access_denied/);
+  for(const shared of [{...github,grants:[{...grant,chatIds:[]}]},{...github,grants:[]}]) assert.ok(new ScopedGitHubAdapter(store,shared,undefined,undefined,f).authorize(target,context));
+  assert.ok(adapter.authorize({...target,repo:'another'},context));
   assert.throws(()=>adapter.authorize(target,{...context,ownerId:'bob'}),/access_denied/);
   assert.throws(()=>new ScopedGitHubAdapter(store,github,undefined,undefined,{...f,access:{mode:'organization',tenantKey:'other'}}).authorize(target,context),/access_denied/);
   assert.throws(()=>parseGitHubAccessConfig({...github,allowedUserIds:['alice']}));
@@ -71,12 +71,13 @@ test('organization model allowlist rejects arbitrary selections and group tasks 
  const group=member();engine.accept(group);const task=new Tasks(store).get(store.get(group.key)!.taskId!)!;
  assert.equal(new Tasks(store).model(task.id),'service-model');
 });
-test('revoked repository grants block cached review delivery',t=>{
+test('revoked bot admission blocks cached review delivery',t=>{
   const{dir,store}=fixture(t);store.enqueue(member());const task=new Tasks(store).create(store.get(member().key)!,{cwd:dir,policyHash:'test'});
   const context={taskId:task.id,ownerId:'alice',chatId:'group'},scope=new ScopedGitHubAdapter(store,github,undefined,undefined,f).authorize(target,context);
   store.db.prepare('INSERT INTO settings VALUES(?,?)').run(`github-review:${task.workstreamId}`,JSON.stringify([{target,context,scope}]));
   const config=parseConfig({feishu:f,github},join(dir,'config.json'));assert.doesNotThrow(()=>assertReviewDelivery(store,config,task));
-  assert.throws(()=>assertReviewDelivery(store,{...config,github:{...github,grants:[]}},task),/denied|changed/);
+  assert.doesNotThrow(()=>assertReviewDelivery(store,{...config,github:{...github,grants:[]}},task));
+  assert.throws(()=>assertReviewDelivery(store,{...config,feishu:{...config.feishu,allowedChatIds:['another']}},task),/denied|changed/);
 });
 test('review coverage reports reads as evidence, not as completed review',t=>{
   const {store}=fixture(t);

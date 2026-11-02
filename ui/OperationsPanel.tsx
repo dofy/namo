@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Badge, Button, Code, Flex, Heading, Text, TextField } from '@radix-ui/themes';
 import type { ApprovalList, ApprovalView, ManagementState, MigrationInspection, ServiceLog, TaskListItem } from '../src/ui-contract';
 import { api, message } from './api';
-import { Choice, ConfirmButton, Field, Notice, StatusBadge } from './components';
+import { Choice, Field, Notice, StatusBadge } from './components';
 import { t as tr, getLocale, type MessageKey } from './i18n';
 
 const approvalStates: Record<ApprovalView['state'], MessageKey> = {
@@ -72,7 +72,7 @@ function ApprovalPanel({disabled}: {disabled: boolean}) {
     {list&&!list.configured&&<Notice>{tr('operations.approvalsUnavailable')}</Notice>}
     {list?.configured&&<form onSubmit={async event=>{
       event.preventDefault();setBusy(true);setError('');
-      try {await api.approval({action:'request',directory:directory.trim()||undefined,taskId:task.trim().toUpperCase(),remote:remote||list.remotes[0],ref:branch.startsWith('refs/heads/')?branch:`refs/heads/${branch}`,configRevision:list.configRevision,confirmed:true});await load();}
+      try {await api.approval({action:'push',directory:directory.trim()||undefined,taskId:task.trim().toUpperCase(),remote:remote||list.remotes[0],ref:branch.startsWith('refs/heads/')?branch:`refs/heads/${branch}`,configRevision:list.configRevision,confirmed:true});await load();}
       catch(error){setError(message(error));}finally{setBusy(false);}
     }}><fieldset disabled={busy||disabled}>
       <div className="form-grid">
@@ -88,7 +88,7 @@ function ApprovalPanel({disabled}: {disabled: boolean}) {
       <Text as="p" size="2">{record.commitSummary}</Text>
       <dl className="operations-info">
         <div><dt>{tr('operations.approvalId')}</dt><dd>{record.id}</dd></div>
-        <div><dt>{tr('directories.repository')}</dt><dd>{record.directory??record.directory??'—'}</dd></div>
+        <div><dt>{tr('directories.repository')}</dt><dd>{record.directory??'—'}</dd></div>
         <div><dt>{tr('operations.completedTask')}</dt><dd>{record.taskId}</dd></div>
         <div><dt>{tr('operations.expires')}</dt><dd>{new Date(record.expiresAt).toLocaleString(getLocale())}</dd></div>
         <div className="operations-wide"><dt>{tr('operations.commit')}</dt><dd><Code variant="ghost">{record.headSha}</Code></dd></div>
@@ -96,10 +96,10 @@ function ApprovalPanel({disabled}: {disabled: boolean}) {
       </dl>
       {record.reason&&<Text as="p" size="1" color="gray">{record.reason}</Text>}
       <Flex gap="3" wrap="wrap">
-        {(['pending','approved','unknown'] as string[]).includes(record.state)&&<ConfirmButton disabled={busy||disabled} title={tr(record.state==='pending'?'operations.approve':record.state==='approved'?'operations.execute':'operations.reconcile')} description={tr('operations.exactTarget',record.remote,record.ref,record.headSha)} action={tr(record.state==='pending'?'operations.approve':record.state==='approved'?'operations.execute':'operations.reconcile')} onConfirm={()=>act(record,record.state==='pending'?'approve':record.state==='approved'?'execute':'reconcile')}>
+        {(['pending','approved','unknown'] as string[]).includes(record.state)&&<Button disabled={busy||disabled} onClick={()=>void act(record,record.state==='unknown'?'reconcile':'execute')}>
           {tr(record.state==='pending'?'operations.approve':record.state==='approved'?'operations.execute':'operations.reconcile')}
-        </ConfirmButton>}
-        {record.state==='pending'&&<ConfirmButton disabled={busy||disabled} title={tr('operations.reject')} description={tr('operations.exactTarget',record.remote,record.ref,record.headSha)} action={tr('operations.reject')} onConfirm={()=>act(record,'reject')}>{tr('operations.reject')}</ConfirmButton>}
+        </Button>}
+        {record.state==='pending'&&<Button disabled={busy||disabled} onClick={()=>void act(record,'reject')}>{tr('operations.reject')}</Button>}
       </Flex>
     </article>)}
     {list?.configured&&!list.items.length&&<Text as="p" size="2" color="gray">{tr('operations.noApprovals')}</Text>}

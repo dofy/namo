@@ -12,7 +12,7 @@ function canonical(value:unknown):unknown {
  if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,canonical(v)]));
  return value;
 }
-const unknownKey=(connection:string,url:string,tool:string,args:Record<string,unknown>)=>'mcp-unknown-operation:'+createHash('sha256').update(JSON.stringify(canonical({connection,url,tool,args}))).digest('hex');
+export const mcpUnknownOperationKey=(connection:string,url:string,tool:string,args:Record<string,unknown>)=>'mcp-unknown-operation:'+createHash('sha256').update(JSON.stringify(canonical({connection,url,tool,args}))).digest('hex');
 function get(store:Store,id:string):Approval|undefined {const row=store.db.prepare('SELECT value FROM settings WHERE key=?').get(key(id));return row?JSON.parse(String(row.value)) as Approval:undefined;}
 function save(store:Store,a:Approval):void {store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key(a.id),JSON.stringify(a));}
 /** Decisions are owner- and chat-bound and processed in the inbox acceptance transaction. */
@@ -24,7 +24,7 @@ export function mcpApprovalCommand(store:Store,message:Incoming):boolean {
  const a=get(store,match[2]!.toUpperCase());
  if(!a||(a.approverId??a.ownerId)!==message.senderId||(a.approvalChatKey??a.chatKey)!==message.chatKey||(a.approvalScopeKey??a.scopeKey)!==scopeOf(message)||a.approverId&&message.envelope?.chatType!=='p2p'){store.finish(message.key,'未找到属于当前用户和会话的 MCP 审批。');return true;}
  const currentTask=store.db.prepare('SELECT state FROM tasks WHERE id=?').get(a.taskId);
- if(currentTask?.state!=='running'&&a.state==='executing'){a.state='unknown';save(store,a);if(a.url)store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(unknownKey(a.connection,a.url,a.tool,a.arguments),a.id);}
+ if(currentTask?.state!=='running'&&a.state==='executing'){a.state='unknown';save(store,a);if(a.url)store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(mcpUnknownOperationKey(a.connection,a.url,a.tool,a.arguments),a.id);}
  else if((Date.now()>=a.expiresAt||currentTask?.state!=='running')&&['pending','approved'].includes(a.state)){a.state='cancelled';save(store,a);}
  const action=match[1]!.toLowerCase();
  if(action!=='status'){
@@ -40,10 +40,10 @@ export async function awaitMcpApproval(store:Store,task:Task,connection:string,u
  if(Buffer.byteLength(json)>6000||/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(json))throw new Error('mcp_approval_arguments_invalid');
  const display=json.replace(/[\u202a-\u202e\u2066-\u2069]/g,c=>`\\u${c.charCodeAt(0).toString(16).padStart(4,'0')}`).replace(/```/g,'\\u0060\\u0060\\u0060');
  const requester=JSON.stringify(task.ownerId).replace(/[\u202a-\u202e\u2066-\u2069`]/g,c=>`\\u${c.charCodeAt(0).toString(16).padStart(4,'0')}`);
- const operationKey=unknownKey(connection,url,tool,args);
+ const operationKey=mcpUnknownOperationKey(connection,url,tool,args);
  const stale=store.db.prepare("SELECT value FROM settings WHERE key>=? AND key<? AND json_valid(value) AND json_extract(value,'$.state')='executing'").all('mcp-approval:','mcp-approval;');
  for(const row of stale){const prior=JSON.parse(String(row.value)) as Approval;
-   if(prior.url && unknownKey(prior.connection,prior.url,prior.tool,prior.arguments)===operationKey && store.db.prepare('SELECT state FROM tasks WHERE id=?').get(prior.taskId)?.state!=='running'){
+   if(prior.url && mcpUnknownOperationKey(prior.connection,prior.url,prior.tool,prior.arguments)===operationKey && store.db.prepare('SELECT state FROM tasks WHERE id=?').get(prior.taskId)?.state!=='running'){
      store.transaction(()=>{prior.state='unknown';const changed=store.db.prepare('UPDATE settings SET value=? WHERE key=? AND value=?').run(JSON.stringify(prior),key(prior.id),String(row.value));
        if(changed.changes)store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(operationKey,prior.id);});
    }}

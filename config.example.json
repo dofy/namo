@@ -19,7 +19,7 @@
     "model": "",
     "sandbox": "workspace-write",
     "timeoutMs": 600000,
-    "networkAccess": false,
+    "networkAccess": true,
     "denyPaths": [],
     "allowLocalCommits": true,
     "directories": []

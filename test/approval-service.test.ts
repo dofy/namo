@@ -44,19 +44,18 @@ function fixture(t: { after(fn: () => void): void }) {
   return { root, repo, bare, store, task, config, service, send, dispatch, setCurrentRevision(value: string) { currentRevision = value; } };
 }
 
-test('verified private control commands durably request, approve, execute, and report without a model run', async t => {
-  const f = fixture(t); const request = JSON.parse(await f.send('request', `/push-request ${f.task.id} origin refs/heads/main --directory ${f.repo}`));
-  assert.match(request.id, /^AP-[A-F0-9]{12}$/); assert.equal(request.state, 'pending'); assert.equal(request.limitedProtection, true); assert.equal(request.scope.taskId, f.task.id);
-  const result = JSON.parse(await f.send('approve', `/push-approve ${request.id} --confirm`));
-  assert.equal(result.state, 'succeeded'); assert.equal(command(f.bare, ['rev-parse', 'refs/heads/main']), command(f.repo, ['rev-parse', 'HEAD']));
+test('verified private control commands durably push and report without a second confirmation without a model run', async t => {
+  const f = fixture(t); const request = JSON.parse(await f.send('request', `/push ${f.task.id} origin refs/heads/main --directory ${f.repo}`));
+  assert.match(request.id, /^AP-[A-F0-9]{12}$/); assert.equal(request.state, 'succeeded'); assert.equal(request.limitedProtection, true); assert.equal(request.taskId, f.task.id); assert.equal(command(f.bare, ['rev-parse', 'refs/heads/main']), command(f.repo, ['rev-parse', 'HEAD']));
   assert.equal((f.store.db.prepare('SELECT COUNT(*) AS n FROM task_runs').get() as { n: number }).n, 0);
   assert.equal(JSON.parse(await f.send('status', `/push-status ${request.id}`)).state, 'succeeded');
   const duplicate = await f.send('approve-again', `/push-approve ${request.id} --confirm`); assert.match(duplicate, /不能重复 push|不是可执行状态/);
 });
 
-test('group, malformed, foreign-task, and unconfigured remote commands fail before execution', async t => {
+test('unauthorized, malformed, foreign-task, and unconfigured remote commands fail before execution', async t => {
   const f = fixture(t);
-  assert.match(await f.send('group', `/push-request ${f.task.id} origin refs/heads/main --directory ${f.repo}`, 'group'), /只接受已配对本人的私聊/);
+  const outsider=incoming('outsider',`/push ${f.task.id} origin refs/heads/main --directory ${f.repo}`,'group');outsider.senderId='outsider';
+  assert.match(await f.dispatch(outsider),/准入范围/);
   assert.match(await f.send('bad', `/push-approve AP-123456789ABC`), /用法/);
   const foreign = incoming('foreign-instruction', 'other'); foreign.senderId = 'ou_other'; foreign.chatKey = 'chat-other'; foreign.chatId = 'chat-other'; foreign.envelope!.scopeKey = 'chat-other'; f.store.enqueue(foreign);
   const foreignTask = new Tasks(f.store).create(f.store.get(foreign.key)!, { cwd: realpathSync(f.repo), policyHash: policyHash(f.config.codex) });
@@ -77,7 +76,7 @@ test('control jobs remain queued until the enclosing acceptance transaction comm
   await Promise.resolve();
   await f.service.idle();
   const output = f.store.db.prepare("SELECT content FROM outbox WHERE inboxKey=? AND kind='result'").get(message.key) as { content: string };
-  assert.equal(JSON.parse(output.content).state, 'pending');
+  assert.equal(JSON.parse(output.content).state, 'succeeded');
 });
 
 test('current project path and permission policy are revalidated after service restart', async t => {
@@ -105,7 +104,7 @@ test('hot configuration is rejected until reload and creates no request', async 
 });
 
 test('another paired user cannot trigger an already approved record', async t => {
-  const f = fixture(t), request = JSON.parse(await f.send('owner-request', `/push-request ${f.task.id} origin refs/heads/main --directory ${f.repo}`));
+  const f=fixture(t),request=await f.service.approvals.request({taskId:f.task.id,ownerId:f.task.ownerId,chatKey:f.task.chatKey,cwd:realpathSync(f.repo),policyHash:f.task.policyHash},{remote:'origin',ref:'refs/heads/main',configRevision:revision});
   f.service.approvals.approve(request.id, { ownerId: 'ou_owner', chatKey: 'chat-owner', authority: 'local-management' });
   f.config.feishu.allowedUserIds.push('ou_other');
   const other = incoming('other-approve', `/push-approve ${request.id} --confirm`); other.senderId = 'ou_other'; other.chatKey = 'chat-other'; other.chatId = 'chat-other'; other.envelope!.scopeKey = 'chat-other';
@@ -114,16 +113,39 @@ test('another paired user cannot trigger an already approved record', async t =>
   assert.throws(() => command(f.bare, ['rev-parse', 'refs/heads/main']));
 });
 
-test('approval receipt displays key fields and exact confirmation without altering stored JSON', async t => {
+test('direct push receipt displays the result without requesting another confirmation', async t => {
   const {formatControlDisplay}=await import('../src/control-display.js');
   const f=fixture(t),raw=await f.send('readable',`/push-request ${f.task.id} origin refs/heads/main --directory ${f.repo}`);
   const record=JSON.parse(raw),display=formatControlDisplay('/push-request',raw);
-  assert.match(display,/受控推送 · 等待确认/);
+  assert.match(display,/受控推送 · 已完成/);
   assert.ok(display.includes(record.id));assert.ok(display.includes(record.headSha));
-  assert.ok(display.includes(`/push-approve ${record.id} --confirm`));
-  assert.ok(display.includes(`/push-reject ${record.id}`));
+  assert.ok(!display.includes(`/push-approve ${record.id} --confirm`));
+  assert.ok(display.includes(`/push-status ${record.id}`));
   assert.match(display,/仅约束受控推送入口/);
   assert.equal(formatControlDisplay('ordinary task',raw),raw);
   assert.equal(formatControlDisplay('/push-request','not json'),'not json');
-  assert.equal(JSON.parse(raw).state,'pending');
+  assert.equal(JSON.parse(raw).state,'succeeded');
+});
+
+
+test('recovery of a push command uses its durable receipt without dispatching again',async t=>{
+ const f=fixture(t);const record=JSON.parse(await f.send('restart',`/push ${f.task.id} origin refs/heads/main --directory ${f.repo}`));
+ f.store.db.prepare("UPDATE approval_jobs SET state='running' WHERE inboxKey='restart'").run();
+ let calls=0;const service=new ApprovalService(f.store,f.config,revision,()=>revision,{async run(){calls++;throw Error('replayed Git operation');}});
+ service.start();await service.idle();
+ assert.equal(calls,0);assert.equal(service.approvals.get(record.id)?.state,'succeeded');
+ assert.equal(f.store.db.prepare('SELECT count(*) n FROM git_approvals').get()?.n,1);
+});
+
+test('admitted group commands execute directly without a private-chat approval gate',async t=>{
+ const f=fixture(t);const result=JSON.parse(await f.send('group-push',`/push ${f.task.id} origin refs/heads/main --directory ${f.repo}`,'group'));
+ assert.equal(result.state,'succeeded');assert.equal(command(f.bare,['rev-parse','refs/heads/main']),command(f.repo,['rev-parse','HEAD']));
+});
+
+test('pre-upgrade queued preview jobs never become automatic pushes',async t=>{
+ const f=fixture(t),message=incoming('legacy-preview',`/push-request ${f.task.id} origin refs/heads/main --directory ${f.repo}`);
+ f.store.transaction(()=>{f.store.enqueue(message);f.service.handleControl(message);f.store.db.prepare('DELETE FROM settings WHERE key=?').run(`push-direct:${message.key}`);});
+ await f.service.idle();
+ const output=f.store.db.prepare("SELECT content FROM outbox WHERE inboxKey=? AND kind='result'").get(message.key)!;
+ assert.equal(JSON.parse(String(output.content)).state,'pending');assert.throws(()=>command(f.bare,['rev-parse','refs/heads/main']));
 });

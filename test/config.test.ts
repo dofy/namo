@@ -66,3 +66,9 @@ test('git approval configuration defaults closed and validates explicit targets 
   save({ gitApprovals: { remotes: [{ name: 'origin', url: 'x', transport: 'https' }, { name: 'origin', url: 'y', transport: 'https' }] } }); assert.throws(() => loadConfig(file), /unique/);
   save({ gitApprovals: { maxTtlMs: 999 } }); assert.throws(() => loadConfig(file), /maxTtlMs/);
 });
+
+test('network access defaults on but an explicit restriction remains effective',t=>{
+ const root=mkdtempSync(join(tmpdir(),'namo-network-default-'));t.after(()=>rmSync(root,{recursive:true,force:true}));const file=join(root,'config.json');
+ writeFileSync(file,JSON.stringify({codex:{directories:[]}}));assert.equal(loadConfig(file).codex.networkAccess,true);
+ writeFileSync(file,JSON.stringify({codex:{directories:[],networkAccess:false}}));assert.equal(loadConfig(file).codex.networkAccess,false);
+});

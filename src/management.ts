@@ -354,8 +354,8 @@ export class Management {
     const {raw,revision:current}=this.source();
     if (revision!==current) throw new ManagementError(tr("management.configurationChangedAnotherPageProgramRefreshTry"));
     const owners=patch.github.allowedUserIds;
-    if (patch.github.mode==='simple' ? !raw.feishu?.allowedUserIds?.includes(patch.github.ownerUserId)
-      : patch.github.grants===undefined && (!Array.isArray(owners)||owners.length!==1||!raw.feishu?.allowedUserIds?.includes(owners[0])))
+    if (patch.github.mode!=='shared' && (patch.github.mode==='simple' ? !raw.feishu?.allowedUserIds?.includes(patch.github.ownerUserId)
+      : patch.github.grants===undefined && (!Array.isArray(owners)||owners.length!==1||!raw.feishu?.allowedUserIds?.includes(owners[0]))))
       throw new ManagementError(tr("management.localGithubLoginMustLinkedExactlyOne"),400);
     let local:LocalGhConfig;
     try {local=await this.deps.localGh();}
@@ -390,10 +390,11 @@ export class Management {
         const retainedGrants=patch.github.grants===undefined && patch.github.mode==='simple' && raw.github?.mode==='simple' ? raw.github.grants : patch.github.grants;
         next.github={...next.github,...patch.github};
         if(retainedGrants===undefined)delete next.github.grants;else next.github.grants=retainedGrants;
+        if(patch.github.mode==='shared'){delete next.github.ownerUserId;delete next.github.grants;next.github.repositories=[];next.github.allowedUserIds=[];}
         if(patch.github.mode===undefined){delete next.github.mode;delete next.github.ownerUserId;}
         if (patch.github.source==='gh') {
           if (!localGh || patch.newGithubToken || patch.clearGithubToken || patch.github.repositories?.length) throw new ManagementError(tr("management.invalidGithubConfiguration"),400);
-          next.github={source:'gh',localGh,repositories:[],allowedUserIds:patch.github.allowedUserIds,...(patch.github.mode==='simple'?{mode:'simple',ownerUserId:patch.github.ownerUserId}:{}),...(retainedGrants===undefined?{}:{grants:retainedGrants})};
+          next.github={source:'gh',localGh,repositories:[],allowedUserIds:patch.github.allowedUserIds,...(patch.github.mode==='shared'?{mode:'shared'}:patch.github.mode==='simple'?{mode:'simple',ownerUserId:patch.github.ownerUserId}:{}),...(retainedGrants===undefined?{}:{grants:retainedGrants})};
         } else if (patch.github.source==='anonymous') {
           if (patch.newGithubToken) throw new ManagementError(tr("management.invalidGithubConfiguration"),400);
           next.github={source:'anonymous',repositories:[],allowedUserIds:[],...(patch.github.grants===undefined?{}:{grants:patch.github.grants})};
@@ -500,11 +501,11 @@ export class Management {
       configRevision: revision, remotes: config.gitApprovals?.remotes.map(remote => remote.name) ?? [], items: this.readCurrent(listApprovals) ?? [] });
   }
   async approval(input: ApprovalAction) {
-    if (!input || !['request','approve','reject','execute','reconcile'].includes(input.action)) throw new ManagementError(tr('common.actionNotFound'), 400);
+    if (!input || !['request','push','approve','reject','execute','reconcile'].includes(input.action)) throw new ManagementError(tr('common.actionNotFound'), 400);
     const { revision } = this.source(), config = loadConfig(this.file);
     if (input.confirmed !== true) throw new ManagementError(tr('operations.confirmRequired'), 400);
     if (this.source().revision !== revision) throw new ManagementError(tr('management.configurationChangedReviewAgainApplying'));
-    if (!/^[a-f0-9]{64}$/.test(input.configRevision??'') || (input.action === 'request'
+    if (!/^[a-f0-9]{64}$/.test(input.configRevision??'') || ((input.action === 'request' || input.action === 'push')
       ? typeof input.taskId !== 'string' || !/^N-[A-F0-9]{12}$/.test(input.taskId) || typeof input.remote !== 'string' || typeof input.ref !== 'string' || input.directory!==undefined&&(typeof input.directory!=='string'||input.directory.length>4096)
       : typeof input.id !== 'string' || !/^AP-[A-F0-9]{12}$/.test(input.id) || !Number.isSafeInteger(input.revision))) throw new ManagementError(tr('operations.approvalInputInvalid'), 400);
     const schema = this.read(s => Number(s.db.prepare('PRAGMA user_version').get()?.user_version));

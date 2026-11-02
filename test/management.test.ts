@@ -299,7 +299,7 @@ test('configured GitHub credentials are redacted from historical task errors, di
 const git = existsSync('/usr/bin/git') ? '/usr/bin/git' : realpathSync(execFileSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).trim());
 function command(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env): string { return execFileSync(git, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env }).trim(); }
 
-test('workbench approvals retain exact targets, confirmation, stale-state rejection and one-time execution', async t => {
+test('workbench push executes on submission and retains target, origin, stale-state and replay checks', async t => {
   const root = mkdtempSync(join(tmpdir(), 'namo-approval-ui-')); t.after(() => rmSync(root, { recursive: true, force: true }));
   const testEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', NAMO_LANG: 'en' };
   // The HTTP server runs in-process; isolate real Git from personal filters/helpers.
@@ -321,7 +321,7 @@ test('workbench approvals retain exact targets, confirmation, stale-state reject
   const get=async()=>await (await fetch(ui.url+'/api/approvals',{headers:{Cookie:cookie}})).json() as any;
   const post=(input:object,origin=ui.url)=>fetch(ui.url+'/api/approvals',{method:'POST',headers:{...headers,Origin:origin,Cookie:cookie},body:JSON.stringify(input)});
   const view=await get();assert.equal(view.configured,true);assert.deepEqual(view.remotes,['origin']);assert.deepEqual(view.items,[]);
-  const request={action:'request',directory:realpathSync(repo),taskId:task.id,remote:'origin',ref:'refs/heads/main',configRevision:view.configRevision,confirmed:true};
+  const request={action:'push',directory:realpathSync(repo),taskId:task.id,remote:'origin',ref:'refs/heads/main',configRevision:view.configRevision,confirmed:true};
   assert.equal((await post({...request,directory:undefined})).status,409,'a repository must be chosen independently of the task scratch directory');
   assert.equal((await post({...request,directory:realpathSync(root)})).status,409,'a parent outside the whitelist cannot become a push target');
   const response=await post(request);assert.equal(response.status,200,await response.clone().text());const preview=await response.json() as any;
@@ -332,16 +332,14 @@ test('workbench approvals retain exact targets, confirmation, stale-state reject
   assert.equal((await post(action('approve',preview,'true'))).status,400);
   assert.equal((await post({...action('approve',preview),revision:999})).status,409);
   assert.equal((await post(action('approve',preview),'https://attacker.invalid')).status,403);
-  const approvedResponse=await post(action('approve',preview));assert.equal(approvedResponse.status,200);const approved=await approvedResponse.json() as any;
-  assert.equal(approved.state,'approved');
-  assert.equal((await post(action('execute',approved,false))).status,400);
-  const executed=await post(action('execute',approved));assert.equal(executed.status,200,await executed.clone().text());assert.equal((await executed.json() as any).state,'succeeded');
+  const legacyPreview=await post({...request,action:'request'});assert.equal(legacyPreview.status,200);assert.equal((await legacyPreview.json()).state,'pending');
+  assert.equal(preview.state,'succeeded');
   assert.equal(command(bare,['rev-parse','refs/heads/main'],testEnv),command(repo,['rev-parse','HEAD'],testEnv));
-  assert.equal((await post(action('execute',approved))).status,409);
+  assert.equal((await post(action('execute',preview))).status,409);
   const before=readFileSync(join(raw.dataDir,'bot.sqlite'));
-  assert.equal((await get()).items[0].state,'succeeded');
+  assert.equal((await get()).items.find((item:any)=>item.id===preview.id).state,'succeeded');
   assert.deepEqual(readFileSync(join(raw.dataDir,'bot.sqlite')),before,'queries do not mutate approval records');
-  raw.codex.networkAccess=true;atomicJson(file,raw);
+  raw.codex.networkAccess=false;atomicJson(file,raw);
   const changed=await post({...request,configRevision:manager.config().revision});assert.equal(changed.status,409);
   assert.match(await changed.text(),/permissions changed/i);
   assert.equal((await post(request)).status,409,'configuration revisions remain binding');

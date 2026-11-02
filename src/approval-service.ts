@@ -1,3 +1,4 @@
+import { admitted } from './access.js';
 import { approvalJobs } from './business-storage.js';
 import { selectAgent, selectedPolicyHash } from './agent-registry.js';
 import type { Config } from './config.js';
@@ -27,7 +28,7 @@ export class ApprovalService {
     this.schedule();
   }
   private syntax(text: string): { action: Action; args: string[] } | undefined {
-    let match = /^\/push-request\s+(N-[A-F0-9]+)\s+([A-Za-z0-9][A-Za-z0-9._-]{0,63})\s+(refs\/heads\/\S+)(?:\s+--directory\s+(.+?))?\s*$/i.exec(text);
+    let match = /^\/push(?:-request)?\s+(N-[A-F0-9]+)\s+([A-Za-z0-9][A-Za-z0-9._-]{0,63})\s+(refs\/heads\/\S+)(?:\s+--directory\s+(.+?))?\s*$/i.exec(text);
     if (match) return { action: 'request', args: [match[1]!.toUpperCase(), match[2]!, match[3]!, ...(match[4]?[match[4]]:[])] };
     match = /^\/push-approve\s+(AP-[A-F0-9]{12})\s+--confirm\s*$/i.exec(text);
     if (match) return { action: 'approve', args: [match[1]!.toUpperCase()] };
@@ -37,15 +38,16 @@ export class ApprovalService {
     if (match) return { action: 'status', args: [match[1]!.toUpperCase()] };
   }
   handleControl(message: Incoming): boolean {
-    if (!message.text.trim().toLowerCase().startsWith('/push-')) return false;
+    if (!/^\/push(?:-|\s|$)/i.test(message.text.trim())) return false;
     const parsed = this.syntax(message.text.trim());
-    const acceptedIdentity = message.envelope?.chatType === 'p2p' && this.config.feishu.allowedUserIds.includes(message.senderId);
+    const acceptedIdentity = admitted(this.config.feishu,message.senderId,message.chatId,message.envelope?.tenantKey);
     this.store.transaction(() => {
       if (!this.store.claim(message.key)) return;
-      if (!acceptedIdentity) { this.store.finish(message.key, '受控 push 只接受已配对本人的私聊命令；本条未进入审批。', 'approval_identity_rejected'); return; }
-      if (!parsed) { this.store.finish(message.key, '用法：/push-request N-任务编号 remote refs/heads/分支 --directory 仓库绝对路径；/push-approve AP-编号 --confirm；/push-reject AP-编号；/push-status AP-编号。', 'approval_command_invalid'); return; }
+      if (!acceptedIdentity) { this.store.finish(message.key, '当前成员或聊天不在机器人准入范围内，未执行推送。', 'approval_identity_rejected'); return; }
+      if (!parsed) { this.store.finish(message.key, '用法：/push N-任务编号 remote refs/heads/分支 --directory 仓库绝对路径；/push-status AP-编号。', 'approval_command_invalid'); return; }
       const job: ApprovalJob = { version: 1, inboxKey: message.key, action: parsed.action, args: parsed.args, state: 'queued', createdAt: Date.now(), updatedAt: Date.now() };
       approvalJobs(this.store.db).save(job, 'ignore');
+      if(parsed.action==='request')this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(`push-direct:${message.key}`,'true');
     });
     // Engine.accept owns the outer durable-acceptance transaction. Defer the
     // reader/runner until that transaction has either committed or rolled back.
@@ -93,8 +95,18 @@ export class ApprovalService {
       const task = this.task(job.args[0]!,job.args[3]); const incoming = this.store.get(job.inboxKey)!;
       if (task.ownerId !== incoming.senderId || task.chatKey !== incoming.chatKey) throw new ApprovalError('task_owner_mismatch', '只能为本人在本聊天中的任务申请 push。');
       if (task.state !== 'succeeded') throw new ApprovalError('task_not_complete', '任务尚未成功完成，不能申请 push。');
-      const preview = await this.approvals.request(task, { remote: job.args[1]!, ref: job.args[2]!, configRevision: revision() });
-      return JSON.stringify({ ...preview, scope: { taskId: task.taskId, chat: 'current' } });
+      const receiptKey=`push-command:${job.inboxKey}`;
+      const saved=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(receiptKey);
+      const id=saved?String(saved.value):(await this.approvals.request(task,{remote:job.args[1]!,ref:job.args[2]!,configRevision:revision()})).id;
+      if(!saved)this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(receiptKey,id);
+      const record=this.approvals.get(id);
+      if(!record)throw new ApprovalError('approval_missing','推送记录不存在。');
+      // Jobs accepted by older versions requested a preview, not a push.
+      if(!this.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`push-direct:${job.inboxKey}`))return this.view(id);
+      if(record.state==='pending')this.approvals.approve(id,{ownerId:incoming.senderId,chatKey:incoming.chatKey,authority:'verified-owner-command'});
+      if(this.approvals.get(id)?.state==='approved')await this.approvals.execute(id,task,revision);
+      return this.view(id);
+
     }
     const id = job.args[0]!, record = this.approvals.get(id); if (!record) throw new ApprovalError('approval_missing', '审批不存在。');
     const incoming = this.store.get(job.inboxKey)!;

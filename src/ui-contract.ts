@@ -42,9 +42,9 @@ export interface ConfigView {
   values: ConfigValues;
   file: string;
   feishu: { appId: string; domain: string; secretConfigured: boolean; pairedUsers: number; restrictedChats: number; access?:OrganizationAccess|null; allowedUserIds?:string[]; allowedChatIds?:string[] };
-  github?: { mode?:'simple';ownerUserId?:string;credentialConfigured:boolean; credentialSource:string; localGh?:{login:string}; tokenEnv?:string; repositories:string[]; allowedUserIds:string[]; grants?:Array<Audience & {repository:string}> };
+  github?: { mode?:'simple'|'shared';ownerUserId?:string;credentialConfigured:boolean; credentialSource:string; localGh?:{login:string}; tokenEnv?:string; repositories:string[]; allowedUserIds:string[]; grants?:Array<Audience & {repository:string}> };
 }
-export interface GitHubConfigPatch { github: {mode?:'simple';ownerUserId?:string;source?:'gh'|'token'|'anonymous';repositories:string[];allowedUserIds:string[];grants?:Array<Audience & {repository:string}>};newGithubToken?:string;clearGithubToken?:boolean }
+export interface GitHubConfigPatch { github: {mode?:'simple'|'shared';ownerUserId?:string;source?:'gh'|'token'|'anonymous';repositories:string[];allowedUserIds:string[];grants?:Array<Audience & {repository:string}>};newGithubToken?:string;clearGithubToken?:boolean }
 export interface TaskSummary {
   id: string; workstreamId: string; cwd: string; state: string; inputVersion: number;
   startedAt: number | null; finishedAt: number | null; error: string | null;
@@ -184,6 +184,7 @@ export interface ApprovalView {
 export interface ApprovalList { configured: boolean; configRevision: string; remotes: string[]; items: ApprovalView[] }
 export type ApprovalAction = { configRevision: string; confirmed: boolean } & (
   { action: 'request'; taskId: string; remote: string; ref: string; directory?:string } |
+  { action: 'push'; taskId: string; remote: string; ref: string; directory?:string } |
   { action: 'approve' | 'reject' | 'execute' | 'reconcile'; id: string; revision: number }
 );
 export interface MigrationInspection {

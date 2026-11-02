@@ -8,14 +8,13 @@ import { Choice, ConfirmButton, Field, Notice } from './components';
 import { Icon } from './Icon';
 import { t as tr } from './i18n';
 
-interface Draft { source:'gh'|'token'|'anonymous'; ownerUserId:string; token:string; clearToken:boolean }
+interface Draft { source:'gh'|'token'|'anonymous';  token:string; clearToken:boolean }
 const fromConfig = (config: ConfigView): Draft => ({
   source:config.github?.credentialSource==='gh'?'gh':config.github?.credentialConfigured||config.github?.tokenEnv?'token':'anonymous',
-  ownerUserId:config.github?.ownerUserId ?? (config.github?.allowedUserIds.length===1?config.github.allowedUserIds[0]:(config.feishu.allowedUserIds??[]).length===1?(config.feishu.allowedUserIds??[])[0]:''),
   token:'',clearToken:false,
 });
 
-function GitHubEditor({ config, profiles, refresh, expired, onStateChange, cancelControl }: {
+function GitHubEditor({ config, refresh, expired, onStateChange, cancelControl }: {
   onStateChange:(dirty:boolean,busy:boolean)=>void;cancelControl:ReactNode;
   config: ConfigView; profiles: ProfileState; refresh: () => Promise<unknown>; expired: boolean;
 }) {
@@ -26,8 +25,7 @@ function GitHubEditor({ config, profiles, refresh, expired, onStateChange, cance
   const observedRevision = useRef(config.revision);
   useEffect(()=>{onStateChange(dirty,busy);},[dirty,busy]);
   const conflict = saveConflict || (dirty && revision !== knownRevision), locked = expired || authExpired;
-  const needsMigration = draft.source!=='anonymous' && config.github?.mode!=='simple';
-  const paired = (config.feishu.allowedUserIds??[]).map(userId=>({userId,name:profiles.entries.find(p=>p.userId===userId)?.name}));
+  const needsMigration = draft.source!=='anonymous' && config.github?.mode!=='shared';
 
   function load(next: ConfigView) {
     setDraft(fromConfig(next)); setRevision(next.revision); setKnownRevision(next.revision);
@@ -57,9 +55,8 @@ function GitHubEditor({ config, profiles, refresh, expired, onStateChange, cance
   }
   async function save() {
     if ((!dirty && !needsMigration) || busy || locked || conflict) return;
-    if (draft.source!=='anonymous' && !paired.some(p=>p.userId===draft.ownerUserId)) {setError(tr("common.selectPairedFeishuAccount"));return;}
     const patch: GitHubConfigPatch = { github: { source:draft.source, repositories:[], allowedUserIds:[],
-      ...(draft.source==='anonymous'?{}:{mode:'simple',ownerUserId:draft.ownerUserId}) },
+      ...(draft.source==='anonymous'?{}:{mode:'shared'}) },
       ...(draft.token ? { newGithubToken: draft.token } : {}), ...(draft.clearToken ? { clearGithubToken: true } : {}) };
     setBusy(true); setError(''); setNotice('');
     try {
@@ -86,14 +83,7 @@ function GitHubEditor({ config, profiles, refresh, expired, onStateChange, cance
             options={[{value:'anonymous',label:tr("github.publicRepositories")},{value:'gh',label:tr("github.localGithubLoginRecommended")},{value:'token',label:tr("github.separateTokenAdvanced")}]} />
         </Field>
         {draft.source!=='anonymous' && <>
-          <Field label={tr("github.feishuAccount")} htmlFor="github-owner">
-            <Choice id="github-owner" value={draft.ownerUserId} disabled={busy||locked} onChange={ownerUserId=>edit({ownerUserId})}
-              options={[{value:'',label:tr("github.selectUser")},...paired.map(p=>({value:p.userId,label:p.name||p.userId}))]} />
-          </Field>
-          <Text as="p" size="2">{tr("common.groupsReadAccessRepositoriesAvailableGithubAccount")}</Text>
-          <Text as="p" size="2">{tr("common.privateChatCreateEditMergePublishManage")}</Text>
-          <Text as="p" size="2" color="gray">{tr("common.otherPrivateChatsCannotUseAccountNo")}</Text>
-          {config.github?.mode!=='simple' && <Notice>{tr("github.saveEnableTheseSimplerRulesExistingAccess")}</Notice>}
+          <Text as="p" size="2">{tr("github.groupsReadPrivateChatCanUseAll")}</Text>
         </>}
         {draft.source==='gh' && <>
           <Text as="p" size="1" color="gray">{tr("github.savingConnectsCurrentLocalGhAccountNo")}</Text>
