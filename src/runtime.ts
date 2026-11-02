@@ -120,7 +120,7 @@ export class CodexRuntime implements Runtime {
       const buffered: PendingEvent[] = [];
       let pendingWait: WaitResult | undefined;
       let waitSeen = false;
-      let reviewCalls = 0, githubCalls = 0, mcpCalls = 0, reviewActive = false;
+      let reviewCalls = 0, githubCalls = 0, mcpCalls = 0, activeHostTools = 0;
       let preWaitItems = new Set<string>();
       let consume: (event: PendingEvent) => void = () => {};
       const completion = new Promise<RunResult>((resolve, reject) => {
@@ -214,7 +214,7 @@ export class CodexRuntime implements Runtime {
             return;
           }
           if (!notice.done) return;
-          if (reviewActive) { fail('github_review_protocol_error'); return; }
+          if (activeHostTools) { fail('github_review_protocol_error'); return; }
           if (pendingWait) {
             for (const [id, item] of itemStates) {
               if (isEffectfulItem(item) && itemCompletion.get(id) !== true) {
@@ -239,45 +239,45 @@ export class CodexRuntime implements Runtime {
         };
         const consumeWait = ({ id, params }: WaitCall) => {
           if (params.tool === MCP_TOOL.name && r.onMcp) {
-            if (completed || pendingWait || reviewActive || ++mcpCalls>30 || params.namespace!==null || params.threadId!==threadId || params.turnId!==expectedTurn || typeof params.callId!=='string') {
+            if (completed || pendingWait || ++mcpCalls>30 || params.namespace!==null || params.threadId!==threadId || params.turnId!==expectedTurn || typeof params.callId!=='string') {
               rpc.respondError(id,-32602,'mcp_invalid_call'); return;
             }
-            reviewActive=true;
+            activeHostTools++;
             void r.onMcp(params.arguments,toolSignal).then(value=>{
               if(!completed)rpc.respond(id,{success:true,contentItems:[{type:'inputText',text:JSON.stringify(value)}]});
             }).catch(error=>{
               const code=error instanceof Error&&/^mcp_[a-z_]+$/.test(error.message)?error.message:'mcp_connection_failed';
               if(!completed)rpc.respond(id,{success:false,contentItems:[{type:'inputText',text:JSON.stringify({error:code,note:'Do not bypass the access restriction.'})}]});
-            }).finally(()=>{reviewActive=false;});
+            }).finally(()=>{activeHostTools--;});
             return;
           }
           if (params.tool === GITHUB_API_TOOL.name && r.onGitHub) {
-            if (completed || pendingWait || reviewActive || ++githubCalls>30 || params.namespace!==null || params.threadId!==threadId || params.turnId!==expectedTurn || typeof params.callId!=='string') {
+            if (completed || pendingWait || ++githubCalls>30 || params.namespace!==null || params.threadId!==threadId || params.turnId!==expectedTurn || typeof params.callId!=='string') {
               rpc.respondError(id,-32602,'github_api_invalid_call'); return;
             }
-            reviewActive=true;
+            activeHostTools++;
             void r.onGitHub(params.arguments,toolSignal).then(value=>{
               if(!completed)rpc.respond(id,{success:true,contentItems:[{type:'inputText',text:JSON.stringify(value)}]});
             }).catch(error=>{
               const code=error instanceof Error&&/^github_[a-z_]+$/.test(error.message)?error.message:'github_api_unavailable';
               if(!completed)rpc.respond(id,{success:false,contentItems:[{type:'inputText',text:JSON.stringify({error:code,note:'Do not bypass access or repeat an unknown write.'})}]});
-            }).finally(()=>{reviewActive=false;});
+            }).finally(()=>{activeHostTools--;});
             return;
           }
           if (params.tool === PR_REVIEW_TOOL.name && r.onReview) {
-            if (completed || pendingWait || reviewActive || ++reviewCalls>300 || params.namespace!==null || params.threadId!==threadId || params.turnId!==expectedTurn || typeof params.callId!=='string') {
+            if (completed || pendingWait || ++reviewCalls>300 || params.namespace!==null || params.threadId!==threadId || params.turnId!==expectedTurn || typeof params.callId!=='string') {
               rpc.respondError(id,-32602,'github_review_invalid_call'); return;
             }
-            reviewActive=true;
+            activeHostTools++;
             void r.onReview(params.arguments).then(value=>{
               if (!completed) rpc.respond(id,{success:true,contentItems:[{type:'inputText',text:JSON.stringify(value)}]});
             }).catch(error=>{
               const code = error instanceof Error && /^github_[a-z_]+$/.test(error.message) ? error.message : 'github_review_unavailable';
               if (!completed) rpc.respond(id,{success:false,contentItems:[{type:'inputText',text:JSON.stringify({error:code,note:'Explain this limitation to the user. Do not bypass access with other tools.'})}]});
-            }).finally(()=>{reviewActive=false;});
+            }).finally(()=>{activeHostTools--;});
             return;
           }
-          if (reviewActive) { protocolFailure(id,'wait_effect_active'); return; }
+          if (activeHostTools) { protocolFailure(id,'wait_effect_active'); return; }
           if (completed) { rpc.respondError(id, -32602, 'wait_not_active'); return; }
           if (waitSeen) { protocolFailure(id, 'wait_duplicate'); return; }
           waitSeen = true;

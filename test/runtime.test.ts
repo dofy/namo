@@ -13,9 +13,14 @@ import { awaitMcpApproval, mcpApprovalCommand } from '../src/mcp-write-approval.
 const FAKE = `#!/usr/bin/env node
 import { createInterface } from 'node:readline';
 const write = m => process.stdout.write(JSON.stringify(m)+'\\n');
-let waitAfterLate=false,apiRegistered=false,mcpRegistered=false,threadModel;
+let waitAfterLate=false,apiRegistered=false,mcpRegistered=false,threadModel,parallelMode='',parallelReplies=[];
 createInterface({input:process.stdin}).on('line', line=>{
  const m=JSON.parse(line);
+ if([101,102,103].includes(m.id)&&!m.method){
+  parallelReplies.push(m);
+  if(parallelMode==='parallel-tools-early'||parallelReplies.length===3)return write({method:'turn/completed',params:{threadId:'thread-one',turn:{id:'turn-one',status:'completed',items:[{id:'final',type:'agentMessage',phase:'final_answer',text:parallelReplies.every(r=>r.result?.success===true)?'parallel tools completed':'tool rejected'}]}}});
+  return;
+ }
  if(m.id===99&&!m.method){
   const output=m.result?.success===true?'review received':JSON.stringify(m.result??m.error);
   return write({method:'turn/completed',params:{threadId:'thread-one',turn:{id:'turn-one',status:'completed',items:[{id:'final',type:'agentMessage',phase:'final_answer',text:output}]}}});
@@ -48,6 +53,11 @@ createInterface({input:process.stdin}).on('line', line=>{
   if(prompt==='check-configured' && (threadModel!=='configured-model'||m.params.model!=='configured-model'))return write({id:m.id,error:{code:-32602,message:'configured default mismatch'}});
   if(prompt==='image-input' && (m.params.input.length!==2 || m.params.input[1].type!=='localImage' || !m.params.input[1].path.endsWith('/accepted.png')))
    return write({id:m.id,error:{code:-32602,message:'image input missing'}});
+  if(prompt==='parallel-tools'||prompt==='parallel-tools-early'){
+   parallelMode=prompt;write({id:m.id,result:{turn:{id:'turn-one'}}});
+   for(const [id,tool] of [[101,'mcp_read'],[102,'github_api'],[103,'read_pull_request']])write({id,method:'item/tool/call',params:{namespace:null,tool,threadId:'thread-one',turnId:'turn-one',callId:'parallel-'+id,arguments:{}}});
+   return;
+  }
   if(prompt==='mcp'||prompt==='mcp-invalid'){
    if(!mcpRegistered)return write({id:m.id,error:{code:-32602,message:'MCP not registered'}});
    write({id:99,method:'item/tool/call',params:{namespace:null,tool:'mcp_read',threadId:'thread-one',turnId:prompt==='mcp-invalid'?'foreign-turn':'turn-one',callId:'mcp-call',arguments:{connection:'linear',operation:'list'}}});
@@ -325,4 +335,17 @@ test('a late approval after a timed out tool call cannot authorize dispatch', as
  mcpApprovalCommand(store,store.get('approve')!);
  assert.match(String(store.db.prepare("SELECT content FROM outbox WHERE inboxKey='approve' AND kind='result'").get()?.content),/不能重复/);
  assert.equal(dispatched,false);
+});
+
+test('MCP, GitHub and review calls may overlap without rejecting authorized tools',async t=>{
+ const {dir,runtime}=fixture(t,5000),calls:string[]=[];
+ const callback=(name:string,delay:number)=>async()=>{calls.push(name);await new Promise(resolve=>setTimeout(resolve,delay));return {ok:true};};
+ const result=await runtime.run({cwd:dir,prompt:'parallel-tools',signal:new AbortController().signal,onThread:()=>{},onTurn:()=>{},onMcp:callback('mcp',30),onGitHub:callback('github',60),onReview:callback('review',90)});
+ assert.equal(result.text,'parallel tools completed');assert.deepEqual(calls,['mcp','github','review']);
+});
+
+test('a turn cannot complete while any overlapping host tool remains active',async t=>{
+ const {dir,runtime}=fixture(t,5000);
+ const callback=(delay:number)=>async()=>{await new Promise(resolve=>setTimeout(resolve,delay));return {ok:true};};
+ await assert.rejects(runtime.run({cwd:dir,prompt:'parallel-tools-early',signal:new AbortController().signal,onThread:()=>{},onTurn:()=>{},onMcp:callback(30),onGitHub:callback(100),onReview:callback(150)}),/github_review_protocol_error/);
 });
