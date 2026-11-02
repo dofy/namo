@@ -7,22 +7,43 @@ Namo 负责身份、权限、任务调度和交付，官方 Codex app-server 负
 ## 主链路
 
 ```mermaid
-flowchart LR
-  A[飞书事件] --> B[身份校验 / 入站落库]
-  B --> C[任务与工作线 / 调度]
-  C --> D[独立 runner / 官方 Codex]
-  D --> E[结果与证据落库]
-  E --> F[出站队列 / 飞书投递]
-  D --> G[持久等待]
-  G -->|同用户回答或固定 HEAD 检查完成| C
-  B --> H[空闲时提取长期记忆]
-  H --> I[按范围检索与版本快照]
-  I --> D
-  U[本机工作台] --> C
-  U --> I
+flowchart TB
+  User[用户] <--> Feishu[飞书]
+  UI[本机工作台] --> Management[配置、任务与记忆管理]
+
+  subgraph Namo["Namo 宿主"]
+    In[身份校验<br/>入站消息持久化]
+    Queue[任务调度<br/>聊天顺序、并发限制、目录互斥]
+    Runner[独立 runner<br/>冻结配置与运行上下文]
+    HostTools[宿主管理的工具<br/>MCP / GitHub]
+    Receipts[外部操作回执<br/>执行中、已完成或结果不明]
+    Wait[持久等待与恢复]
+    Out[结果和证据持久化<br/>出站队列]
+    Memory[长期记忆<br/>提取、范围授权、版本快照]
+    DB[(SQLite)]
+  end
+
+  subgraph Codex["官方 Codex"]
+    Agent[app-server<br/>推理与工具调用]
+    Sandbox[沙箱<br/>授权目录与 Skills]
+  end
+
+  Feishu --> In --> Queue --> Runner --> Agent
+  Agent <--> Sandbox
+  Agent <--> HostTools
+  HostTools --> Receipts
+  Agent --> Wait --> Queue
+  Agent --> Out --> Feishu
+  In -.->|空闲时提取| Memory
+  Memory -.->|授权检索| Runner
+  Management --> Queue
+  Management --> Memory
+  In & Queue & Runner & Receipts & Wait & Out & Memory -.-> DB
 ```
 
 工作线关联连续任务；一次任务可包含多个等待 / 恢复运行。聊天、工作线、任务与 Codex 原生 session 分别保存，不能互相当作身份或权限凭证。
+
+消息先持久化再确认收件；调度器安排独立 runner，由 Codex 在沙箱中推理和使用获准目录、Skills。MCP 和 GitHub 请求经 Namo 宿主管理的工具访问，宿主保管凭据并记录调用回执。需要用户回答或外部条件时，任务进入持久等待，满足条件后再恢复。结果和证据先保存，再排队投递到飞书；模型完成、平台接受和用户实际收件是不同的事实。
 
 ## 模块与约束
 
@@ -71,6 +92,10 @@ flowchart LR
 **反馈。** 默认首卡合并窗口 200 ms、进展更新间隔 5 s、状态确认间隔 30 s；这是调度配置，不是客户端时延承诺。慢表情和卡片更新不挡最终结果；只汇总真实公开事件，不展示原始思维链或编造完成比例。图片预览与流式卡片尚未实现。
 
 **外部操作。** 所有已准入成员在私聊和群聊中共享 GitHub 账号的实际 API 权限；PR 审查和 CI 等待不隐含写操作。Git push 入口重验任务、提交、分支、远端、有效期与配置版本；该入口只提供有限保护，不是所有通用工具的强制审批边界。用户请求范围内、权限允许且设置未禁止的操作直接执行，不再逐次确认；人工等待只用于缺失的信息。
+
+当前 MCP 调用回执尚不能保证跨任务防止重复调用：结果不明的记录按任务隔离；调用返回后若授权检查或响应大小检查失败，回执可能已记录为完成，而同任务相同参数仍可再次调用。外部状态不明时应先核对服务端结果，不应自动重复操作。回执覆盖 MCP `call`，不能仅凭相同参数判断是否为同一次逻辑操作。GitHub API 的不确定写入保护同样按任务限定。
+
+静态 GitHub 令牌的已就绪等待恢复目前不重新查询远端授权；工具 RPC 成功返回但业务结果不明时，公开进度可能将其计为成功。runner 失联检测依赖 PID 是否存在，PID 复用可能使任务持续占位。数据目录为符号链接且白名单包含其真实路径的父目录时，私有目录拒绝规则的实际沙箱行为仍需验证。
 
 **管理与升级。** UI 仅绑定 loopback，使用一次性启动授权、HttpOnly 会话、Host / Origin 校验和 CSP；浏览器仅导入 [ui-contract](../src/ui-contract.ts)。接收器固定在校验过的发布快照。兼容的执行代码可通过 [runtime-host](../src/runtime-host.ts) 在线替换，接收连接持续存在，切换期间消息落库后才确认收件；新任务使用新执行版本，已运行的独立 worker 保留原版本。备份使用 WAL 一致性快照；校验、加载失败保留旧执行版本，发送结果未知的记录不重放。接收器、存储或依赖不兼容时保留在线服务并拒绝热更新。维护操作见[运维指南](operations.md)。
 
