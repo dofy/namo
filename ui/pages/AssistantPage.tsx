@@ -161,25 +161,27 @@ export function AssistantPage({ settings, editable, unavailableReason, save, res
               options={[{ value: 'never', label: c.never }, { value: 'sparingly', label: c.sparingly }, { value: 'freely', label: c.freely }]} />
               <Text size="1" color="gray">{tr('assistant.emojiHelp')}</Text></Field>
           </div>
-          <div className="assistant-choice-group">
-            <Text as="p" size="2" weight="medium" id="assistant-length-label">{c.replyLength}</Text>
-            <RadioCards.Root className="assistant-choices" aria-labelledby="assistant-length-label" value={draft.replyLength} disabled={!canEdit || busy}
-              onValueChange={value => change({ replyLength: value as AssistantPageValues['replyLength'] })}>
-              {lengthOptions.map(option => <RadioCards.Item key={option.value} value={option.value} aria-label={`${option.label}: ${option.description}`}>
-                {option.label}
-              </RadioCards.Item>)}
-            </RadioCards.Root>
-            <Text as="p" size="1" color="gray" className="assistant-choice-description">{lengthOptions.find(option => option.value === draft.replyLength)?.description}</Text>
-          </div>
-          <div className="assistant-choice-group">
-            <Text as="p" size="2" weight="medium" id="assistant-detail-label">{c.detail}</Text>
-            <RadioCards.Root className="assistant-choices" aria-labelledby="assistant-detail-label" value={draft.technicalDetail} disabled={!canEdit || busy}
-              onValueChange={value => change({ technicalDetail: value as AssistantPageValues['technicalDetail'] })}>
-              {detailOptions.map(option => <RadioCards.Item key={option.value} value={option.value} aria-label={`${option.label}: ${option.description}`}>
-                {option.label}
-              </RadioCards.Item>)}
-            </RadioCards.Root>
-            <Text as="p" size="1" color="gray" className="assistant-choice-description">{detailOptions.find(option => option.value === draft.technicalDetail)?.description}</Text>
+          <div className="form-grid assistant-choice-grid">
+            <div className="assistant-choice-group">
+              <Text as="p" size="2" weight="medium" id="assistant-length-label">{c.replyLength}</Text>
+              <RadioCards.Root className="assistant-choices" aria-labelledby="assistant-length-label" value={draft.replyLength} disabled={!canEdit || busy}
+                onValueChange={value => change({ replyLength: value as AssistantPageValues['replyLength'] })}>
+                {lengthOptions.map(option => <RadioCards.Item key={option.value} value={option.value} aria-label={`${option.label}: ${option.description}`}>
+                  {option.label}
+                </RadioCards.Item>)}
+              </RadioCards.Root>
+              <Text as="p" size="1" color="gray" className="assistant-choice-description">{lengthOptions.find(option => option.value === draft.replyLength)?.description}</Text>
+            </div>
+            <div className="assistant-choice-group">
+              <Text as="p" size="2" weight="medium" id="assistant-detail-label">{c.detail}</Text>
+              <RadioCards.Root className="assistant-choices" aria-labelledby="assistant-detail-label" value={draft.technicalDetail} disabled={!canEdit || busy}
+                onValueChange={value => change({ technicalDetail: value as AssistantPageValues['technicalDetail'] })}>
+                {detailOptions.map(option => <RadioCards.Item key={option.value} value={option.value} aria-label={`${option.label}: ${option.description}`}>
+                  {option.label}
+                </RadioCards.Item>)}
+              </RadioCards.Root>
+              <Text as="p" size="1" color="gray" className="assistant-choice-description">{detailOptions.find(option => option.value === draft.technicalDetail)?.description}</Text>
+            </div>
           </div>
           <div className="setting-options">
             <SettingToggle icon="tasks" title={c.conclusion} description={tr('assistant.conclusionHelp')} checked={draft.conclusionFirst}
