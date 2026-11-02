@@ -37,7 +37,7 @@ function fixture(t: { after: (fn: () => void | Promise<void>) => void }, runtime
   const one = join(dir, 'one'), two = join(dir, 'two'); mkdirSync(one); mkdirSync(two);
   const store = new Store(join(dir, 'bot.sqlite')); const tasks = new Tasks(store); const engines: Engine[] = [];
   const config = { dataDir: dir, concurrency, codex: { bin: 'codex', home: join(dir, 'auth'), timeoutMs: 10_000,
-    sandbox: 'workspace-write' as const, projects: { one, two }, defaultProject: 'one' } };
+    sandbox: 'workspace-write' as const, directories: [] } };
   const makeEngine = (nextRuntime: Runtime = runtime) => {
     const engine = new Engine(store, nextRuntime, sender ?? { async send(_chat, _text, uuid) { return `platform-${uuid}`; } }, config);
     engines.push(engine); return engine;
@@ -70,7 +70,7 @@ test('requested wait is persisted before acknowledgement, parks every state, and
     /^(pending|sending|sent)$/);
 
   const manual = message('manual', 'manual crash'); f.store.enqueue(manual);
-  const second = f.tasks.create(f.store.get('manual')!, { cwd: f.one, policyHash: task.policyHash, project: 'one' });
+  const second = f.tasks.create(f.store.get('manual')!, { cwd: f.one, policyHash: task.policyHash });
   const run = f.tasks.start(second); f.tasks.saveRun(run, 'thread-crash', 'turn-crash');
   const id = new Waits(f.store).request(second.id, run,
     { threadId: 'thread-crash', turnId: 'turn-crash', callId: 'call-crash', question: 'still there?' });
@@ -113,7 +113,7 @@ test('different members in a group may run concurrently in isolated directories'
  const dir=realpathSync(mkdtempSync(join(tmpdir(),'namo-group-slots-'))),store=new Store(join(dir,'db'));const starts:string[]=[];
  let release!:()=>void;const gate=new Promise<void>(r=>{release=r;});
  const engine=new Engine(store,{async run(r){starts.push(r.cwd);await gate;r.onThread(`thread-${starts.length}`);r.onTurn('turn');return {text:'done',threadId:'thread',turnId:'turn'};}},
-  {async send(_chat,_text,uuid){return uuid;}},{dataDir:dir,concurrency:2,feishu:{progressUpdates:false,reactions:false}});
+  {async send(_chat,_text,uuid){return uuid;}},{dataDir:dir,concurrency:2,feishu:{allowedUserIds:['alice'],allowedChatIds:[],progressUpdates:false,reactions:false}});
  t.after(async()=>{release();await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
  for(const owner of ['alice','bob']){const m=message(owner,'work',{chat:'group',owner,scope:'topic'});m.envelope!.chatType='group';engine.accept(m);}
  engine.start();await until(()=>starts.length===2);assert.notEqual(starts[0],starts[1]);release();
@@ -123,7 +123,7 @@ test('different members in a group may run concurrently in isolated directories'
 test('daily turn limit leaves excess work queued and resumes it when capacity returns',async t=>{
  const dir=realpathSync(mkdtempSync(join(tmpdir(),'namo-turn-limit-'))),store=new Store(join(dir,'db'));let calls=0;
  const engine=new Engine(store,{async run(r){calls++;r.onThread(`thread-${calls}`);r.onTurn('turn');return {text:'done',threadId:'thread',turnId:'turn'};}},
-  {async send(_chat,_text,uuid){return uuid;}},{dataDir:dir,concurrency:1,codex:{bin:'codex',home:join(dir,'home'),sandbox:'read-only',timeoutMs:10000,dailyTurnLimit:1},feishu:{progressUpdates:false,reactions:false}});
+  {async send(_chat,_text,uuid){return uuid;}},{dataDir:dir,concurrency:1,codex:{bin:'codex',home:join(dir,'home'),sandbox:'read-only',timeoutMs:10000,dailyTurnLimit:1},feishu:{allowedUserIds:['alice'],allowedChatIds:[],progressUpdates:false,reactions:false}});
  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
  engine.accept(message('first'));engine.accept(message('second','next',{chat:'other'}));engine.start();
  await until(()=>!!store.db.prepare("SELECT 1 FROM outbox WHERE kind LIKE 'quota:%'").get());
@@ -162,10 +162,10 @@ test('resume enforces owner, chat and topic, rejects stale quotes, and supports 
   assert.equal(second.state, 'open'); assert.equal(f.tasks.get(task.id)?.inputVersion, 2);
 
   engine.accept(message('amend-waiting', `/amend ${task.id} should-not-steer`));
-  engine.accept(message('switch-waiting', '/project two'));
+  engine.accept(message('directories-waiting', '/directories'));
   engine.accept(message('stale-quote', 'late old answer', { parentId: firstPlatform }));
   await until(() => f.store.get('stale-quote')?.state === 'replied');
-  assert.equal(f.tasks.get(task.id)?.inputVersion, 2); assert.equal(f.store.project('chat'), undefined);
+  assert.equal(f.tasks.get(task.id)?.inputVersion, 2); assert.equal(f.tasks.binding(reply)?.id,task.workstreamId);
   assert.equal(new Waits(f.store).get(first.id)?.state, 'answered'); assert.equal(new Waits(f.store).get(second.id)?.state, 'open');
 
   engine.accept(message('reply-two', `/resume ${second.id} answer-two`));

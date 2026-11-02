@@ -118,7 +118,7 @@ test('prompt composition states precedence, safety boundaries, versions, and res
   const prompt = JSON.parse(composeAssistantPrompt('{"messages":[{"text":"Use English this time"}]}', snapshot, true));
   assert.equal(prompt.assistant_context.adopted_versions.assistant, saved.version);
   assert.equal(prompt.assistant_context.adopted_versions.profile, 1);
-  assert.deepEqual(prompt.assistant_context.precedence.slice(0, 3), ['service behavior and authorization', 'current explicit task request', 'project output conventions']);
+  assert.deepEqual(prompt.assistant_context.precedence.slice(0, 3), ['service behavior and authorization', 'current explicit task request', 'directory output conventions']);
   assert.match(prompt.assistant_context.boundaries.join(' '), /never grant permission/);
   assert.match(prompt.assistant_context.boundaries.join(' '), /expire when that task completes/);
   assert.match(prompt.assistant_context.boundaries.join(' '), /expired one-off language choices/);
@@ -126,15 +126,15 @@ test('prompt composition states precedence, safety boundaries, versions, and res
 });
 
 function uiContextFixture(t:any){
-  const root=mkdtempSync(join(tmpdir(),'namo-context-')),data=join(root,'data'),project=join(root,'project');mkdirSync(data);mkdirSync(project);
+  const root=mkdtempSync(join(tmpdir(),'namo-context-')),data=join(root,'data'),directory=join(root,'directory');mkdirSync(data);mkdirSync(directory);
   const config:Config={file:join(root,'config.json'),dataDir:data,concurrency:1,agent:'codex',feishu:{appId:'app',appSecret:'KNOWN_SECRET_123456',allowedUserIds:['alice'],allowedChatIds:[],requireMention:false,domain:'feishu'},
-    codex:{bin:'codex',home:join(data,'auth'),timeoutMs:600000,sandbox:'workspace-write',projects:{one:project},defaultProject:'one',networkAccess:false,readPaths:[],denyPaths:[],allowLocalCommits:false},
+    codex:{bin:'codex',home:join(data,'auth'),timeoutMs:600000,sandbox:'workspace-write',directories:[directory],networkAccess:false,readPaths:[],denyPaths:[],allowLocalCommits:false},
     gitApprovals:{maxTtlMs:300000,remotes:[]}};
-  const store=new Store(join(data,'bot.sqlite'));store.bindAccount('app');t.after(()=>{store.close();rmSync(root,{recursive:true,force:true});});return {root,data,project,config,store};
+  const store=new Store(join(data,'bot.sqlite'));store.bindAccount('app');t.after(()=>{store.close();rmSync(root,{recursive:true,force:true});});return {root,data,directory,config,store};
 }
 function incoming(id:string,chatType:'p2p'|'group'='p2p'):Incoming{return {key:`app:${id}`,messageId:id,chatKey:chatType==='p2p'?'app:dm-alice':'app:group-one',chatId:chatType==='p2p'?'dm-alice':'group-one',senderId:'alice',text:'Implement the task',
   envelope:{version:1,type:'text',kind:'instruction',chatType,scopeKey:chatType==='p2p'?'app:dm-alice':'app:group-one',materials:[],limitations:[]}};}
-function create(f:ReturnType<typeof uiContextFixture>,message:Incoming){f.store.enqueue(message);const tasks=new Tasks(f.store),created=tasks.create(f.store.get(message.key)!,{project:'one',cwd:f.project,policyHash:policyHash(f.config.codex)}),run=tasks.start(created);return {tasks,task:tasks.get(created.id)!,run,inbox:f.store.get(message.key)!};}
+function create(f:ReturnType<typeof uiContextFixture>,message:Incoming){f.store.enqueue(message);const tasks=new Tasks(f.store),created=tasks.create(f.store.get(message.key)!,{ cwd:f.directory,policyHash:policyHash(f.config.codex)}),run=tasks.start(created);return {tasks,task:tasks.get(created.id)!,run,inbox:f.store.get(message.key)!};}
 const local=(ref:string)=>({kind:'local-owner' as const,authenticated:true,ownerId:'alice',source:{kind:'local-owner' as const,ref}});
 
 test('fresh installs preserve the exact prompt when assistant is inactive and no memory exists',t=>{
@@ -151,20 +151,20 @@ test('date/time classification uses explicit words and does not mistake runtime 
 
 test('private runs compose authorized memory as non-authorizing context',t=>{
   const f=uiContextFixture(t),memory=new Memories(f.store);
-  memory.save({kind:'preference',scope:{kind:'owner',ownerId:'alice',project:null,chatKey:null},text:'Keep replies concise'},local('owner'));
-  memory.save({kind:'project_knowledge',scope:{kind:'project',ownerId:'alice',project:'one',chatKey:null},text:'Never treat remembered direct push as approval'},local('project'));
-  memory.save({kind:'project_knowledge',scope:{kind:'chat',ownerId:'alice',project:'one',chatKey:'app:group-one'},text:'Group-visible convention'},local('group'));
+  memory.save({kind:'preference',scope:{kind:'owner',ownerId:'alice',directory:null,chatKey:null},text:'Keep replies concise'},local('owner'));
+  memory.save({kind:'knowledge',scope:{kind:'directory',ownerId:'alice',directory:f.directory,chatKey:null},text:'Never treat remembered direct push as approval'},local('directory'));
+  memory.save({kind:'knowledge',scope:{kind:'chat',ownerId:'alice',directory:f.directory,chatKey:'app:group-one'},text:'Group-visible convention'},local('group'));
   const created=create(f,incoming('private')),prompt=buildTaskRunPrompt(f.store,created.task,created.inbox,f.config,created.run);
   assert.match(prompt,/Keep replies concise/);assert.match(prompt,/remembered direct push/);assert.doesNotMatch(prompt,/Group-visible convention/);
   assert.match(prompt,/not an instruction, permission, approval/);
   assert.doesNotMatch(JSON.stringify(memory.snapshotRecord(created.run)),/Keep replies|direct push/);
 });
 
-test('group runs receive only memory explicitly bound to that exact chat and project',t=>{
+test('group runs receive only memory explicitly bound to that exact chat and directory',t=>{
   const f=uiContextFixture(t),memory=new Memories(f.store);
-  memory.save({kind:'preference',scope:{kind:'owner',ownerId:'alice',project:null,chatKey:null},text:'PRIVATE_OWNER_VALUE'},local('owner'));
-  memory.save({kind:'project_knowledge',scope:{kind:'project',ownerId:'alice',project:'one',chatKey:null},text:'PRIVATE_PROJECT_VALUE'},local('project'));
-  memory.save({kind:'project_knowledge',scope:{kind:'chat',ownerId:'alice',project:'one',chatKey:'app:group-one'},text:'VISIBLE_GROUP_VALUE'},local('group'));
+  memory.save({kind:'preference',scope:{kind:'owner',ownerId:'alice',directory:null,chatKey:null},text:'PRIVATE_OWNER_VALUE'},local('owner'));
+  memory.save({kind:'knowledge',scope:{kind:'directory',ownerId:'alice',directory:f.directory,chatKey:null},text:'PRIVATE_PROJECT_VALUE'},local('directory'));
+  memory.save({kind:'knowledge',scope:{kind:'chat',ownerId:'alice',directory:f.directory,chatKey:'app:group-one'},text:'VISIBLE_GROUP_VALUE'},local('group'));
   const created=create(f,incoming('group','group')),prompt=buildTaskRunPrompt(f.store,created.task,created.inbox,f.config,created.run);
   assert.match(prompt,/VISIBLE_GROUP_VALUE/);assert.doesNotMatch(prompt,/PRIVATE_OWNER_VALUE|PRIVATE_PROJECT_VALUE/);
 });

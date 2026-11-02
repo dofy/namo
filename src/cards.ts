@@ -20,8 +20,8 @@ export function renderTaskListCard(content:string): object | undefined {
   for(const row of rows) {
     const match=/^(排队中|正在处理|已完成|等待你补充|未完成|已停止|执行中断，需核对|需要核对补充要求|状态待核对)(?: · ([A-Za-z0-9_-]{1,48}))? · `\/task (N-[A-F0-9]{12})`$/.exec(row);
     if(!match)return;
-    const [,state,project,id]=match;
-    rendered.push(`<font color='${colors[state]}'>${state}</font>${project ? ` · ${project}` : ''} · \`/task ${id}\``);
+    const [,state,directory,id]=match;
+    rendered.push(`<font color='${colors[state]}'>${state}</font>${directory ? ` · ${directory}` : ''} · \`/task ${id}\``);
   }
   if(!rendered.length)return;
   return {schema:'2.0',config:{update_multi:true},body:{elements:[{tag:'markdown',content:rendered.join('\n')}]}};
@@ -41,7 +41,7 @@ export function renderTaskCard(t: Task, content: string, kind: string, part: num
     schema:'2.0',config:{update_multi:true},
     header:{title:plain(title),template:t.state==='succeeded'?'green':t.state==='cancelled'?'grey':'orange'},
     body:{elements:[{tag:'markdown',content:resultMarkdown(content)},
-      ...(t.project&&!part?[{tag:'div',text:{...plain(`项目：${t.project}`),text_size:'notation'}}]:[]),
+      ...(t.cwd&&!part?[{tag:'div',text:{...plain(`目录：${t.cwd}`),text_size:'notation'}}]:[]),
       ...actions.map(a=>({tag:'button',text:plain(a.label??(a.action==='cancel'?'停止任务':'查看详情')),type:'default',
         behaviors:[{type:'callback',value:{namo:a.token}}],
         ...(a.action==='cancel'?{confirm:{title:plain('停止这项任务？'),text:plain('已发生的操作不会自动撤销。')}}:{})}))]},
@@ -53,7 +53,7 @@ export function renderTaskCard(t: Task, content: string, kind: string, part: num
   return {config:{wide_screen_mode:true,update_multi:true},header:{title:plain(title),template:t.state==='succeeded'?'green':t.state==='cancelled'?'grey':kind==='progress'&&['queued','running','waiting'].includes(t.state)?'blue':'orange'},
     elements:[body,
       ...(answers.length?[buttons(answers),{tag:'hr'}]:[]),
-      ...(t.project&&!part?[{tag:'note',elements:[plain(`项目：${t.project}`)]}]:[]),
+      ...(t.cwd&&!part?[{tag:'note',elements:[plain(`目录：${t.cwd}`)]}]:[]),
       ...(controls.length?[buttons(controls)]:[])]};
 }
 export class Cards {

@@ -35,10 +35,10 @@ export class Schedules {
       let nextBinding=row.binding,rebound=false;
       if(change[1]==='resume' && row.state==='paused' && row.kind==='task') {
         try {
-          const previous=JSON.parse(row.binding??'null'),current=binding() as {project?:unknown;cwd?:unknown;directories?:unknown};
-          if(!previous||!current||typeof previous.cwd!=='string'||typeof current.cwd!=='string'||current.directories===undefined&&(previous.project!==current.project||previous.cwd!==current.cwd))return '请先切换回该定时任务原来的项目，再恢复；原绑定和任务均已保留。';
+          const previous=JSON.parse(row.binding??'null'),current=binding() as {cwd?:unknown;directories?:unknown};
+          if(!previous||!current||typeof previous.cwd!=='string'||typeof current.cwd!=='string')return '定时任务的工作目录绑定无效，原任务记录仍保留。';
           nextBinding=JSON.stringify(current);rebound=nextBinding!==row.binding;
-        } catch {return '当前项目或权限不可用，定时任务仍保持暂停。';}
+        } catch {return '当前目录或权限不可用，定时任务仍保持暂停。';}
       }
       let next=row.nextAt;
       if(change[1]==='resume' && next<=now) {
@@ -47,7 +47,7 @@ export class Schedules {
       }
       this.store.db.prepare('UPDATE schedules SET state=?,nextAt=?,binding=? WHERE id=?').run(change[1]==='pause'?'paused':change[1]==='resume'?'active':'deleted',next,nextBinding,row.id);
       if(change[1]==='resume') {const key=`schedule-status:${row.id}`,saved=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key);if(saved){const status=JSON.parse(String(saved.value));delete status.reason;this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(status),key);}}
-      return `${row.id} 已${change[1]==='pause'?'暂停':change[1]==='resume'?'恢复':'删除'}${rebound?'，已按当前项目权限重新绑定':''}；已入队或正在执行的任务不会自动撤销。`;
+      return `${row.id} 已${change[1]==='pause'?'暂停':change[1]==='resume'?'恢复':'删除'}${rebound?'，已按当前目录权限重新绑定':''}；已入队或正在执行的任务不会自动撤销。`;
     }
     const add=/^\/schedule\s+add\s+(reminder|task)\s+(once|daily|weekly)\s+(\S+)\s+([\s\S]+)$/.exec(text);
     if(!add)return HELP;
@@ -66,7 +66,7 @@ export class Schedules {
     const count=this.store.db.prepare("SELECT COUNT(*) AS n FROM schedules WHERE ownerId=? AND state IN ('active','paused')").get(m.senderId);
     if(Number(count?.n)>=100)return '定时任务已达上限（100 项），请先删除不需要的任务。';
     let frozen:string|null=null;
-    try {if(add[1]==='task') frozen=JSON.stringify(binding());} catch {return '当前项目或权限不可用，尚未创建定时任务。';}
+    try {if(add[1]==='task') frozen=JSON.stringify(binding());} catch {return '当前目录或权限不可用，尚未创建定时任务。';}
     const id=`S-${randomBytes(6).toString('hex').toUpperCase()}`;
     const interval=add[2]==='daily'?86_400_000:add[2]==='weekly'?604_800_000:null;
     this.store.db.prepare('INSERT INTO schedules VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(id,m.senderId,m.chatKey,scopeOf(m),m.key,add[1],content,interval,next,'active',frozen,now);

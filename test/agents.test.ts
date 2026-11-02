@@ -67,7 +67,7 @@ const msg = (key: string, text = '/run hello'): Incoming => ({key,messageId:key,
 
 function fixture(t: {after(fn:()=>void|Promise<void>):void}) {
   const dir=realpathSync(mkdtempSync(join(tmpdir(),'namo-registry-'))), project=join(dir,'project');mkdirSync(project);
-  const config=parseConfig({dataDir:join(dir,'data'),codex:{projects:{one:project},defaultProject:'one'},
+  const config=parseConfig({feishu:{allowedUserIds:['alice']},dataDir:join(dir,'data'),codex:{directories:[project]},
     agents:{profiles:{review:{adapter:'codex',model:'review-model'},future:{adapter:'claude'},cursor:{adapter:'cursor'}}}},join(dir,'config.json'));
   config.file=''; // Unit engine uses injected config; no management service in this fixture.
   const store=new Store(join(dir,'bot.sqlite')),tasks=new Tasks(store);
@@ -157,7 +157,7 @@ function agentManagementFixture(t: TestContext) {
   mkdirSync(data); mkdirSync(project);
   const raw = { version: 1, agent: 'codex', dataDir: data, custom: { keep: 'untouched' },
     feishu: { appId: 'agent_management', appSecret: 'PRIVATE_AGENT_MANAGEMENT_SECRET', allowedUserIds: ['alice'], allowedChatIds: [] },
-    codex: { bin: 'codex', home: join(data, 'codex-home'), projects: { app: project }, defaultProject: 'app', sandbox: 'read-only' },
+    codex: { bin: 'codex', home: join(data, 'codex-home'), directories: [project], sandbox: 'read-only' },
     agents: { defaultProfile: 'team', memoryProfile: 'codex', profiles: {
       team: { adapter: 'codex', bin: 'codex-team', model: 'gpt-team', timeoutMs: 120000 },
       future: { adapter: 'claude', enabled: false, bin: join(dir, 'missing-claude') },

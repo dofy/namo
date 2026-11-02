@@ -24,16 +24,16 @@ export async function readWorkerSnapshot(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/** Presentation and execution defaults are applied on restart. Revocation is immediate. */
+/** Presentation and execution defaults apply after the accepted queue drains. Revocation is immediate. */
 export function authorizationRevision(c: Config): string {
   const { token: _token, tokenEnv: _env, ...github } = c.github ?? {};
   return digest(JSON.stringify({
     appId: c.feishu.appId, domain: c.feishu.domain, access: c.feishu.access,
     users: c.feishu.allowedUserIds, chats: c.feishu.allowedChatIds,
-    projects: c.codex.projects, projectAccess: c.codex.projectAccess, directories:c.codex.directories,
+    directories:c.codex.directories,
     sandbox: c.codex.sandbox, network: c.codex.networkAccess, commits: c.codex.allowLocalCommits,
     // MCP has its own call and delivery authorization checks. Including all
-    // connections here aborts unrelated work when a disabled connection changes.
+    // connections here aborts unrelated work when an unrelated connection changes.
     read: c.codex.readPaths, deny: c.codex.denyPaths, github,
   }));
 }

@@ -1,4 +1,4 @@
-/** Current development schema. Historical layouts are deliberately not supported. */
+/** Current schema. Released v13–15 layouts are migrated transactionally in schema-migrations. */
 export const CORE_SCHEMA = `
 CREATE TABLE schedules (
   id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, chatKey TEXT NOT NULL, scopeKey TEXT NOT NULL,
@@ -30,7 +30,7 @@ CREATE TABLE outbox (
 );
 CREATE TABLE workstreams (
   id TEXT PRIMARY KEY, chatKey TEXT NOT NULL, scopeKey TEXT NOT NULL, ownerId TEXT NOT NULL,
-  project TEXT, cwd TEXT NOT NULL, policyHash TEXT NOT NULL, createdAt INTEGER NOT NULL
+  cwd TEXT NOT NULL, policyHash TEXT NOT NULL, createdAt INTEGER NOT NULL
 );
 CREATE TABLE bindings (
   scopeKey TEXT NOT NULL, ownerId TEXT NOT NULL, workstreamId TEXT NOT NULL REFERENCES workstreams(id),
@@ -39,7 +39,7 @@ CREATE TABLE bindings (
 CREATE TABLE tasks (
   id TEXT PRIMARY KEY, inboxKey TEXT NOT NULL UNIQUE REFERENCES inbox(key),
   workstreamId TEXT NOT NULL REFERENCES workstreams(id), ownerId TEXT NOT NULL,
-  chatKey TEXT NOT NULL, scopeKey TEXT NOT NULL, project TEXT, cwd TEXT NOT NULL, policyHash TEXT NOT NULL,
+  chatKey TEXT NOT NULL, scopeKey TEXT NOT NULL, cwd TEXT NOT NULL, policyHash TEXT NOT NULL,
   state TEXT NOT NULL DEFAULT 'queued', inputVersion INTEGER NOT NULL DEFAULT 1,
   startedAt INTEGER, finishedAt INTEGER, error TEXT
 );
@@ -138,19 +138,19 @@ CREATE INDEX settings_key_nocase ON settings(key COLLATE NOCASE);
 export const BUSINESS_SCHEMA = `
 CREATE TABLE memories (
   id TEXT PRIMARY KEY NOT NULL, version INTEGER NOT NULL CHECK(version>0),
-  kind TEXT NOT NULL CHECK(kind IN ('preference','user_fact','project_knowledge','task_summary','history_quote','handoff')),
+  kind TEXT NOT NULL CHECK(kind IN ('preference','user_fact','knowledge','task_summary','history_quote','handoff')),
   status TEXT NOT NULL CHECK(status IN ('active','pending_review','disabled','deleted')),
-  scopeKind TEXT NOT NULL CHECK(scopeKind IN ('owner','project','chat','global','local')),
-  ownerId TEXT NOT NULL, project TEXT, chatKey TEXT,
+  scopeKind TEXT NOT NULL CHECK(scopeKind IN ('owner','directory','chat','global','local')),
+  ownerId TEXT NOT NULL, directory TEXT, chatKey TEXT,
   sourceKind TEXT NOT NULL CHECK(sourceKind IN ('message','document','local-owner','migration','handoff','automatic')), sourceRef TEXT NOT NULL,
   dependsOn TEXT NOT NULL CHECK(json_valid(dependsOn) AND json_type(dependsOn)='array'),
-  resourceProjects TEXT NOT NULL CHECK(json_valid(resourceProjects) AND json_type(resourceProjects)='array'),
+  resourceDirectories TEXT NOT NULL CHECK(json_valid(resourceDirectories) AND json_type(resourceDirectories)='array'),
   automatic TEXT CHECK(automatic IS NULL OR (json_valid(automatic) AND json_type(automatic)='object')),
   visibility TEXT CHECK(visibility IS NULL OR (json_valid(visibility) AND json_type(visibility)='object')),
   contentChars INTEGER NOT NULL CHECK(contentChars>=0), createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, expiresAt INTEGER,
   UNIQUE(id,version), CHECK(status!='deleted' OR contentChars=0)
 ) STRICT;
-CREATE INDEX memories_owner ON memories(ownerId,status,scopeKind,project,chatKey);
+CREATE INDEX memories_owner ON memories(ownerId,status,scopeKind,directory,chatKey);
 CREATE INDEX memories_shared ON memories(scopeKind,status);
 CREATE TABLE memory_contents (
   memoryId TEXT PRIMARY KEY NOT NULL, version INTEGER NOT NULL, text TEXT NOT NULL,
@@ -169,7 +169,7 @@ CREATE TABLE memory_blocks (fingerprint TEXT PRIMARY KEY NOT NULL, memoryId TEXT
 CREATE INDEX memory_blocks_memory ON memory_blocks(memoryId);
 CREATE TABLE memory_jobs (
   id TEXT PRIMARY KEY NOT NULL, sourceKey TEXT NOT NULL,
-  ownerId TEXT NOT NULL, chatKey TEXT NOT NULL, chatType TEXT NOT NULL CHECK(chatType IN ('p2p','group')), project TEXT,
+  ownerId TEXT NOT NULL, chatKey TEXT NOT NULL, chatType TEXT NOT NULL CHECK(chatType IN ('p2p','group')), directory TEXT,
   state TEXT NOT NULL CHECK(state IN ('pending','running','completed','failed')),
   attempts INTEGER NOT NULL CHECK(attempts>=0 AND attempts<=3), createdAt INTEGER NOT NULL, dueAt INTEGER NOT NULL,
   leaseUntil INTEGER NOT NULL, lease TEXT, accepted INTEGER CHECK(accepted>=0), rejected INTEGER CHECK(rejected>=0), error TEXT,
@@ -188,7 +188,7 @@ CREATE TABLE memory_job_messages (
 CREATE INDEX memory_job_messages_inbox ON memory_job_messages(inboxKey);
 CREATE TABLE artifact_deliveries (
   id TEXT PRIMARY KEY NOT NULL, inboxKey TEXT NOT NULL REFERENCES inbox(key), taskId TEXT NOT NULL REFERENCES tasks(id),
-  ownerId TEXT NOT NULL, chatId TEXT NOT NULL, projectRoot TEXT NOT NULL, path TEXT NOT NULL,
+  ownerId TEXT NOT NULL, chatId TEXT NOT NULL, rootDirectory TEXT NOT NULL, path TEXT NOT NULL,
   state TEXT NOT NULL CHECK(state IN ('pending','uploading','uploaded','sending','sent','failed','unknown')),
   uuid TEXT NOT NULL UNIQUE, createdAt INTEGER NOT NULL, sha256 TEXT NOT NULL, size INTEGER NOT NULL CHECK(size>=0),
   fileKey TEXT, platformId TEXT, error TEXT,
@@ -205,7 +205,7 @@ CREATE INDEX artifact_intents_pending ON artifact_intents(taskId) WHERE state='p
 CREATE INDEX artifact_intents_inbox ON artifact_intents(inboxKey);
 CREATE TABLE git_approvals (
   id TEXT PRIMARY KEY NOT NULL, taskId TEXT NOT NULL REFERENCES tasks(id), ownerId TEXT NOT NULL, chatKey TEXT NOT NULL,
-  project TEXT, cwd TEXT NOT NULL, policyHash TEXT NOT NULL,
+  cwd TEXT NOT NULL, policyHash TEXT NOT NULL,
   state TEXT NOT NULL CHECK(state IN ('pending','approved','rejected','expired','invalidated','executing','succeeded','failed','unknown')),
   revision INTEGER NOT NULL CHECK(revision>=0), configRevision TEXT NOT NULL, commitSummary TEXT NOT NULL,
   createdAt INTEGER NOT NULL, expiresAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, attemptId TEXT, reason TEXT,

@@ -3,7 +3,7 @@ import type { Inbox, Store } from './store.js';
 import { Tasks, type Task } from './tasks.js';
 import { AssistantSettings, composeAssistantPrompt } from './assistant.js';
 import { Memories, composeMemoryPrompt } from './memory.js';
-import { memoryProjects } from './memory-access.js';
+import { memoryDirectories } from './memory-access.js';
 import { admitted } from './access.js';
 import { makeRedactor } from './safety.js';
 
@@ -36,7 +36,7 @@ export function buildTaskRunPrompt(store: Store, task: Task, inbox: Inbox, confi
   const memories = new Memories(store, makeRedactor([config.feishu.appSecret]));
   const snapshot = memories.snapshot(runId, {
     kind: 'verified-user', authenticated: paired.has(inbox.senderId), ownerId: inbox.senderId,
-    allowedProjects: memoryProjects(config, inbox), chatKey: inbox.chatKey, chatType: inbox.envelope?.chatType, project: task.project ?? null,
+    allowedDirectories: memoryDirectories(config, inbox,task.cwd), chatKey: inbox.chatKey, chatType: inbox.envelope?.chatType, directory: task.cwd ?? null,
   }, { relevantText: inbox.text });
   prompt = composeMemoryPrompt(prompt, snapshot);
   return prompt;

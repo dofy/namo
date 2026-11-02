@@ -8,13 +8,12 @@ import { tmpdir, homedir } from 'node:os';
 import type { Store } from './store.js';
 
 /** Push targets are explicit repository roots, independent of the conversation cwd. */
-export function approvalDirectory(store:Store,config:Config,taskId:string,fallback:string,requested?:string):string {
-  if(config.codex.directories===undefined)return fallback;
+export function approvalDirectory(store:Store,config:Config,taskId:string,requested?:string):string {
   if(!requested||!isAbsolute(requested))throw new ApprovalError('directory_required','请指定白名单内的 Git 仓库绝对路径（--directory）。');
   const directory=realpathSync(requested);
   const contains=(root:string)=>{const r=relative(root,directory);return !r||r!=='..'&&!r.startsWith(`..${sep}`)&&!isAbsolute(r);};
   const snapshot=store.db.prepare('SELECT path FROM task_directories WHERE taskId=?').all(taskId).map(row=>String(row.path));
-  if(!snapshot.some(contains)||!config.codex.directories.some(contains)||(config.codex.denyPaths??[]).some(contains))throw new ApprovalError('directory_denied','该仓库不在任务和当前配置共同允许的目录内。');
+  if(!snapshot.some(contains)||!(config.codex.directories??[]).some(contains)||(config.codex.denyPaths??[]).some(contains))throw new ApprovalError('directory_denied','该仓库不在任务和当前配置共同允许的目录内。');
   return directory;
 }
 
@@ -33,7 +32,7 @@ export class ApprovalError extends Error {
 }
 
 export interface ApprovalTaskContext {
-  taskId: string; ownerId: string; chatKey: string; project?: string; cwd: string; policyHash: string;
+  taskId: string; ownerId: string; chatKey: string; cwd: string; policyHash: string;
 }
 export interface ApprovalActor { ownerId: string; chatKey: string; authority: 'verified-owner-command' | 'local-management'; }
 export interface GitRemotePolicy {
@@ -70,7 +69,7 @@ export class ExecFileGitRunner implements GitRunner {
 
 export interface GitApprovalRecord {
   schemaVersion: 1; id: string; operation: 'git-push'; state: ApprovalState; revision: number;
-  task: { taskId: string; ownerId: string; chatKey: string; project: string | null; cwd: string; policyHash: string };
+  task: { taskId: string; ownerId: string; chatKey: string; cwd: string; policyHash: string };
   target: { remote: string; url: string; transport: RemoteTransport; ref: string; headSha: string; remoteBeforeSha: string | null };
   configRevision: string; commitSummary: string; createdAt: number; expiresAt: number; updatedAt: number;
   limitedProtection: true; attemptId?: string; reason?: string;
@@ -78,7 +77,7 @@ export interface GitApprovalRecord {
 }
 
 export interface ApprovalPreview {
-  id: string; state: ApprovalState; taskId: string; project: string | null; remote: string; transport: RemoteTransport;
+  id: string; state: ApprovalState; taskId: string; remote: string; transport: RemoteTransport;
   ref: string; headSha: string; remoteBeforeSha: string | null; commitSummary: string; expiresAt: number;
   limitedProtection: true; limitation: string;
 }
@@ -193,17 +192,17 @@ export class GitApprovals {
   private validateContext(record: GitApprovalRecord, task: ApprovalTaskContext, configRevision: string): void {
     const cwd = realpathSync(task.cwd);
     if (record.task.taskId !== task.taskId || record.task.ownerId !== task.ownerId || record.task.chatKey !== task.chatKey ||
-      record.task.project !== (task.project ?? null) || record.task.cwd !== cwd || record.task.policyHash !== task.policyHash || record.configRevision !== configRevision) {
-      throw new ApprovalError('approval_context_changed', 'Task owner, chat, project, policy, directory, or configuration changed after approval.');
+      record.task.cwd !== cwd || record.task.policyHash !== task.policyHash || record.configRevision !== configRevision) {
+      throw new ApprovalError('approval_context_changed', 'Task owner, chat, policy, directory, or configuration changed after approval.');
     }
   }
   private async inspect(task: ApprovalTaskContext, remoteName: string, ref: string): Promise<{ remote: GitRemotePolicy; head: string; summary: string; before: string | null }> {
     bounded(task.taskId, 'taskId', 96); bounded(task.ownerId, 'ownerId'); bounded(task.chatKey, 'chatKey'); bounded(task.policyHash, 'policyHash', 128);
     if (!REVISION.test(task.policyHash)) throw new ApprovalError('context_invalid', 'Task policy hash is invalid.');
     if (!REMOTE.test(remoteName)) throw new ApprovalError('remote_unsafe', 'Remote name is invalid.'); checkRef(ref);
-    const cwd = realpathSync(task.cwd); if (cwd === '/' || cwd === homedir() || !statSync(cwd).isDirectory()) throw new ApprovalError('project_unsafe', 'Approval requires a specific real project directory.');
+    const cwd = realpathSync(task.cwd); if (cwd === '/' || cwd === homedir() || !statSync(cwd).isDirectory()) throw new ApprovalError('directory_unsafe', 'Approval requires a specific real directory.');
     const top = outputLine(await this.runner.run(cwd, ['rev-parse', '--show-toplevel']), 'repository_invalid');
-    if (realpathSync(top) !== cwd) throw new ApprovalError('project_mismatch', 'Task directory must be the exact Git project root.');
+    if (realpathSync(top) !== cwd) throw new ApprovalError('directory_mismatch', 'Task directory must be the exact Git repository root.');
     const check = await this.runner.run(cwd, ['check-ref-format', ref]); if (check.exitCode !== 0) throw new ApprovalError('ref_unsafe', 'Destination ref is not valid.');
     const head = outputLine(await this.runner.run(cwd, ['rev-parse', '--verify', 'HEAD^{commit}']), 'head_unavailable'); if (!SHA.test(head)) throw new ApprovalError('head_unavailable', 'HEAD is not a supported commit hash.');
     const filters = await this.runner.run(cwd, ['config', '--show-origin', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$']);
@@ -239,7 +238,7 @@ export class GitApprovals {
     for (let attempt = 0; attempt < 4 && !record; attempt++) {
       const id = `AP-${randomBytes(6).toString('hex').toUpperCase()}`;
       const candidate: GitApprovalRecord = { schemaVersion: 1, id, operation: 'git-push', state: 'pending', revision: 0,
-        task: { taskId: task.taskId, ownerId: task.ownerId, chatKey: task.chatKey, project: task.project ?? null, cwd: realpathSync(task.cwd), policyHash: task.policyHash },
+        task: { taskId: task.taskId, ownerId: task.ownerId, chatKey: task.chatKey, cwd: realpathSync(task.cwd), policyHash: task.policyHash },
         target: { remote: inspected.remote.name, url: inspected.remote.url, transport: inspected.remote.transport, ref: input.ref, headSha: inspected.head, remoteBeforeSha: inspected.before },
         configRevision: input.configRevision, commitSummary: inspected.summary, createdAt: now, expiresAt: now + ttl, updatedAt: now, limitedProtection: true,
         events: [{ state: 'pending', at: now }] };
@@ -249,7 +248,7 @@ export class GitApprovals {
     return this.preview(record);
   }
   preview(record: GitApprovalRecord): ApprovalPreview {
-    return { id: record.id, state: record.state, taskId: record.task.taskId, project: record.task.project, remote: record.target.remote,
+    return { id: record.id, state: record.state, taskId: record.task.taskId, remote: record.target.remote,
       transport: record.target.transport, ref: record.target.ref, headSha: record.target.headSha, remoteBeforeSha: record.target.remoteBeforeSha,
       commitSummary: record.commitSummary, expiresAt: record.expiresAt, limitedProtection: true,
       limitation: 'This gate controls only this API. The current general model runtime may still have other network or credential paths; do not describe it as complete enforced isolation.' };

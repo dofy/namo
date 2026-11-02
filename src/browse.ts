@@ -6,7 +6,7 @@ import type { BrowseOptions, Dashboard, PageResult, ScheduleListItem, SessionSum
 export class BrowseError extends Error {}
 type Kind = 'tasks' | 'sessions';
 interface Query {
-  q: string; owner: string; project: string; state: string; workstream: string;
+  q: string; owner: string; directory: string; state: string; workstream: string;
   from?: number; to?: number; sort: 'newest' | 'oldest'; page: number; pageSize: number;
   dateField: 'created' | 'started' | 'finished';
 }
@@ -30,10 +30,9 @@ function parse(params: URLSearchParams, kind: Kind): Query {
     if (!/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > max) throw new BrowseError(tr("browse.invalidPaginationParameters"));
     return Number(raw);
   };
-  const state = value('state'), sort = value('sort') || 'newest', project = value('project'), workstream = value('workstream');
+  const state = value('state'), sort = value('sort') || 'newest', directory = value('directory'), workstream = value('workstream');
   if (state && !(kind === 'tasks' ? taskStates : ['running', 'waiting', 'queued', 'idle', 'current']).includes(state)) throw new BrowseError(tr("browse.invalidStatusFilter"));
   if (!['newest', 'oldest'].includes(sort)) throw new BrowseError(tr("browse.invalidSortOrder"));
-  if (project && project !== 'isolated' && !project.startsWith('named:')) throw new BrowseError(tr("browse.invalidProjectFilter"));
   if (workstream && !/^W-[A-F0-9]{12}$/.test(workstream)) throw new BrowseError(tr("browse.invalidSessionId"));
   const dateField = value('dateField') || 'created';
   if (!(kind === 'tasks' ? ['created', 'started', 'finished'] : ['created']).includes(dateField)) throw new BrowseError(tr("browse.invalidDateType"));
@@ -41,10 +40,10 @@ function parse(params: URLSearchParams, kind: Kind): Query {
   if (from !== undefined && to !== undefined && from >= to) throw new BrowseError(tr("browse.endDateMustNotPrecedeStartDate"));
   const pageSize = integer('pageSize', 25, 100);
   if (![25, 50, 100].includes(pageSize)) throw new BrowseError(tr("browse.pageSizeMust"));
-  return { q: value('q', 200), owner: value('owner'), project, state, workstream, from, to,
+  return { q: value('q', 200), owner: value('owner'), directory, state, workstream, from, to,
     sort: sort as Query['sort'], dateField: dateField as Query['dateField'], page: integer('page', 1, 1_000_000), pageSize };
 }
-const taskSelect = `SELECT t.id,t.workstreamId,t.project,t.state,t.inputVersion,t.startedAt,t.finishedAt,t.error,
+const taskSelect = `SELECT t.id,t.workstreamId,t.cwd,t.state,t.inputVersion,t.startedAt,t.finishedAt,t.error,
   t.ownerId,i.createdAt,i.text FROM tasks t JOIN inbox i ON i.key=t.inboxKey`;
 // Aggregate once per query, rather than running a full task scan for every session.
 const sessionsCte = `WITH message_activity AS (
@@ -55,7 +54,7 @@ const sessionsCte = `WITH message_activity AS (
     SUM(t.state='running') AS running,SUM(t.state='waiting') AS waiting,SUM(t.state='queued') AS queued
   FROM tasks t JOIN inbox i ON i.key=t.inboxKey LEFT JOIN message_activity m ON m.taskId=t.id GROUP BY t.workstreamId
 ), session_rows AS (
-  SELECT w.id,w.project,w.ownerId,w.createdAt,COALESCE(a.lastActiveAt,w.createdAt) AS lastActiveAt,
+  SELECT w.id,w.cwd,w.ownerId,w.createdAt,COALESCE(a.lastActiveAt,w.createdAt) AS lastActiveAt,
     COALESCE(a.taskCount,0) AS taskCount,a.firstSeq,a.latestSeq,
     EXISTS(SELECT 1 FROM bindings b WHERE b.workstreamId=w.id) AS current,
     CASE WHEN a.running>0 THEN 'running' WHEN a.waiting>0 THEN 'waiting' WHEN a.queued>0 THEN 'queued' ELSE 'idle' END AS state
@@ -100,8 +99,7 @@ export class Browse {
     const alias = kind === 'tasks' ? 't' : 's', clauses: string[] = [], values: SQLInputValue[] = [];
     const add = (sql: string, ...args: SQLInputValue[]) => { clauses.push(sql); values.push(...args); };
     if (q.owner) add(`${alias}.ownerId=?`, q.owner);
-    if (q.project === 'isolated') add(`${alias}.project IS NULL`);
-    else if (q.project) add(`${alias}.project=?`, q.project.slice(6));
+    if (q.directory) add(`${alias}.cwd=?`, q.directory);
     if (q.state === 'problem') add(`${alias}.state IN ('failed','interrupted','needs_attention')`);
     else if (q.state === 'current') add('s.current=1');
     else if (q.state) add(`${alias}.state=?`, q.state);
@@ -149,7 +147,7 @@ export class Browse {
     return {
       users: this.store.db.prepare('SELECT ownerId FROM tasks UNION SELECT ownerId FROM workstreams ORDER BY ownerId').all()
         .map(row => ({ id: String(row.ownerId), name: this.names.get(String(row.ownerId)) ?? '' })),
-      projects: this.store.db.prepare('SELECT project FROM tasks WHERE project IS NOT NULL UNION SELECT project FROM workstreams WHERE project IS NOT NULL ORDER BY project').all().map(row => String(row.project)),
+      directories: this.store.db.prepare('SELECT cwd FROM tasks WHERE cwd IS NOT NULL UNION SELECT cwd FROM workstreams WHERE cwd IS NOT NULL ORDER BY cwd').all().map(row => String(row.cwd)),
     };
   }
   dashboard(now = Date.now()): Dashboard {

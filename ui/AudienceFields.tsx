@@ -13,8 +13,8 @@ export function IdentityInput({id,value,onChange,disabled}:{id:string;value:stri
 export function AudienceFields({value,onChange,id,members=[]}:{value:Audience;onChange:(v:Audience)=>void;id:string;members?:{id:string;label:string}[]}) {
   return <>
     <Text as="label" size="2"><Flex gap="2" align="center"><Checkbox checked={value.organization} onCheckedChange={v=>onChange({...value,organization:v===true})}/>{tr("audience.entireOrganizationIncludingGroups")}</Flex></Text>
-    {members.length>0&&<div className="audience-members"><Text as="p" size="2" weight="medium">{tr('projectAccess.pairedMembers')}</Text><div className="audience-member-list">{members.map(member=><Text as="label" size="2" key={member.id}><Flex gap="2" align="center"><Checkbox disabled={value.organization} checked={value.userIds.includes(member.id)} onCheckedChange={checked=>onChange({...value,userIds:checked===true?[...new Set([...value.userIds,member.id])]:value.userIds.filter(x=>x!==member.id)})}/>{member.label}</Flex></Text>)}</div></div>}
-    {members.length>0?<details className="audience-advanced"><summary>{tr('projectAccess.advanced')}</summary><AudienceIds id={id} value={value} onChange={onChange}/></details>:<AudienceIds id={id} value={value} onChange={onChange}/>}
+    {members.length>0&&<div className="audience-members"><Text as="p" size="2" weight="medium">{tr('audienceAccess.pairedMembers')}</Text><div className="audience-member-list">{members.map(member=><Text as="label" size="2" key={member.id}><Flex gap="2" align="center"><Checkbox disabled={value.organization} checked={value.userIds.includes(member.id)} onCheckedChange={checked=>onChange({...value,userIds:checked===true?[...new Set([...value.userIds,member.id])]:value.userIds.filter(x=>x!==member.id)})}/>{member.label}</Flex></Text>)}</div></div>}
+    {members.length>0?<details className="audience-advanced"><summary>{tr('audienceAccess.advanced')}</summary><AudienceIds id={id} value={value} onChange={onChange}/></details>:<AudienceIds id={id} value={value} onChange={onChange}/>}
     <Text as="p" size="1" color="gray">{tr("audience.groupGrantAllowsResourceContentSharedGroup")}</Text>
   </>;
 }

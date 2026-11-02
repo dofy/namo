@@ -15,13 +15,13 @@ const labels = () => ({
   manualIntro: tr("memory.manualIntro"),
   kind: tr("memory.kind"),
   scope: tr("memory.scope"),
-  project: tr("memory.project"),
+  directory: tr("memory.directory"),
   chat: tr("memory.chat"),
   text: tr("memory.text"),
   save: tr("memory.save"),
   preference: tr("memory.preference"),
   user_fact: tr("memory.userFact"),
-  project_knowledge: tr("memory.projectKnowledge"),
+  knowledge: tr("memory.directoryKnowledge"),
   task_summary: tr("memory.taskSummary"),
   history_quote: tr("memory.historyQuote"),
   handoff: tr("memory.handoff"),
@@ -33,7 +33,7 @@ const labels = () => ({
   automatic: tr("memory.automatic"),
   refresh: tr("memory.refresh"),
   ownerScope: tr("memory.ownerScope"),
-  projectScope: tr("memory.projectScope"),
+  directoryScope: tr("memory.directoryScope"),
   chatScope: tr("memory.chatScope"),
   active: tr("memory.active"),
   pending_review: tr("memory.pendingReview"),
@@ -80,7 +80,7 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
   const c = labels();
   const [state, setState] = useState<MemoryViewState>();
   const [query, setQuery] = useState(''), [kind, setKind] = useState<Exclude<MemoryPageKind, 'handoff'>>('preference');
-  const [scopeKind, setScopeKind] = useState<MemoryPageScope['kind']>('owner'), [project, setProject] = useState(''), [chatKey, setChatKey] = useState('');
+  const [scopeKind, setScopeKind] = useState<MemoryPageScope['kind']>('owner'), [directory, setDirectory] = useState(''), [chatKey, setChatKey] = useState('');
   const [draft, setDraft] = useState(''), [editing, setEditing] = useState<string | null>(null), [editText, setEditText] = useState('');
   const [busy, setBusy] = useState(false), [notice, setNotice] = useState(''), [error, setError] = useState('');
   useEffect(() => {
@@ -106,13 +106,13 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
     const items=state?.items??[];
     return needle ? items.filter(item => `${item.id} ${item.text ?? ''} ${item.source.ref}`.toLocaleLowerCase().includes(needle)) : items;
   }, [state, query]);
-  const names: Record<MemoryPageKind, string> = { preference: c.preference, user_fact: c.user_fact, project_knowledge: c.project_knowledge,
+  const names: Record<MemoryPageKind, string> = { preference: c.preference, user_fact: c.user_fact, knowledge: c.knowledge,
     task_summary: c.task_summary, history_quote: c.history_quote, handoff: c.handoff };
-  const scopeNames: Record<MemoryPageScope['kind'], string> = { owner: c.ownerScope, project: c.projectScope, chat: c.chatScope, global: c.globalScope, local: c.localScope };
+  const scopeNames: Record<MemoryPageScope['kind'], string> = { owner: c.ownerScope, directory: c.directoryScope, chat: c.chatScope, global: c.globalScope, local: c.localScope };
   const privacyName = (item: MemoryPageItem) => item.visibility?.privacy === 'shared' ? c.shared : item.visibility?.privacy === 'chat' || item.scope.kind === 'chat' ? c.chatPrivate : c.private;
   const selectedScope = ():MemoryPageScope => ({kind:scopeKind,ownerId:state!.ownerId,
-    project:scopeKind==='owner'||!project.trim()?null:project.trim(),chatKey:scopeKind==='chat'?chatKey.trim():null});
-  const sameScope=(left:MemoryPageScope,right:MemoryPageScope)=>left.kind===right.kind&&left.ownerId===right.ownerId&&left.project===right.project&&left.chatKey===right.chatKey;
+    directory:scopeKind==='owner'||!directory.trim()?null:directory.trim(),chatKey:scopeKind==='chat'?chatKey.trim():null});
+  const sameScope=(left:MemoryPageScope,right:MemoryPageScope)=>left.kind===right.kind&&left.ownerId===right.ownerId&&left.directory===right.directory&&left.chatKey===right.chatKey;
 
   async function act(action: () => Promise<MemoryViewState>, announce = true) {
     if (busy) return;
@@ -129,7 +129,7 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
     {notice && <Notice>{notice}</Notice>}{error && <Notice error>{error}</Notice>}
     <PageSection icon="search" title={tr("design.memoryBrowse")} description={tr("design.memoryHelp")}><div className="form-grid">
       <Field label={c.owner} htmlFor="memory-owner"><Choice id="memory-owner" value={state?.ownerId??''} disabled={busy||!state}
-        onChange={value => { setEditing(null);setScopeKind('owner');setProject('');setChatKey('');setNotice('');setError('');setBusy(true);void api.memories(value).then(setState).catch(failure=>setError(errorMessage(failure))).finally(()=>setBusy(false)); }}
+        onChange={value => { setEditing(null);setScopeKind('owner');setDirectory('');setChatKey('');setNotice('');setError('');setBusy(true);void api.memories(value).then(setState).catch(failure=>setError(errorMessage(failure))).finally(()=>setBusy(false)); }}
         options={(state?.owners??[]).map(owner => ({ value: owner.id, label: owner.label }))} /></Field>
       <Field label={c.search} htmlFor="memory-search"><TextField.Root id="memory-search" value={query} maxLength={120} onChange={event => setQuery(event.target.value)} /></Field>
     </div>
@@ -143,8 +143,8 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
     {!busy && state && !filtered.length && <EmptyState icon="memory" title={c.empty} description={query ? tr("design.memorySearchEmpty") : tr("design.memoryEmpty")} />}
     {filtered.map(item => <section className="audit memory-entry" key={`${item.id}:${item.version}`}>
       <Flex gap="2" align="center" wrap="wrap"><Badge color={statusColor(item.status)}>{c[item.status]}</Badge><Badge color={item.usable ? 'green' : 'gray'}>{item.usable ? c.usable : c.unusable}</Badge>
-        <Text size="2" weight="bold">{names[item.kind]}</Text><Badge color="gray">{scopeNames[item.scope.kind]}{item.scope.project ? ` · ${item.scope.project}` : ''}</Badge><Badge color={item.visibility?.privacy === 'shared' ? 'blue' : 'gray'}>{privacyName(item)}</Badge>{item.source.kind === 'automatic' && <Badge color="blue">{c.automatic}</Badge>}</Flex>
-      <details><summary>{c.details}</summary><Text as="p" size="1" color="gray">{item.id} · {c.version} {item.version}</Text><Text as="p" size="1" color="gray">{scopeNames[item.scope.kind]}{item.scope.project ? ` · ${item.scope.project}` : ''}{item.scope.chatKey ? ` · ${item.scope.chatKey}` : ''}
+        <Text size="2" weight="bold">{names[item.kind]}</Text><Badge color="gray">{scopeNames[item.scope.kind]}{item.scope.directory ? ` · ${item.scope.directory}` : ''}</Badge><Badge color={item.visibility?.privacy === 'shared' ? 'blue' : 'gray'}>{privacyName(item)}</Badge>{item.source.kind === 'automatic' && <Badge color="blue">{c.automatic}</Badge>}</Flex>
+      <details><summary>{c.details}</summary><Text as="p" size="1" color="gray">{item.id} · {c.version} {item.version}</Text><Text as="p" size="1" color="gray">{scopeNames[item.scope.kind]}{item.scope.directory ? ` · ${item.scope.directory}` : ''}{item.scope.chatKey ? ` · ${item.scope.chatKey}` : ''}
         {` · ${c.source}: ${item.source.kind} / ${item.source.ref} · ${c.expires}: ${item.expiresAt ? new Date(item.expiresAt).toLocaleString(getLocale()) : c.never}`}</Text></details>
       {item.text !== null && editing !== item.id && <Text as="p" size="2" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{item.text}</Text>}
       {editing === item.id && <><Field label={c.correct} htmlFor={`memory-edit-${item.id}`}><TextArea id={`memory-edit-${item.id}`} value={editText} maxLength={3000} rows={5}
@@ -168,21 +168,21 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
       <section className="audit">
       <div className="form-grid">
         <Field label={c.kind} htmlFor="memory-kind"><Choice id="memory-kind" value={kind} disabled={!editable || busy}
-          onChange={value => setKind(value as typeof kind)} options={(['preference', 'user_fact', 'project_knowledge', 'task_summary', 'history_quote'] as const).map(value => ({ value, label: names[value] }))} /></Field>
+          onChange={value => setKind(value as typeof kind)} options={(['preference', 'user_fact', 'knowledge', 'task_summary', 'history_quote'] as const).map(value => ({ value, label: names[value] }))} /></Field>
         <Field label={c.scope} htmlFor="memory-scope"><Choice id="memory-scope" value={scopeKind} disabled={!editable || busy}
-          onChange={value => {const next=value as MemoryPageScope['kind'];setScopeKind(next);if(next==='project')setProject(state?.projects[0]??'');if(next==='chat'){const first=state?.chats[0];setChatKey(first?.chatKey??'');setProject(first?.project??'');}}}
-          options={(['owner', ...(state?.projects.length?['project' as const]:[]), 'chat'] as const).map(value => ({ value, label: scopeNames[value] }))} /></Field>
-        {scopeKind === 'project' && <Field label={c.project} htmlFor="memory-project"><Choice id="memory-project" value={project} disabled={!editable||busy||!state?.projects.length}
-          onChange={setProject} options={(state?.projects??[]).map(value=>({value,label:value}))} /></Field>}
-        {scopeKind === 'chat' && <Field label={c.chat} htmlFor="memory-chat"><Choice id="memory-chat" value={JSON.stringify([chatKey,project||null])} disabled={!editable||busy||!state?.chats.length}
-          onChange={value=>{const [chat,nextProject]=JSON.parse(value) as [string,string|null];setChatKey(chat);setProject(nextProject??'');}}
-          options={(state?.chats??[]).map(item=>({value:JSON.stringify([item.chatKey,item.project]),label:`${item.chatKey}${item.project?` · ${item.project}`:''}`}))} /></Field>}
+          onChange={value => {const next=value as MemoryPageScope['kind'];setScopeKind(next);if(next==='directory')setDirectory(state?.directories[0]??'');if(next==='chat'){const first=state?.chats[0];setChatKey(first?.chatKey??'');setDirectory(first?.directory??'');}}}
+          options={(['owner', ...(state?.directories.length?['directory' as const]:[]), 'chat'] as const).map(value => ({ value, label: scopeNames[value] }))} /></Field>
+        {scopeKind === 'directory' && <Field label={c.directory} htmlFor="memory-directory"><Choice id="memory-directory" value={directory} disabled={!editable||busy||!state?.directories.length}
+          onChange={setDirectory} options={(state?.directories??[]).map(value=>({value,label:value}))} /></Field>}
+        {scopeKind === 'chat' && <Field label={c.chat} htmlFor="memory-chat"><Choice id="memory-chat" value={JSON.stringify([chatKey,directory||null])} disabled={!editable||busy||!state?.chats.length}
+          onChange={value=>{const [chat,nextDirectory]=JSON.parse(value) as [string,string|null];setChatKey(chat);setDirectory(nextDirectory??'');}}
+          options={(state?.chats??[]).map(item=>({value:JSON.stringify([item.chatKey,item.directory]),label:`${item.chatKey}${item.directory?` · ${item.directory}`:''}`}))} /></Field>}
       </div>
       <Field label={c.text} htmlFor="memory-text"><TextArea id="memory-text" value={draft} maxLength={state?.limits.entryChars??3000} rows={5} disabled={!editable || busy}
         onChange={event => setDraft(event.target.value)} /></Field>
-      <Button disabled={!editable || busy || !state || !draft.trim() || (scopeKind === 'project' && !project.trim()) || (scopeKind === 'chat' && !chatKey.trim())}
+      <Button disabled={!editable || busy || !state || !draft.trim() || (scopeKind === 'directory' && !directory.trim()) || (scopeKind === 'chat' && !chatKey.trim())}
         onClick={() => void act(async () => {
-          const next=await api.memory({action:'save',ownerId:state!.ownerId,input:{kind,scope:{kind:scopeKind,ownerId:state!.ownerId,project:scopeKind==='owner'||!project.trim()?null:project.trim(),chatKey:scopeKind==='chat'?chatKey.trim():null},text:draft}});
+          const next=await api.memory({action:'save',ownerId:state!.ownerId,input:{kind,scope:{kind:scopeKind,ownerId:state!.ownerId,directory:scopeKind==='owner'||!directory.trim()?null:directory.trim(),chatKey:scopeKind==='chat'?chatKey.trim():null},text:draft}});
           setDraft('');return next;
         })}>{c.save}</Button>
       </section>
@@ -201,7 +201,7 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
           <Text as="p" size="1" color="gray">{c.source}: OpenClaw / {candidate.source.instanceId} / {candidate.source.accountId} / {candidate.source.version}
             {` · ${candidate.bytes} ${c.bytes} · ${c.fingerprint}: ${candidate.fingerprint.slice(0,16)}…`}</Text>
           {!candidate.eligible&&<Notice>{c.notEligible}</Notice>}
-          <Button variant="soft" disabled={!editable||busy||!state||!candidate.eligible||!!existing||(scopeKind==='project'&&!project.trim())||(scopeKind==='chat'&&!chatKey.trim())}
+          <Button variant="soft" disabled={!editable||busy||!state||!candidate.eligible||!!existing||(scopeKind==='directory'&&!directory.trim())||(scopeKind==='chat'&&!chatKey.trim())}
             onClick={()=>void act(()=>api.memory({action:'import',ownerId:state!.ownerId,input:{migrationId:candidate.migrationId,candidateId:candidate.candidateId,fingerprint:candidate.fingerprint,scope:selectedScope()}}))}>
             {existing?c.imported:candidate.eligible?c.importAction:c.notEligible}
           </Button>

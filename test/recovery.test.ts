@@ -40,7 +40,7 @@ function recoveryCombinationsFixture(t: TestContext, runtime: Runtime, sender?: 
   const project = join(root, 'project'); mkdirSync(project);
   const database = join(root, 'bot.sqlite');
   const config = { dataDir: root, concurrency: 1, codex: { bin: 'unused', home: join(root, 'home'), timeoutMs: 5000,
-    sandbox: 'workspace-write' as const, projects: { one: project }, defaultProject: 'one' } };
+    sandbox: 'workspace-write' as const, directories: [project] } };
   let store = new Store(database), engine: Engine;
   const fatals: string[] = [];
   const makeEngine = () => new Engine(store, runtime, sender ?? { async send(_chat, _text, uuid) { return uuid; } },

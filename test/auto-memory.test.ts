@@ -40,7 +40,7 @@ test('automatic extraction persists once with source references and creates acti
   let calls = 0;
   const source = message('m1', '我长期偏好中文回答。');
   const f = fixture(t, async input => { calls++; assert.deepEqual(input.messages, [{ messageId: 'm1', text: source.text }]); return { memories: [candidate('m1', source.text)] }; });
-  f.store.enqueue(source); f.queue.enqueue([source.key], 'project', 'run-one'); f.queue.enqueue([source.key], 'project', 'run-one');
+  f.store.enqueue(source); f.queue.enqueue([source.key], 'directory', 'run-one'); f.queue.enqueue([source.key], 'directory', 'run-one');
   assert.equal(jobs(f.store).length, 1); assert.doesNotMatch(JSON.stringify(jobs(f.store)), /长期偏好中文/);
   assert.equal(f.queue.pending(), false); due(f.store); assert.equal(f.queue.pending(), true); await f.queue.tick(); due(f.store); await f.queue.tick();
   assert.equal(calls, 1); assert.equal(f.queue.pending(), false);
@@ -61,10 +61,10 @@ test('queue rejects unpaired speakers, quoted material, commands, attachments an
   assert.equal(seen.length, 1); assert.equal(seen[0]!.ownerId, 'alice'); assert.deepEqual(seen[0]!.messages.map(row => row.messageId), ['safe']);
 });
 
-test('fabricated evidence and out-of-project local writes are ignored while valid candidates survive', async t => {
+test('fabricated evidence and out-of-directory local writes are ignored while valid candidates survive', async t => {
   const source = message('proof', '我偏好中文，项目使用 pnpm。');
   const f = fixture(t, async () => ({ memories: [candidate('proof', '不存在的原话'), candidate('other', source.text),
-    candidate('proof', '项目使用 pnpm', { key: 'project:tool', kind: 'project_knowledge', level: 'local', project: 'other' }),
+    candidate('proof', '项目使用 pnpm', { key: 'directory:tool', kind: 'knowledge', level: 'local', directory: 'other' }),
     candidate('proof', '我偏好中文')] }));
   f.store.enqueue(source); f.queue.enqueue([source.key], 'demo', 'proof-run'); due(f.store); await f.queue.tick();
   assert.equal(f.items().length, 1); assert.equal(jobs(f.store)[0]!.rejected, 3); assert.equal(jobs(f.store)[0]!.accepted, 1);
@@ -238,7 +238,7 @@ test('model evidence bounds match the durable memory API', async t => {
 
 test('memory capacity is reported when an automatic candidate cannot be saved',async t=>{
  const source=message('capacity','这是新的长期偏好');const f=fixture(t,async()=>[candidate('capacity',source.text,{key:'new:concept'})]);
- const authority={kind:'local-owner' as const,authenticated:true,ownerId:'alice',chatKey:'app:alice',chatType:'p2p' as const,project:null,source:{kind:'automatic' as const,ref:'seed'}};
+ const authority={kind:'local-owner' as const,authenticated:true,ownerId:'alice',chatKey:'app:alice',chatType:'p2p' as const,directory:null,source:{kind:'automatic' as const,ref:'seed'}};
  for(let i=0;i<40;i++)f.memory.upsertAutomatic({key:`seed:${i}`,kind:'user_fact',level:'global',privacy:'shared',text:`seed ${i}`,sourceMessageIds:['seed'],evidence:['evidence'],observedAt:Date.now()-3000},authority);
  f.store.enqueue(source);f.queue.enqueue([source.key],null,'capacity-run');due(f.store);await f.queue.tick();
  assert.equal(jobs(f.store)[0]!.error,'capacity');assert.equal(jobs(f.store)[0]!.accepted,0);assert.equal(f.items().length,40);
@@ -247,7 +247,7 @@ test('memory capacity is reported when an automatic candidate cannot be saved',a
 test('extraction receives only its owner records and deleted concept keys without old content or evidence', async t => {
   const seen: AutoMemoryInput[] = [], f = fixture(t, async input => { seen.push(input); return []; });
   const authority = (ownerId: string) => ({ kind: 'local-owner' as const, authenticated: true, ownerId,
-    chatKey: 'app:' + ownerId, chatType: 'p2p' as const, project: null, source: { kind: 'automatic' as const, ref: 'seed-' + ownerId } });
+    chatKey: 'app:' + ownerId, chatType: 'p2p' as const, directory: null, source: { kind: 'automatic' as const, ref: 'seed-' + ownerId } });
   const seed = (key: string, text: string, ownerId = 'alice') => f.memory.upsertAutomatic({
     key, kind: 'user_fact', level: 'global', privacy: 'shared', text, sourceMessageIds: ['seed-message'],
     evidence: ['ORIGINAL-PRIVATE-EVIDENCE'], observedAt: Date.now() - 3000,
@@ -261,7 +261,7 @@ test('extraction receives only its owner records and deleted concept keys withou
   assert.equal(seen.length, 1);
   assert.deepEqual(seen[0]!.existing.map(record => [record.ownerId, record.text]), [['alice', 'ALICE-ACTIVE-BODY']]);
   assert.deepEqual(new Set(seen[0]!.blocked?.map(record => record.key)), new Set(['concept:deleted', 'concept:disabled']));
-  assert.ok(seen[0]!.blocked!.every(record => Object.keys(record).sort().join(',') === 'key,level,project'));
+  assert.ok(seen[0]!.blocked!.every(record => Object.keys(record).sort().join(',') === 'directory,key,level'));
   assert.doesNotMatch(JSON.stringify(seen[0]), /DELETED-OLD-BODY|DISABLED-OLD-BODY|ORIGINAL-PRIVATE-EVIDENCE|BOB-SHARED-BODY/);
 });
 

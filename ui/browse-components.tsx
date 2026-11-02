@@ -59,7 +59,7 @@ export function Pagination({ page, onChange, busy }: { page: Omit<PageResult<unk
 }
 const taskStates = () => [['queued',tr("common.queued")],['running',tr("status.running")],['waiting',tr("common.waitingInput")],['succeeded',tr("status.completed")],['failed',tr("common.failed")],['interrupted',tr("common.interrupted")],['needs_attention',tr("common.needsReview")],['cancelled',tr("common.cancelled")],['problem',tr("browse.allExecutionIssues")]];
 const sessionStates = () => [['running',tr("status.running")],['waiting',tr("common.waitingInput")],['queued',tr("common.queued")],['idle',tr("common.idle")],['current',tr("browse.currentSessions")]];
-const filterKeys = ['q', 'owner', 'project', 'state', 'from', 'to', 'sort', 'dateField'] as const;
+const filterKeys = ['q', 'owner', 'directory', 'state', 'from', 'to', 'sort', 'dateField'] as const;
 const filters = (search: string) => Object.fromEntries(filterKeys.map(key => [key, new URLSearchParams(search).get(key) ?? ''])) as Record<typeof filterKeys[number], string>;
 export function Filters({ kind, search, options, onSearch }: { kind: 'tasks' | 'sessions'; search: string; options?: BrowseOptions; onSearch: (query: URLSearchParams) => void }) {
   const id = useId();

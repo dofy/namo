@@ -359,7 +359,7 @@ test('v2 result controls preserve the authorized callback token',t=>{
 test('/session command renders task context without invoking a model or changing the binding', t => {
   const f = fixture(t, { async run() { throw new Error('session listing must not invoke a model'); } });
   f.store.enqueue(message('session-seed', '优化手机端设置卡片'));
-  const task = f.tasks.create(f.store.get('session-seed')!, { cwd: tmpdir(), project: 'bot', policyHash: 'policy' });
+  const task = f.tasks.create(f.store.get('session-seed')!, { cwd: tmpdir(), policyHash: 'policy' });
   f.engine.accept(message('session-list-command', '/session'));
   const output = f.store.db.prepare("SELECT content FROM outbox WHERE inboxKey='session-list-command' AND kind='result'").get();
   assert.match(String(output?.content), /优化手机端设置卡片 · 当前会话/);

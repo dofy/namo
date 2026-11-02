@@ -45,7 +45,7 @@ test('OAuth rejects invalid callbacks, widened scopes and malicious metadata end
 test('OAuth callback is single-use, checks issuer and does not expose tokens',async t=>{
  const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js'),{McpOAuthFlow}=await import('../src/mcp-oauth-flow.js');
  const {dir}=storeFixture(t,'namo-oauth-flow-'),file=join(dir,'config.json');
- writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',enabled:false,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:[],token:''}]}));
+ writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',token:''}]}));
  const manager=new Management(file),revision=manager.config().revision,fake=fakeOAuth();
  const begin:typeof beginMcpOAuth=(url,callback,scope)=>beginMcpOAuth(url,callback,scope,fake.fetcher);
  const flow=new McpOAuthFlow(manager,()=> 'http://127.0.0.1:45678',begin);const started=await flow.begin(revision,'demo');const state=new URL(started.url).searchParams.get('state')!;
@@ -59,7 +59,7 @@ test('OAuth callback is single-use, checks issuer and does not expose tokens',as
 test('OAuth callback rejects a stale config, leaving prior authorization intact',async t=>{
  const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js'),{McpOAuthFlow}=await import('../src/mcp-oauth-flow.js');
  const {dir}=storeFixture(t,'namo-oauth-stale-'),file=join(dir,'config.json');
- writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',enabled:false,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:[],token:''}]}));
+ writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',token:''}]}));
  const manager=new Management(file),revision=manager.config().revision,fake=fakeOAuth();const flow=new McpOAuthFlow(manager,()=> 'http://127.0.0.1:45678',(url,cb,scope)=>beginMcpOAuth(url,cb,scope,fake.fetcher));
  const started=await flow.begin(revision,'demo'),state=new URL(started.url).searchParams.get('state')!;manager.save(revision,{model:'changed'});
  assert.equal(await flow.finish(new URLSearchParams({state,code:'synthetic-code',iss:issuer})),false);assert.equal(fake.counts.exchanged,0);
@@ -86,7 +86,7 @@ test('expired legacy credentials migrate on refresh without changing their targe
 test('authorization server advertised issuer is required at callback',async t=>{
  const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js'),{McpOAuthFlow}=await import('../src/mcp-oauth-flow.js');
  const {dir}=storeFixture(t,'namo-oauth-iss-'),file=join(dir,'config.json');
- writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',enabled:false,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:[],token:''}]}));
+ writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',token:''}]}));
  const fake=fakeOAuth(),fetcher:typeof fetch=async(input,init)=>{const url=new URL(String(input));if(url.origin===issuer&&url.pathname.startsWith('/.well-known/')){const response=await fake.fetcher(input,init);return Response.json({...await response.json(),authorization_response_iss_parameter_supported:true});}return fake.fetcher(input,init);};
  const manager=new Management(file),flow=new McpOAuthFlow(manager,()=> 'http://127.0.0.1:45678',(url,cb,scope)=>beginMcpOAuth(url,cb,scope,fetcher));const started=await flow.begin(manager.config().revision,'demo'),state=new URL(started.url).searchParams.get('state')!;
  assert.equal(await flow.finish(new URLSearchParams({state,code:'synthetic-code'})),false);assert.equal(fake.counts.exchanged,0);
@@ -122,7 +122,7 @@ test('scope discovery distinguishes unpublished permissions and failed discovery
 test('provider authorization errors are bound to pending state, sanitized and single use',async t=>{
  const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js'),{McpOAuthFlow}=await import('../src/mcp-oauth-flow.js');
  const {dir}=storeFixture(t,'namo-oauth-error-'),file=join(dir,'config.json');
- writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',enabled:false,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:[],token:''}]}));
+ writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',token:''}]}));
  const manager=new Management(file);let exchanged=false;
  const flow=new McpOAuthFlow(manager,()=> 'http://127.0.0.1:45678',async()=>({url:issuer+'/authorize',issuer,state:'test-state',requireIssuer:false,async finish(){exchanged=true;throw Error();}}));
  await flow.begin(manager.config().revision,'demo');
@@ -135,9 +135,9 @@ test('reauthorization commits a changed scope and credential atomically only aft
  const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js'),{McpOAuthFlow}=await import('../src/mcp-oauth-flow.js');
  const {dir}=storeFixture(t,'namo-oauth-draft-'),file=join(dir,'config.json');
  const fake=fakeOAuth(),initial=await beginMcpOAuth(resource,redirect,'read',fake.fetcher),oldRef=saveMcpOAuth(dir,await initial.finish('synthetic-code'));
- writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',enabled:true,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:[],token:oldRef}]}));
+ writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',token:oldRef}]}));
  const before=(await import('node:fs')).readFileSync(file,'utf8'),manager=new Management(file),revision=manager.config().revision;
- const draft={id:'demo',type:'remote',url:resource,oauthScope:'read write',enabled:true,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:[]};
+ const draft={id:'demo',type:'remote',url:resource,oauthScope:'read write'};
  const flow=new McpOAuthFlow(manager,()=> 'http://127.0.0.1:45678',(url,cb,scope)=>beginMcpOAuth(url,cb,scope,fakeOAuth(scope).fetcher));
  const first=await flow.begin(revision,'demo',draft),state=new URL(first.url).searchParams.get('state')!;
  assert.equal((await import('node:fs')).readFileSync(file,'utf8'),before);
@@ -146,7 +146,7 @@ test('reauthorization commits a changed scope and credential atomically only aft
  const second=await flow.begin(revision,'demo',draft),state2=new URL(second.url).searchParams.get('state')!;
  assert.equal(await flow.finish(new URLSearchParams({state:state2,code:'synthetic-code',iss:issuer})),true);
  const saved=JSON.parse((await import('node:fs')).readFileSync(file,'utf8'));
- assert.equal(saved.mcpConnections[0].oauthScope,'read write');assert.notEqual(saved.mcpConnections[0].token,oldRef);assert.equal(saved.mcpConnections[0].enabled,true);
+ assert.equal(saved.mcpConnections[0].oauthScope,'read write');assert.notEqual(saved.mcpConnections[0].token,oldRef);assert.equal(Object.hasOwn(saved.mcpConnections[0],'enabled'),false);
 });
 
 test('cancelled OAuth drafts cannot later replace the saved connection',async t=>{
@@ -155,7 +155,7 @@ test('cancelled OAuth drafts cannot later replace the saved connection',async t=
  writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[]}));
  const before=(await import('node:fs')).readFileSync(file,'utf8'),manager=new Management(file),revision=manager.config().revision;
  const flow=new McpOAuthFlow(manager,()=> 'http://127.0.0.1:45678',(url,cb,scope)=>beginMcpOAuth(url,cb,scope,fakeOAuth().fetcher));
- const draft={id:'new',type:'remote',url:resource,oauthScope:'read',enabled:false,audience:{organization:false,userIds:[],chatIds:[]},projects:[]};
+ const draft={id:'new',type:'remote',url:resource,oauthScope:'read'};
  const started=await flow.begin(revision,'',draft),state=new URL(started.url).searchParams.get('state')!;flow.cancel('');
  assert.equal(await flow.finish(new URLSearchParams({state,code:'synthetic-code',iss:issuer})),false);
  assert.equal((await import('node:fs')).readFileSync(file,'utf8'),before);

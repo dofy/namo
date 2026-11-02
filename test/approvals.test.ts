@@ -25,7 +25,7 @@ function fixture(t: { after(fn: () => void): void }) {
   writeFileSync(join(repo, 'README.md'), 'approved content\n'); command(repo, ['add', 'README.md']); command(repo, ['commit', '-m', 'approved commit']); command(repo, ['branch', '-M', 'main']);
   command(repo, ['remote', 'add', 'origin', bare]);
   const store = new Store(join(data, 'bot.sqlite')); t.after(() => store.close());
-  const task: ApprovalTaskContext = { taskId: 'N-APPROVAL01', ownerId: 'ou_owner', chatKey: 'chat_owner', project: 'app', cwd: realpathSync(repo), policyHash: 'a'.repeat(64) };
+  const task: ApprovalTaskContext = { taskId: 'N-APPROVAL01', ownerId: 'ou_owner', chatKey: 'chat_owner', cwd: realpathSync(repo), policyHash: 'a'.repeat(64) };
   seedRun(store, 'approval-run', task.taskId);
   const approvals = new GitApprovals(store, { remotes: [{ name: 'origin', url: bare, transport: 'local-test' }] }, new ExecFileGitRunner(git));
   const actor = { ownerId: task.ownerId, chatKey: task.chatKey, authority: 'verified-owner-command' as const };

@@ -1,3 +1,4 @@
+import { directoryConfiguration } from './legacy-config.js';
 import {addsDuplicateMcpEndpoint} from './mcp-endpoint-contract.js';
 import { listCodexMcp, selectCodexMcp, CodexMcpImportError } from './codex-mcp-import.js';
 import { serviceLogs, listApprovals, changeApproval } from './management-operations.js';
@@ -56,7 +57,7 @@ export class Management {
     const text=readFileSync(this.file,'utf8'),raw=JSON.parse(text);
     const path=raw.dataDir??'./data';
     if(typeof path!=='string'||(path.startsWith('~/')?resolve(homedir(),path.slice(2)):resolve(dirname(this.file),path))!==this.dataDir) throw new ManagementError(tr("management.dataDirectoryChangedExternallyCloseRestartWorkbench"));
-    return {raw,revision:digest(text)};
+    return {raw:directoryConfiguration(raw),revision:digest(text)};
   }
   private status():Record<string,any> {
     try{return this.deps.status(loadConfig(this.file));}
@@ -94,7 +95,7 @@ export class Management {
     const {raw,revision}=this.source(),c=raw.codex??{},f=raw.feishu??{};
     let valid=true;try{parseConfig(raw,this.file);}catch{valid=false;}
     let github=publicGitHubAccess();try {github=publicGitHubAccess(parseGitHubAccessConfig(raw.github,process.env));}catch{/* Keep an invalid credential out of the projection. */}
-    let mcpConnections:ReturnType<typeof publicMcpConnections>;try{mcpConnections=publicMcpConnections(parseMcpConnections(raw.mcpConnections,raw.codex?.directories!==undefined));}catch{mcpConnections=[];}
+    let mcpConnections:ReturnType<typeof publicMcpConnections>;try{mcpConnections=publicMcpConnections(parseMcpConnections(raw.mcpConnections));}catch{mcpConnections=[];}
     const service=this.status();let applied:string|undefined,automaticConfiguration=false,configurationReload:string|undefined;
     try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid){applied=h.configRevision;automaticConfiguration=h.automaticConfiguration===true;configurationReload=h.configurationReload;}}catch{/* Not yet instrumented. */}
     let activeModelDefault:{model:string;profile:string}|undefined;
@@ -102,7 +103,7 @@ export class Management {
       try {const agent=resolveAgent(parseConfig(raw,this.file));activeModelDefault={model:agent.model??'',profile:agent.id};}catch{/* Unavailable profiles must not be presented as active. */}
     }
     return {revision,valid,github,mcpConnections,activeModelDefault,automaticConfiguration,configurationReload,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
-      values:{directories:c.directories??Object.values(c.projects??{}),projectAccess:c.projectAccess??{},projects:c.projects??{},defaultProject:c.defaultProject??'',sandbox:c.directories!==undefined?'workspace-write':c.sandbox??'read-only',networkAccess:c.networkAccess??false,allowLocalCommits:c.directories!==undefined?true:c.allowLocalCommits??false,
+      values:{directories:c.directories??[],sandbox:'workspace-write',networkAccess:c.networkAccess??false,allowLocalCommits:true,
         concurrency:Number.isInteger(raw.concurrency)&&raw.concurrency>=1&&raw.concurrency<4?4:raw.concurrency??8,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
         reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??200,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},
       feishu:{appId:f.appId??'',domain:f.domain??'feishu',secretConfigured:!!f.appSecret||!!process.env[f.appSecretEnv??'FEISHU_APP_SECRET'],pairedUsers:Array.isArray(f.allowedUserIds)?f.allowedUserIds.length:0,
@@ -113,8 +114,8 @@ export class Management {
     const db=this.read(s=>{
       const schema=Number(s.db.prepare('PRAGMA user_version').get()?.user_version);
       if(schema!==SCHEMA_VERSION)return {schema,tasks:[],issues:[],workstreams:[]};
-      return {schema,tasks:s.db.prepare('SELECT id,workstreamId,project,state,inputVersion,startedAt,finishedAt,error FROM tasks ORDER BY rowid DESC LIMIT 50').all(),
-        workstreams:s.db.prepare('SELECT id,project,createdAt FROM workstreams ORDER BY createdAt DESC LIMIT 30').all(),
+      return {schema,tasks:s.db.prepare('SELECT id,workstreamId,cwd,state,inputVersion,startedAt,finishedAt,error FROM tasks ORDER BY rowid DESC LIMIT 50').all(),
+        workstreams:s.db.prepare('SELECT id,cwd,createdAt FROM workstreams ORDER BY createdAt DESC LIMIT 30').all(),
         issues:schema===SCHEMA_VERSION?new Recovery(s).list():[],queue:s.status(),usage:{day,turns:Number(s.db.prepare('SELECT value FROM settings WHERE key=?').get(`daily-turns:${day}`)?.value??0),limit}};
     });
     return this.sanitize({service:this.status(),config:this.config(),database:db??{schema:0,tasks:[],issues:[],workstreams:[]},recoveryAvailable:db?.schema===SCHEMA_VERSION,profiles:this.profiles(),assistant:db?.schema===SCHEMA_VERSION?this.read(s=>new AssistantSettings(s).read()):undefined});
@@ -128,8 +129,8 @@ export class Management {
     });}catch(e){if(e instanceof AssistantSettingsError)throw new ManagementError(e.message,
       e.code==='invalid'?400:e.code==='forbidden'?403:e.code==='conflict'||e.code==='run_already_adopted'?409:503);throw e;}
   }
-  private memoryIdentity(ownerId?:unknown):{ownerId:string;owners:{id:string;label:string}[];projects:string[];appId:string;channel:'feishu'|'lark';secret:string} {
-    let config;try{config=loadConfig(this.file);}catch{throw new ManagementError(tr("common.configurationValidationFailedCheckProjectDirectoriesPermissions"),409);}
+  private memoryIdentity(ownerId?:unknown):{ownerId:string;owners:{id:string;label:string}[];directories:string[];appId:string;channel:'feishu'|'lark';secret:string} {
+    let config;try{config=loadConfig(this.file);}catch{throw new ManagementError(tr("common.configurationValidationFailedCheckDirectoriesPermissions"),409);}
     const f=config.feishu,ids=f.access?this.profiles().entries.map(p=>p.userId):[...new Set(f.allowedUserIds)];
     if(!ids.length)throw new ManagementError(tr("management.completeAppSetupUserPairingFirst"),409);
     if(ownerId!==undefined&&(typeof ownerId!=='string'||!ids.includes(ownerId)))throw new ManagementError(tr("management.pairedUsersCurrentAppMayMemoryManaged"),403);
@@ -142,15 +143,15 @@ export class Management {
         .map(row=>[String(row.userId),String(row.name)]));
     })??new Map<string,string>();
     const redact=this.redactor();
-    return {ownerId:selected,owners:ids.map(id=>({id,label:redact(names.get(id)??'')||id})),projects:Object.keys(config.codex.projects??{}),
+    return {ownerId:selected,owners:ids.map(id=>({id,label:redact(names.get(id)??'')||id})),directories:config.codex.directories??[],
       appId:f.appId,channel:f.domain,secret:f.appSecret};
   }
-  private memoryChats(s:Store,ownerId:string,projects:string[]):{chatKey:string;project:string|null}[] {
-    const allowed=new Set(projects),seen=new Set<string>(),result:{chatKey:string;project:string|null}[]=[];
-    const add=(chatKey:unknown,project:unknown)=>{if(typeof chatKey!=='string'||!chatKey)return;const p=typeof project==='string'&&allowed.has(project)?project:null,key=JSON.stringify([chatKey,p]);if(!seen.has(key)){seen.add(key);result.push({chatKey,project:p});}};
-    for(const row of s.db.prepare('SELECT DISTINCT i.chatKey,t.project FROM inbox i LEFT JOIN tasks t ON t.id=i.taskId WHERE i.senderId=?').all(ownerId))add(row.chatKey,row.project);
-    for(const row of s.db.prepare('SELECT DISTINCT chatKey,project FROM workstreams WHERE ownerId=?').all(ownerId))add(row.chatKey,row.project);
-    return result.sort((a,b)=>a.chatKey.localeCompare(b.chatKey)||(a.project??'').localeCompare(b.project??''));
+  private memoryChats(s:Store,ownerId:string,directories:string[]):{chatKey:string;directory:string|null}[] {
+    const allowed=new Set(directories),seen=new Set<string>(),result:{chatKey:string;directory:string|null}[]=[];
+    const add=(chatKey:unknown,directory:unknown)=>{if(typeof chatKey!=='string'||!chatKey)return;const p=typeof directory==='string'&&allowed.has(directory)?directory:null,key=JSON.stringify([chatKey,p]);if(!seen.has(key)){seen.add(key);result.push({chatKey,directory:p});}};
+    for(const row of s.db.prepare('SELECT DISTINCT i.chatKey,t.cwd AS directory FROM inbox i LEFT JOIN tasks t ON t.id=i.taskId WHERE i.senderId=?').all(ownerId))add(row.chatKey,row.directory);
+    for(const row of s.db.prepare('SELECT DISTINCT chatKey,cwd AS directory FROM workstreams WHERE ownerId=?').all(ownerId))add(row.chatKey,row.directory);
+    return result.sort((a,b)=>a.chatKey.localeCompare(b.chatKey)||(a.directory??'').localeCompare(b.directory??''));
   }
   memories(ownerId?:unknown):unknown {
     try{
@@ -167,16 +168,16 @@ export class Management {
     try{return this.write(s=>{
       const account=s.db.prepare("SELECT value FROM settings WHERE key='account'").get()?.value;
       if(account&&account!==identity.appId)throw new ManagementError(tr("common.appDataDirectoryNotMatchProfilesCannot"),409);
-      const redactor=this.redactor(),memory=new Memories(s,redactor),chats=this.memoryChats(s,identity.ownerId,identity.projects);
+      const redactor=this.redactor(),memory=new Memories(s,redactor),chats=this.memoryChats(s,identity.ownerId,identity.directories);
       if(!input||typeof input!=='object'||Array.isArray(input))throw new ManagementError(tr("common.invalidRequestBody"),400);
       const value=input as Record<string,unknown>,authority:MemoryAuthority={kind:'local-owner',authenticated:true,ownerId:identity.ownerId,
         source:{kind:'local-owner',ref:`workbench:${randomUUID()}`}};
       if(action==='save'){
-        const scope=this.validMemoryScope(value.scope,identity.ownerId,identity.projects,chats),text=value.text;
+        const scope=this.validMemoryScope(value.scope,identity.ownerId,identity.directories,chats),text=value.text;
         if(typeof text==='string'&&redactor(text)!==text)throw new ManagementError(tr("management.memoryCannotContainCredentialsRemoveThemRetry"),400);
         memory.save({kind:value.kind as any,scope,text:text as string},authority);
       }else if(action==='import'){
-        const scope=this.validMemoryScope(value.scope,identity.ownerId,identity.projects,chats);
+        const scope=this.validMemoryScope(value.scope,identity.ownerId,identity.directories,chats);
         new MigrationMemory(s,{dataDir:this.dataDir,configFile:this.file,appId:identity.appId},redactor).importPending({
           migrationId:value.migrationId as string,candidateId:value.candidateId as string,fingerprint:value.fingerprint as string,scope,
         },{kind:'local-owner',authenticated:true,ownerId:identity.ownerId});
@@ -196,7 +197,7 @@ export class Management {
   private memoryState(s:Store,identity:ReturnType<Management['memoryIdentity']>):unknown {
     const memory=new Memories(s,this.redactor());
     const redact=this.redactor();
-    return {available:true,ownerId:identity.ownerId,owners:identity.owners,projects:identity.projects,chats:this.memoryChats(s,identity.ownerId,identity.projects),
+    return {available:true,ownerId:identity.ownerId,owners:identity.owners,directories:identity.directories,chats:this.memoryChats(s,identity.ownerId,identity.directories),
       extraction:this.memoryExtraction(s,identity.ownerId),
       imports:new MigrationMemory(s,{dataDir:this.dataDir,configFile:this.file,appId:identity.appId},redact).list(),
       items:memory.manage({kind:'local-owner',authenticated:true,ownerId:identity.ownerId}),limits:{entryChars:MEMORY_LIMITS.entryChars,
@@ -208,25 +209,25 @@ export class Management {
       counts[row.state as keyof typeof counts]=Number(row.n);
     }
     const errors=new Set<MemoryExtractionError>(['extraction_failed','timeout','connection_failed','invalid_output','tool_rejected','capacity']);
-    const rows=s.db.prepare(`SELECT id,project,state,createdAt,attempts,dueAt,leaseUntil,accepted,rejected,error
+    const rows=s.db.prepare(`SELECT id,directory,state,createdAt,attempts,dueAt,leaseUntil,accepted,rejected,error
       FROM memory_jobs WHERE ownerId=? ORDER BY createdAt DESC,id DESC LIMIT 21`).all(ownerId);
     const redact=this.redactor();
     const recent=rows.slice(0,20).map(row=>({
-      id:String(row.id),project:row.project===null?null:redact(String(row.project)),state:row.state as MemoryExtractionJob['state'],
+      id:String(row.id),directory:row.directory===null?null:redact(String(row.directory)),state:row.state as MemoryExtractionJob['state'],
       createdAt:Number(row.createdAt),attempts:Number(row.attempts),dueAt:Number(row.dueAt),leaseUntil:Number(row.leaseUntil),
       accepted:row.accepted===null?null:Number(row.accepted),rejected:row.rejected===null?null:Number(row.rejected),
       error:row.error===null?null:errors.has(row.error as MemoryExtractionError)?row.error as MemoryExtractionError:'extraction_failed' as const,
     }));
     return {...counts,maxAttempts:MEMORY_EXTRACTION_MAX_ATTEMPTS,recent,hasMore:rows.length>20};
   }
-  private validMemoryScope(raw:unknown,ownerId:string,projects:string[],chats:{chatKey:string;project:string|null}[]):MemoryScope {
+  private validMemoryScope(raw:unknown,ownerId:string,directories:string[],chats:{chatKey:string;directory:string|null}[]):MemoryScope {
     if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new ManagementError(tr("management.invalidMemoryScope"),400);
     const scope=raw as Record<string,unknown>;
     if(scope.ownerId!==ownerId)throw new ManagementError(tr("management.selectedUsersMemoryMayManaged"),403);
-    if(scope.kind==='owner'&&scope.project===null&&scope.chatKey===null)return scope as unknown as MemoryScope;
-    if(scope.kind==='project'&&typeof scope.project==='string'&&projects.includes(scope.project)&&scope.chatKey===null)return scope as unknown as MemoryScope;
-    if(scope.kind==='chat'&&typeof scope.chatKey==='string'&&(scope.project===null||typeof scope.project==='string')
-      &&chats.some(chat=>chat.chatKey===scope.chatKey&&(scope.project===null||chat.project===scope.project)))return scope as unknown as MemoryScope;
+    if(scope.kind==='owner'&&scope.directory===null&&scope.chatKey===null)return scope as unknown as MemoryScope;
+    if(scope.kind==='directory'&&typeof scope.directory==='string'&&directories.includes(scope.directory)&&scope.chatKey===null)return scope as unknown as MemoryScope;
+    if(scope.kind==='chat'&&typeof scope.chatKey==='string'&&(scope.directory===null||typeof scope.directory==='string')
+      &&chats.some(chat=>chat.chatKey===scope.chatKey&&(scope.directory===null||chat.directory===scope.directory)))return scope as unknown as MemoryScope;
     throw new ManagementError(tr("management.memoryScopeNotAvailableSelectedPairedUser"),403);
   }
   private memoryError(error:MemoryError):ManagementError {
@@ -325,7 +326,7 @@ export class Management {
     if(typeof sourceRevision!=='string'||!Array.isArray(ids)||!ids.length||ids.length>20||ids.some(id=>typeof id!=='string'))throw new ManagementError('codex_mcp_selection_invalid',400);
     const current=parseMcpConnections(this.source().raw.mcpConnections),used=new Set(current.map(c=>c.id));
     try {
-      const additions=ids.map(id=>{const selected=selectCodexMcp(id,sourceRevision,this.deps.codexMcpConfig),normalized=selected.id.toLowerCase();if(used.has(normalized))throw new ManagementError('codex_mcp_duplicate',400);used.add(normalized);return {id:normalized,type:'remote' as const,url:selected.url,enabled:false,audience:{organization:false,userIds:[],chatIds:[]},projects:[]};});
+      const additions=ids.map(id=>{const selected=selectCodexMcp(id,sourceRevision,this.deps.codexMcpConfig),normalized=selected.id.toLowerCase();if(used.has(normalized))throw new ManagementError('codex_mcp_duplicate',400);used.add(normalized);return {id:normalized,type:'remote' as const,url:selected.url};});
       return this.save(revision,{mcpConnections:[...current.map(({token:_token,...value})=>value),...additions]});
     } catch(error){if(error instanceof ManagementError)throw error;if(error instanceof CodexMcpImportError)throw new ManagementError(error.code,400);throw error;}
   }
@@ -333,7 +334,7 @@ export class Management {
     const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError('mcp_config_changed');
     const connections=parseMcpConnections(raw.mcpConnections),prior=connections.find(c=>c.id===id);
     if(draft===undefined){if(!prior)throw new ManagementError('mcp_config_changed');const {token:_token,...value}=prior;return value;}
-    if(!draft||typeof draft!=='object'||Array.isArray(draft)||Object.keys(draft).some(k=>!['id','type','url','oauthScope','ownerUserId','enabled','audience','projects'].includes(k)))throw new ManagementError('mcp_invalid_config',400);
+    if(!draft||typeof draft!=='object'||Array.isArray(draft)||Object.keys(draft).some(k=>!['id','type','url','oauthScope','ownerUserId'].includes(k)))throw new ManagementError('mcp_invalid_config',400);
     const value=draft as McpConnectionPatch;
     if(id&&(!prior||id!==value.id)||!id&&connections.some(c=>c.id===value.id))throw new ManagementError('mcp_config_changed');
     let parsed;try{parsed=parseMcpConnections([{...value,token:''}])[0];parseConfig({...raw,mcpConnections:[...connections.filter(c=>c.id!==id),parsed]},this.file);}catch{throw new ManagementError('mcp_invalid_config',400);}
@@ -366,17 +367,15 @@ export class Management {
     try {
       const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError(tr("management.configurationChangedAnotherPageProgramRefreshTry"));
       if(!patch||typeof patch!=='object'||Array.isArray(patch))throw new ManagementError(tr("management.invalidConfigurationContent"));
-      const allowed=['directories','serviceAccess','projectAccess','projects','defaultProject','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'];
+      const allowed=['directories','serviceAccess','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'];
       if(Object.keys(patch).some(k=>!allowed.includes(k)))throw new ManagementError(tr("management.configurationIncludesFieldsCannotEdited"));
       const next=structuredClone(raw);next.codex??={};next.feishu??={};
       for(const key of allowed.filter(k=>!['serviceAccess','concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
-      if(patch.directories!==undefined){for(const key of ['projects','projectAccess','defaultProject','readPaths'])delete next.codex[key];next.codex.sandbox='workspace-write';next.codex.allowLocalCommits=true;}
       if(patch.serviceAccess!==undefined) {
         const a=patch.serviceAccess;
         if (!a || typeof a!=='object' || Array.isArray(a) || Object.keys(a).some(k=>!['access','allowedUserIds','allowedChatIds'].includes(k))) throw new ManagementError(tr("management.invalidOrganizationAccessSettings"),400);
         next.feishu.access=a.access;next.feishu.allowedUserIds=a.allowedUserIds;next.feishu.allowedChatIds=a.allowedChatIds;
       }
-      if(next.codex.defaultProject==='')delete next.codex.defaultProject;
       if(Object.hasOwn(patch,'concurrency')){
         if(!Number.isInteger(patch.concurrency)||patch.concurrency<4||patch.concurrency>64)throw new ManagementError(tr('config.concurrencyMustBetween'),400);
         next.concurrency=patch.concurrency;
@@ -406,14 +405,14 @@ export class Management {
         if(!Array.isArray(patch.mcpConnections)||patch.mcpConnections.length>20)throw new ManagementError('mcp_invalid_config',400);
         const previous=parseMcpConnections(raw.mcpConnections);
         next.mcpConnections=patch.mcpConnections.map((entry:any)=>{
-          if(!entry||typeof entry!=='object'||Array.isArray(entry)||Object.keys(entry).some(k=>!['id','type','enabled','audience','projects','url','oauthScope','ownerUserId','newToken','clearToken'].includes(k))
+          if(!entry||typeof entry!=='object'||Array.isArray(entry)||Object.keys(entry).some(k=>!['id','type','url','oauthScope','ownerUserId','newToken','clearToken'].includes(k))
             ||entry.newToken!==undefined&&typeof entry.newToken!=='string'||entry.clearToken!==undefined&&typeof entry.clearToken!=='boolean'
             ||entry.clearToken&&entry.newToken||!internalOAuth&&typeof entry.newToken==='string'&&isOAuthReference(entry.newToken))throw new ManagementError('mcp_invalid_config',400);
           const prior=previous.find(v=>v.id===entry.id);
           if(prior?.token&&(prior.type!==entry.type||prior.type==='remote'&&prior.url!==entry.url)&&!entry.clearToken&&!entry.newToken)throw new ManagementError('mcp_credential_target_changed',400);
           if(prior?.token&&isOAuthReference(prior.token)&&(prior.oauthScope??'')!==(entry.oauthScope??'')&&!entry.clearToken&&!entry.newToken)throw new ManagementError('mcp_credential_target_changed',400);
           const owner=entry.ownerUserId===undefined?prior?.ownerUserId:entry.ownerUserId;
-          return {id:entry.id,type:entry.type,enabled:entry.enabled,audience:entry.audience,projects:entry.projects,...(owner?{ownerUserId:owner}:{}),...(entry.type==='remote'?{url:entry.url,...(entry.oauthScope?{oauthScope:entry.oauthScope}:{})}:{}),
+          return {id:entry.id,type:entry.type,...(owner?{ownerUserId:owner}:{}),...(entry.type==='remote'?{url:entry.url,...(entry.oauthScope?{oauthScope:entry.oauthScope}:{})}:{}),
             token:entry.clearToken?'':entry.newToken||prior?.token||''};
         });
       }
@@ -423,7 +422,7 @@ export class Management {
       if(next.github?.source==='gh'&&(patch.newGithubToken||patch.clearGithubToken))throw new ManagementError(tr("management.invalidGithubConfiguration"),400);
       if(patch.newGithubToken||patch.clearGithubToken){next.github??={};delete next.github.tokenEnv;delete next.github.token;
         if(patch.newGithubToken)next.github.token=patch.newGithubToken;}
-      try{parseConfig(next,this.file);}catch{throw new ManagementError(tr("management.configurationValidationFailedCheckProjectDirectoriesDefault"));}
+      try{parseConfig(next,this.file);}catch{throw new ManagementError(tr("management.configurationValidationFailedCheckDirectorySettings"));}
       if(patch.mcpConnections!==undefined&&addsDuplicateMcpEndpoint(parseMcpConnections(raw.mcpConnections),parseMcpConnections(next.mcpConnections)))throw new ManagementError('mcp_duplicate_endpoint',400);
       const editor=new ConfigEditor(this.file);if(digest(readFileSync(this.file,'utf8'))!==revision)throw new ManagementError(tr("management.configurationChangedRefreshContinue"));
       editor.save(next);return this.config();

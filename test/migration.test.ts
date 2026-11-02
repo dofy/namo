@@ -92,10 +92,10 @@ test('fresh import is restrictive, excludes runtime authority, and stages only a
 });
 
 test('permissions and workspace import require explicit opt-in and discard wildcards', t => {
-  const f = fixture(t); const plan = previewOpenClawMigration({ sourceFile: f.sourceFile, sourceInstanceId: 'fixture-main', accountId: 'main', targetConfigFile: f.targetFile, projectName: 'legacy' });
+  const f = fixture(t); const plan = previewOpenClawMigration({ sourceFile: f.sourceFile, sourceInstanceId: 'fixture-main', accountId: 'main', targetConfigFile: f.targetFile });
   const result = importOpenClawMigration(plan, { sourceFile: f.sourceFile, options: {
     permissions: { users: 'use-source', chats: 'use-source', mention: 'use-source' },
-    project: { importWorkspace: true, projectName: 'legacy' },
+    directory: { importWorkspace: true },
   } });
   const config = raw(f.targetFile);
   assert.deepEqual(config.feishu.allowedUserIds, ['ou_allowed']);
@@ -110,7 +110,7 @@ test('existing target conflicts never overwrite silently and ConfigEditor makes 
   const existing = { version: 1, dataDir, custom: { keep: true }, feishu: {
     appId: 'cli_existing', appSecret: TARGET_SECRET, appSecretEnv: 'EXISTING_SECRET_ENV', domain: 'lark',
     allowedUserIds: ['ou_existing'], allowedChatIds: [], requireMention: true,
-  }, codex: { bin: 'codex', home: join(dataDir, 'codex-home'), sandbox: 'read-only', timeoutMs: 600000, projects: {}, networkAccess: false, readPaths: [], denyPaths: [], allowLocalCommits: false } };
+  }, codex: { bin: 'codex', home: join(dataDir, 'codex-home'), sandbox: 'read-only', timeoutMs: 600000, directories: [], networkAccess: false, readPaths: [], denyPaths: [], allowLocalCommits: false } };
   writeFileSync(f.targetFile, JSON.stringify(existing));
   const plan = preview(f); assert.deepEqual(plan.conflicts.map(item => item.path).sort(), ['feishu.appId', 'feishu.appSecret', 'feishu.domain']);
   const before = readFileSync(f.targetFile);
@@ -195,7 +195,7 @@ function migrationMemoryFixture(t: { after(fn: () => void): void }) {
   mkdirSync(dataDir); const appId = 'cli_migration_memory';
   const config = { version: 1, agent: 'codex', dataDir, concurrency: 1,
     feishu: { appId, appSecret: 'TEST_ONLY_PROTECTED_VALUE', allowedUserIds: ['alice'], allowedChatIds: [], requireMention: true, domain: 'feishu' },
-    codex: { bin: 'codex', home: join(dataDir, 'codex-home'), sandbox: 'read-only', projects: {}, networkAccess: false, readPaths: [], denyPaths: [], allowLocalCommits: false, timeoutMs: 600000 } };
+    codex: { bin: 'codex', home: join(dataDir, 'codex-home'), sandbox: 'read-only', directories: [], networkAccess: false, readPaths: [], denyPaths: [], allowLocalCommits: false, timeoutMs: 600000 } };
   writeFileSync(configFile, JSON.stringify(config));
   const migrationId = 'aaaaaaaaaaaaaaaaaaaaaaaa', directory = join(dataDir, 'migrations', 'openclaw', migrationId), review = join(directory, 'review');
   mkdirSync(review, { recursive: true });
@@ -223,7 +223,7 @@ test('discovery returns only current-config records, verifies artifacts, and doe
   const candidates = new MigrationMemory(f.store, { dataDir: f.dataDir, configFile: f.configFile, appId: f.appId }).list();
   assert.equal(candidates.length, 2);
   const memory = candidates.find(item => item.candidateId === memoryId)!;
-  assert.equal(memory.eligible, true); assert.equal(memory.memoryKind, 'project_knowledge');
+  assert.equal(memory.eligible, true); assert.equal(memory.memoryKind, 'knowledge');
   assert.deepEqual(memory.source, { instanceId: 'openclaw-main', fingerprint: sha('source'), version: '2026.10.6', accountId: 'main' });
   assert.equal(memory.bytes, Buffer.byteLength(f.memoryText)); assert.equal(memory.imports.length, 0);
   const assistant = candidates.find(item => item.candidateId === assistantId)!;
@@ -233,7 +233,7 @@ test('discovery returns only current-config records, verifies artifacts, and doe
 
 test('import is pending review, explicitly activated, scope-idempotent, and a deletion cannot be resurrected', t => {
   const f = migrationMemoryFixture(t), importer = new MigrationMemory(f.store, { dataDir: f.dataDir, configFile: f.configFile, appId: f.appId });
-  const candidate = importer.list().find(item => item.candidateId === memoryId)!, ownerScope = { kind: 'owner' as const, ownerId: 'alice', project: null, chatKey: null };
+  const candidate = importer.list().find(item => item.candidateId === memoryId)!, ownerScope = { kind: 'owner' as const, ownerId: 'alice', directory: null, chatKey: null };
   const authority = { kind: 'local-owner' as const, authenticated: true, ownerId: 'alice' };
   const created = importer.importPending({ migrationId: f.migrationId, candidateId: memoryId, fingerprint: candidate.fingerprint, scope: ownerScope }, authority);
   assert.equal(created.created, true); assert.equal(created.status, 'pending_review');
@@ -249,7 +249,7 @@ test('import is pending review, explicitly activated, scope-idempotent, and a de
     { created: false, memoryId: active.id, status: 'deleted' });
   assert.equal(memories.manage(authority).filter(item => item.id === active.id).length, 1);
 
-  const projectScope = { kind: 'project' as const, ownerId: 'alice', project: 'project-one', chatKey: null };
+  const projectScope = { kind: 'directory' as const, ownerId: 'alice', directory: 'directory-one', chatKey: null };
   assert.equal(importer.importPending({ migrationId: f.migrationId, candidateId: memoryId, fingerprint: candidate.fingerprint, scope: projectScope }, authority).created, true);
   assert.throws(() => importer.importPending({ migrationId: f.migrationId, candidateId: memoryId, fingerprint: candidate.fingerprint,
     scope: { ...ownerScope, ownerId: 'bob' } }, authority), (error: unknown) => error instanceof MigrationMemoryError && error.code === 'forbidden');
@@ -278,7 +278,7 @@ test('changed, linked, oversized, stale-version, and protected artifacts fail cl
   state.reviewArtifacts[0].fingerprint = sha(text); writeFileSync(protectedValue.stateFile, JSON.stringify(state));
   const candidate = protectedImporter.list().find(item => item.candidateId === memoryId)!;
   assert.throws(() => protectedImporter.importPending({ migrationId: protectedValue.migrationId, candidateId: memoryId, fingerprint: candidate.fingerprint,
-    scope: { kind: 'owner', ownerId: 'alice', project: null, chatKey: null } }, { kind: 'local-owner', authenticated: true, ownerId: 'alice' }),
+    scope: { kind: 'owner', ownerId: 'alice', directory: null, chatKey: null } }, { kind: 'local-owner', authenticated: true, ownerId: 'alice' }),
     (error: unknown) => error instanceof MigrationMemoryError && error.code === 'unsupported');
 });
 
@@ -287,7 +287,7 @@ test('management exposes candidates and imports only to a selected valid paired-
   const before = manager.memories('alice') as any, candidate = before.imports.find((item: any) => item.candidateId === memoryId);
   assert.equal(candidate.eligible, true);
   const input = { migrationId: f.migrationId, candidateId: memoryId, fingerprint: candidate.fingerprint,
-    scope: { kind: 'owner', ownerId: 'alice', project: null, chatKey: null } };
+    scope: { kind: 'owner', ownerId: 'alice', directory: null, chatKey: null } };
   const imported = manager.memory('import', 'alice', input) as any;
   assert.equal(imported.items[0].status, 'pending_review');
   assert.equal(imported.imports.find((item:any)=>item.candidateId===memoryId).imports[0].memoryId, imported.items[0].id);

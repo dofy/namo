@@ -22,10 +22,10 @@ export async function migrateInteractive(file:string,ui:Prompter):Promise<void>{
   if(await ui.confirm(tr("migration.importReviewedSourceUserAllowlist"),false))options.permissions!.users='use-source';
   if(await ui.confirm(tr("migration.importReviewedSourceChatAllowlist"),false))options.permissions!.chats='use-source';
   for(;;) {
-    const answer=await ui.text(tr('onboarding.projectDirectoryAgentMayWork'));
+    const answer=await ui.text(tr('onboarding.directoryDirectoryAgentMayWork'));
     try {const paths=answer.split(';').map(p=>p.trim()).filter(Boolean);if(!paths.length)throw Error();
       options.directories=paths.map(path=>{if(!isAbsolute(path))throw Error();const resolved=realpathSync(path);if(!statSync(resolved).isDirectory()||resolved==='/'||resolved===realpathSync(homedir()))throw Error();return resolved;});break;
-    } catch {ui.info(tr('onboarding.chooseExistingSpecificProjectDirectoryRootHome'));}
+    } catch {ui.info(tr('onboarding.chooseExistingSpecificDirectoryDirectoryRootHome'));}
   }
   for(const candidate of preview.candidates)if(await ui.confirm(tr("migration.copyReviewCandidate",candidate.name),false))options.approvedCandidateIds!.push(candidate.id);
   if(!await ui.confirm(tr("migration.applyExactPreviewTargetConfiguration"),false))return;

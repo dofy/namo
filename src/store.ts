@@ -72,13 +72,6 @@ export class Store {
   thread(chatKey: string): string | undefined { return (this.db.prepare('SELECT threadId FROM sessions WHERE chatKey=?').get(chatKey) as { threadId: string } | undefined)?.threadId; }
   saveThread(chatKey: string, threadId: string): void { this.db.prepare('INSERT INTO sessions VALUES(?,?) ON CONFLICT(chatKey) DO UPDATE SET threadId=excluded.threadId').run(chatKey, threadId); }
   clearThread(chatKey: string): void { this.db.prepare('DELETE FROM sessions WHERE chatKey=?').run(chatKey); }
-  project(chatKey: string): string | undefined { return (this.db.prepare('SELECT value FROM settings WHERE key=?').get(`project:${chatKey}`) as { value: string } | undefined)?.value; }
-  setProject(chatKey: string, project: string): void {
-    this.transaction(() => {
-      this.db.prepare('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(`project:${chatKey}`, project);
-      this.clearThread(chatKey);
-    });
-  }
   bindWorkspace(chatKey: string, cwd: string): void {
     this.transaction(() => {
       const key = `cwd:${chatKey}`;

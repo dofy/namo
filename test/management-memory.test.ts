@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Management, ManagementError } from '../src/management.js';
@@ -12,35 +12,35 @@ import type { Job } from '../src/auto-memory.js';
 import type { MemoryViewState } from '../src/ui-contract.js';
 
 function fixture(t: any) {
-  const root=mkdtempSync(join(tmpdir(),'namo-management-memory-')),data=join(root,'data'),one=join(root,'one'),two=join(root,'two'),file=join(root,'config.json');
+  const root=realpathSync(mkdtempSync(join(tmpdir(),'namo-management-memory-'))),data=join(root,'data'),one=join(root,'one'),two=join(root,'two'),file=join(root,'config.json');
   mkdirSync(data);mkdirSync(one);mkdirSync(two);
   const raw={version:1,agent:'codex',dataDir:data,feishu:{appId:'cli_memory',appSecret:'PRIVATE_MEMORY_SECRET_12345',allowedUserIds:['alice','bob'],allowedChatIds:[]},
-    codex:{bin:'codex',home:join(data,'auth'),projects:{one,two},defaultProject:'one',sandbox:'workspace-write',networkAccess:false,allowLocalCommits:false,denyPaths:[],readPaths:[],timeoutMs:600000},concurrency:1};
+    codex:{bin:'codex',home:join(data,'auth'),directories:[one,two],sandbox:'workspace-write',networkAccess:false,allowLocalCommits:false,denyPaths:[],readPaths:[],timeoutMs:600000},concurrency:1};
   writeFileSync(file,JSON.stringify(raw));
   const store=new Store(join(data,'bot.sqlite'));store.bindAccount('cli_memory');
   const message={key:'cli_memory:group-message',messageId:'group-message',chatKey:'cli_memory:group-one',chatId:'group-one',senderId:'alice',text:'task',
     envelope:{version:1 as const,type:'text',kind:'instruction' as const,chatType:'group' as const,scopeKey:'cli_memory:group-one',materials:[],limitations:[]}};
-  store.enqueue(message);new Tasks(store).create(store.get(message.key)!,{project:'one',cwd:one,policyHash:'p'});store.close();
+  store.enqueue(message);new Tasks(store).create(store.get(message.key)!,{ cwd:one,policyHash:'p'});store.close();
   const manager=new Management(file,{status:()=>({running:false,installed:true,registered:false,mode:'stopped'})});
   t.after(()=>rmSync(root,{recursive:true,force:true}));return {root,data,one,two,file,raw,manager};
 }
 
-test('management exposes only paired owners and known project/chat scopes',t=>{
+test('management exposes only paired owners and known directory/chat scopes',t=>{
   const f=fixture(t),state=f.manager.memories() as any;
   assert.equal(state.ownerId,'alice');assert.deepEqual(state.owners.map((owner:any)=>owner.id),['alice','bob']);
-  assert.deepEqual(state.projects,['one','two']);assert.deepEqual(state.chats,[{chatKey:'cli_memory:group-one',project:'one'}]);
+  assert.deepEqual(state.directories,[f.one,f.two]);assert.deepEqual(state.chats,[{chatKey:'cli_memory:group-one',directory:f.one}]);
   assert.throws(()=>f.manager.memories('mallory'),(error:unknown)=>error instanceof ManagementError&&error.status===403);
   for(const scope of [
-    {kind:'owner',ownerId:'bob',project:null,chatKey:null},
-    {kind:'project',ownerId:'alice',project:'unknown',chatKey:null},
-    {kind:'chat',ownerId:'alice',project:'one',chatKey:'unknown-chat'},
+    {kind:'owner',ownerId:'bob',directory:null,chatKey:null},
+    {kind:'directory',ownerId:'alice',directory:'unknown',chatKey:null},
+    {kind:'chat',ownerId:'alice',directory:f.one,chatKey:'unknown-chat'},
   ])assert.throws(()=>f.manager.memory('save','alice',{kind:'preference',scope,text:'no'}),(error:unknown)=>error instanceof ManagementError&&error.status===403);
 });
 
 test('memory extraction status is bounded, owner scoped and excludes source data and raw errors', t => {
   const f=fixture(t),store=new Store(join(f.data,'bot.sqlite'));
   const save=(id:string,patch:Partial<Job>={})=>memoryJobs(store.db).save({
-    version:1,id,sourceKey:'PRIVATE_SOURCE',ownerId:'alice',chatKey:'PRIVATE_CHAT',chatType:'p2p',project:'one',
+    version:1,id,sourceKey:'PRIVATE_SOURCE',ownerId:'alice',chatKey:'PRIVATE_CHAT',chatType:'p2p',directory:f.one,
     inboxKeys:[],state:'completed',attempts:1,createdAt:Number(id)||1000,dueAt:0,leaseUntil:0,lease:null,accepted:0,rejected:0,...patch,
   });
   for(let i=1;i<=25;i++)save(String(i));
@@ -61,14 +61,14 @@ test('memory extraction status is bounded, owner scoped and excludes source data
   assert.equal(JSON.stringify(store.db.prepare('SELECT * FROM memory_jobs ORDER BY id').all()),before,'reading status never retries or modifies jobs');
   const bob=(f.manager.memories('bob') as MemoryViewState).extraction;
   assert.equal(bob.recent.length,1);assert.equal(bob.failed,1);assert.equal(bob.pending,0);
-  const changed=f.manager.memory('save','alice',{kind:'preference',scope:{kind:'owner',ownerId:'alice',project:null,chatKey:null},text:'Concise answers'}) as MemoryViewState;
+  const changed=f.manager.memory('save','alice',{kind:'preference',scope:{kind:'owner',ownerId:'alice',directory:null,chatKey:null},text:'Concise answers'}) as MemoryViewState;
   assert.deepEqual(changed.extraction,state.extraction,'mutation responses preserve extraction status');
   store.close();
 });
 
 test('management memory save, correct, disable, delete and version conflicts are owner scoped',t=>{
-  const f=fixture(t),scope={kind:'project',ownerId:'alice',project:'one',chatKey:null};
-  let state=f.manager.memory('save','alice',{kind:'project_knowledge',scope,text:'Use API version one'}) as any;
+  const f=fixture(t),scope={kind:'directory',ownerId:'alice',directory:f.one,chatKey:null};
+  let state=f.manager.memory('save','alice',{kind:'knowledge',scope,text:'Use API version one'}) as any;
   const saved=state.items[0];assert.equal(saved.version,1);assert.equal(saved.text,'Use API version one');
   state=f.manager.memory('correct','alice',{id:saved.id,version:1,text:'Use API version two'}) as any;
   assert.equal(state.items[0].version,2);assert.equal(state.items[0].text,'Use API version two');
@@ -79,7 +79,7 @@ test('management memory save, correct, disable, delete and version conflicts are
 });
 
 test('management rejects credentials and assistant errors retain HTTP-relevant status',t=>{
-  const f=fixture(t),scope={kind:'owner',ownerId:'alice',project:null,chatKey:null};
+  const f=fixture(t),scope={kind:'owner',ownerId:'alice',directory:null,chatKey:null};
   assert.throws(()=>f.manager.memory('save','alice',{kind:'preference',scope,text:`keep ${f.raw.feishu.appSecret}`}),(error:unknown)=>error instanceof ManagementError&&error.status===400);
   const current=(f.manager.state() as any).assistant;assert.equal(current.active,false);
   assert.throws(()=>f.manager.assistant('save',0,{name:''}),(error:unknown)=>error instanceof ManagementError&&error.status===400);
@@ -101,7 +101,7 @@ test('message feedback and progress settings default safely and save under feish
 test('memory HTTP API keeps loopback auth, origin, owner and version guards',async t=>{
   const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());
   const post=(input:unknown,cookie='',origin=ui.url)=>fetch(ui.url+'/api/memories',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify(input)});
-  const save={action:'save',ownerId:'alice',input:{kind:'preference',scope:{kind:'owner',ownerId:'alice',project:null,chatKey:null},text:'Keep answers short'}};
+  const save={action:'save',ownerId:'alice',input:{kind:'preference',scope:{kind:'owner',ownerId:'alice',directory:null,chatKey:null},text:'Keep answers short'}};
   assert.equal((await post(save)).status,401);
   const login=await fetch(ui.url+'/api/session',{method:'POST',headers:{Origin:ui.url,'Content-Type':'application/json'},body:JSON.stringify({code:new URL(ui.entryUrl).hash.slice(1)})}),cookie=login.headers.get('set-cookie')!;
   assert.equal((await post(save,cookie,'https://attacker.invalid')).status,403);

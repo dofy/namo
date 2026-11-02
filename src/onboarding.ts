@@ -1,3 +1,4 @@
+import { directoryConfiguration } from './legacy-config.js';
 import { optionalAssistantSetup } from './assistant-setup.js';
 import { t as tr } from './locale.js';
 import { existsSync } from 'node:fs';
@@ -74,22 +75,22 @@ export async function onboard(file: string, ui: Prompter, overrides: Partial<Ini
   try {
     ui.info(tr("onboarding.namoSetupConfigurationCredentialsStayMachineCtrl", file));
     if (editor.value) ui.info(tr("onboarding.existingConfigurationFoundUnknownFieldsAuthorizedUsers"));
-    const reuse = !!editor.value && !!raw.feishu.appId && (raw.codex.directories?.length > 0 || !!raw.codex.defaultProject) && await ui.confirm(tr("onboarding.reuseExistingAgentProjectFeishuSettings"), true);
+    const reuse = !!editor.value && !!raw.feishu.appId && raw.codex.directories?.length > 0 && await ui.confirm(tr("onboarding.reuseExistingAgentDirectoryFeishuSettings"), true);
     if (!reuse) {
       ui.info(tr("onboarding.codexOnly"));
       const found = detectAgents(raw.codex?.bin ?? 'codex').find(a => a.id === 'codex');
       raw.agent = 'codex'; raw.codex ??= initialConfig(file).codex;
       raw.codex.bin = await ui.text(tr("onboarding.codexExecutablePathCommand"), found?.path ?? raw.codex.bin ?? 'codex');
       for (;;) {
-        const previous = raw.codex.directories ?? Object.values(raw.codex.projects ?? {});
-        const answer = await ui.text(tr("onboarding.projectDirectoryAgentMayWork"), previous.join(';'));
-        if (!answer.trim()) { ui.info(tr("onboarding.chooseExistingSpecificProjectDirectoryRootHome")); continue; }
+        const previous = directoryConfiguration(raw).codex.directories;
+        const answer = await ui.text(tr("onboarding.directoryDirectoryAgentMayWork"), previous.join(';'));
+        if (!answer.trim()) { ui.info(tr("onboarding.chooseExistingSpecificDirectoryDirectoryRootHome")); continue; }
         const next = structuredClone(raw);
         next.codex.directories = answer.split(';').map(p => p.trim()).filter(Boolean);
-        for (const key of ['projects','projectAccess','defaultProject','readPaths']) delete next.codex[key];
+
         next.codex.sandbox = 'workspace-write'; next.codex.allowLocalCommits = true;
         try { next.codex.directories = parseConfig(next,file).codex.directories; raw = next; break; }
-        catch { ui.info(tr("onboarding.chooseExistingSpecificProjectDirectoryRootHome")); }
+        catch { ui.info(tr("onboarding.chooseExistingSpecificDirectoryDirectoryRootHome")); }
       }
       raw.codex.networkAccess = await ui.confirm(tr("onboarding.allowNetworkAccessAgentCommands"), raw.codex.networkAccess === true);
       for (;;) {
@@ -104,8 +105,7 @@ export async function onboard(file: string, ui: Prompter, overrides: Partial<Ini
       }
       raw.feishu.appSecret = await ui.text(tr("onboarding.appSecretHiddenInput"), raw.feishu.appSecret ?? '', true);
     }
-    raw.codex.directories ??= Object.values(raw.codex.projects ?? {});
-    for (const key of ['projects','projectAccess','defaultProject','readPaths']) delete raw.codex[key];
+    raw=directoryConfiguration(raw);
     raw.codex.sandbox = 'workspace-write'; raw.codex.allowLocalCommits = true;
     parseConfig(raw,file); editor.save(raw); checkpoint('agent');
     let config = loadConfig(file);

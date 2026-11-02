@@ -19,7 +19,7 @@ function fixture(t:any,chatType:'p2p'|'group'='p2p',owner='alice',tenant='tenant
   const { dir, store } = storeFixture(t, 'namo-github-simple-');
   const file = join(dir, 'config.json');
   writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'synthetic-feishu',allowedUserIds:['alice'],access:{mode:'organization',tenantKey:'tenant'}},
-    codex:{home:join(dir,'auth'),sandbox:'workspace-write',networkAccess:true,allowLocalCommits:true,projects:{app:dir},defaultProject:'app',projectAccess:{app:{organization:true,userIds:[],chatIds:[],permission:'workspace-write'}}},
+    codex:{home:join(dir,'auth'),sandbox:'workspace-write',networkAccess:true,allowLocalCommits:true,directories: []},
     github:{mode:'simple',ownerUserId:'alice',token:credential,repositories:[],allowedUserIds:[],...(chatType==='group'?{grants:[{repository:'org/repo',organization:false,userIds:[],chatIds:['chat']}]}:{})}}));
   store.enqueue({key:'input',messageId:'input',chatKey:'app:chat',chatId:'chat',senderId:owner,text:'GitHub task',envelope:{version:1,type:'text',kind:'instruction',scopeKey:'app:chat',chatType,tenantKey:tenant,materials:[],limitations:[]}});
   const task=new Tasks(store).create(store.get('input')!,{cwd:dir,policyHash:'test'});
@@ -90,8 +90,8 @@ test('groups may read only explicitly granted repositories, but cannot write or 
   f.edit(c=>{c.github.grants=[];});
   assert.throws(()=>assertGitHubApiDelivery(f.store,loadConfig(f.file),f.task),/access_denied|access_changed/);
   assert.equal(requests,1);
-  const policy=executionPolicy(c.codex,c.feishu,f.store.get('input')!,'app',c.github);
-  assert.equal(policy.sandbox,'read-only');assert.equal(policy.networkAccess,false);assert.equal(policy.allowLocalCommits,false);
+  const policy=executionPolicy(c.codex,c.feishu,f.store.get('input')!);
+  assert.equal(policy.sandbox,'workspace-write');assert.equal(policy.networkAccess,true);assert.equal(policy.allowLocalCommits,true);
 });
 
 test('only the bound owner private chat can use the credential; spoofed identity and foreign organizations fail before HTTP',async t=>{

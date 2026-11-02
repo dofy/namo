@@ -17,14 +17,14 @@ function fixture(t: TestContext) {
   mkdirSync(project);
   const store = new Store(join(dir, 'bot.sqlite')), tasks = new Tasks(store);
   store.bindAccount('app');
-  writeFileSync(file, JSON.stringify({ dataDir:dir, feishu:{appId:'app',appSecret:'TEST_ONLY_SECRET_123',allowedUserIds:['alice','bob']}, codex:{bin:'codex',home:join(dir,'home'),sandbox:'read-only',projects:{app:project},defaultProject:'app'} }));
+  writeFileSync(file, JSON.stringify({ dataDir:dir, feishu:{appId:'app',appSecret:'TEST_ONLY_SECRET_123',allowedUserIds:['alice','bob']}, codex:{bin:'codex',home:join(dir,'home'),sandbox:'read-only',directories: [project]} }));
   const manager = new Management(file, { status: () => ({ running:false,installed:false,registered:false,mode:'stopped' }) });
   const view = () => new Browse(store, { appId:'app',channel:'feishu' }, makeRedactor(['TEST_ONLY_SECRET_123']));
   let seq = 0;
   function add(input: { text?:string; owner?:string; project?:string|null; at?:number; state?:string; start?:number|null; end?:number|null; chat?:string } = {}) {
     const key = `m-${++seq}`, owner = input.owner ?? 'alice', chat = input.chat ?? owner;
     store.enqueue({ key, messageId:key,chatId:chat,chatKey:chat,senderId:owner,text:input.text ?? `任务 ${seq}`,createdAt:input.at ?? Date.now() });
-    const task = tasks.create(store.get(key)!, { project:input.project === null ? undefined : input.project ?? 'app',cwd:input.project === null ? dir : project,policyHash:'p' });
+    const task = tasks.create(store.get(key)!, { cwd:input.project === null ? dir : project,policyHash:'p' });
     store.db.prepare('UPDATE tasks SET state=?,startedAt=?,finishedAt=? WHERE id=?').run(input.state ?? 'queued',input.start ?? null,input.end ?? null,task.id);
     return task;
   }
@@ -84,10 +84,10 @@ test('titles and names are scoped and redacted; missing names stay explicit and 
   const f=fixture(t);f.add({text:'包含 TEST_ONLY_SECRET_123 的任务',project:null});
   new Profiles(f.store,{channel:'feishu',appId:'app',userId:'alice'}).update(0,{name:'正确称呼'},{source:'local-owner'});
   f.store.db.prepare("INSERT INTO user_profiles VALUES('lark','other','alice','不可泄露其他应用的名字','','',1,1)").run();
-  const list=f.view().tasks(q('project=isolated'));assert.equal(list.total,1);assert.equal(list.items[0].ownerName,'正确称呼');assert.match(list.items[0].title,/REDACTED/);
+  const list=f.view().tasks(q('directory='+encodeURIComponent(f.dir)));assert.equal(list.total,1);assert.equal(list.items[0].ownerName,'正确称呼');assert.match(list.items[0].title,/REDACTED/);
   assert.doesNotMatch(JSON.stringify(list),/TEST_ONLY_SECRET_123|不可泄露/);
   f.add({owner:'bob',project:'other'});assert.equal(f.view().tasks(q('owner=bob')).items[0].ownerName,'');
-  assert.deepEqual(f.view().options(),{users:[{id:'alice',name:'正确称呼'},{id:'bob',name:''}],projects:['other']});
+  assert.deepEqual(f.view().options(),{users:[{id:'alice',name:'正确称呼'},{id:'bob',name:''}],directories:[f.dir,join(f.dir,'project')]});
 });
 
 test('dashboard aggregates all records, uses finish dates for results, excludes cancellation and preserves empty denominators', t => {

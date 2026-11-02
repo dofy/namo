@@ -104,28 +104,12 @@ test('receipt storage failure stops dispatch and leaves sending evidence for rec
   store.db.exec('DROP TRIGGER fail_receipt'); assert.equal(store.recover().unknown, 1);
 });
 
-test('project selection persists, clears old context, rejects busy switches and arbitrary paths', async t => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'bot-project-'))); const store = new Store(join(dir, 'bot.sqlite'));
-  mkdirSync(join(dir, 'one')); mkdirSync(join(dir, 'two'));
-  const runs: { cwd: string; thread?: string }[] = [];
-  const runtime: Runtime = { async run(r) {
-    runs.push({ cwd: r.cwd, thread: r.threadId }); r.onThread(`thread-${runs.length}`);
-    return { text: 'answer', threadId: `thread-${runs.length}`, turnId: 'turn' };
-  } };
-  const config = { dataDir: dir, concurrency: 1, codex: { bin: 'codex', home: join(dir, 'home'), timeoutMs: 1000,
-    sandbox: 'workspace-write' as const, projects: { one: join(dir, 'one'), two: join(dir, 'two') }, defaultProject: 'one' } };
-  const engine = new Engine(store, runtime, { async send(_c, _t, uuid) { return uuid; } }, config);
-  t.after(async () => { await engine.stop(); store.close(); rmSync(dir, { recursive: true, force: true }); });
-  store.saveThread('chat', 'stale-hashed-workspace-thread');
-  engine.accept(msg('a')); engine.accept(msg('busy', 'chat', '/project two'));
-  assert.equal(store.project('chat'), undefined);
-  engine.start(); await wait(() => store.get('a')?.state === 'replied');
-  assert.deepEqual(runs[0], { cwd: join(dir, 'one'), thread: undefined });
-  engine.accept(msg('switch', 'chat', '/project two'));
-  assert.equal(store.project('chat'), 'two'); assert.equal(store.thread('chat'), undefined);
-  engine.accept(msg('invalid', 'chat', '/project /etc')); assert.equal(store.project('chat'), 'two');
-  engine.accept(msg('b')); await wait(() => store.get('b')?.state === 'replied');
-  assert.deepEqual(runs[1], { cwd: join(dir, 'two'), thread: undefined });
-  engine.accept(msg('c')); await wait(() => store.get('c')?.state === 'replied');
-  assert.equal(runs[2].thread, 'thread-2');
+test('directory listing is a control command and tasks always use isolated scratch',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-directory-engine-')),store=new Store(join(dir,'bot.sqlite'));
+ const runs:string[]=[],engine=new Engine(store,{async run(r){runs.push(r.cwd);return {text:'answer',threadId:'t',turnId:'r'};}},{async send(_c,_t,id){return id;}},
+ {dataDir:dir,concurrency:1,codex:{bin:'codex',home:join(dir,'auth'),sandbox:'workspace-write',timeoutMs:1000,directories:[dir]}});
+ t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+ engine.accept(msg('list','chat','/directories'));assert.equal(store.get('list')?.taskId,null);
+ assert.match(String(store.db.prepare("SELECT content FROM outbox WHERE inboxKey='list'").get()?.content),/可访问目录/);
+ engine.accept(msg('a'));engine.start();await wait(()=>store.get('a')?.state==='replied');assert.notEqual(runs[0],dir);
 });

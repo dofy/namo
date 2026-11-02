@@ -95,23 +95,23 @@ function realDirectory(path: string, label: string): string {
   return realpathSync(path);
 }
 function memoryKind(kind: CandidateKind): Exclude<MemoryKind, 'handoff'> | null {
-  return kind === 'memory' ? 'project_knowledge' : kind === 'user' ? 'user_fact' : kind === 'history' ? 'history_quote' : null;
+  return kind === 'memory' ? 'knowledge' : kind === 'user' ? 'user_fact' : kind === 'history' ? 'history_quote' : null;
 }
 function canonicalScope(scope: MemoryScope): string {
-  return JSON.stringify([scope.kind, scope.ownerId, scope.project, scope.chatKey]);
+  return JSON.stringify([scope.kind, scope.ownerId, scope.directory, scope.chatKey]);
 }
 function bindingKey(fingerprint: string, scope: MemoryScope): string {
   return `${BINDING_PREFIX}${digest(`${fingerprint}\0${canonicalScope(scope)}`)}`;
 }
 function parseScope(value: unknown): MemoryScope {
   const scope = object(value);
-  if (!scope || !['owner', 'project', 'chat'].includes(String(scope.kind))) throw new MigrationMemoryError('storage_invalid', 'Stored import scope is invalid');
-  const ownerId = safeLine(scope.ownerId, 'Stored import owner'), project = scope.project === null ? null : safeLine(scope.project, 'Stored import project', 80),
+  if (!scope || !['owner', 'directory', 'chat'].includes(String(scope.kind))) throw new MigrationMemoryError('storage_invalid', 'Stored import scope is invalid');
+  const ownerId = safeLine(scope.ownerId, 'Stored import owner'), directory = scope.directory === null ? null : safeLine(scope.directory, 'Stored import directory', 4096),
     chatKey = scope.chatKey === null ? null : safeLine(scope.chatKey, 'Stored import chat');
-  if (scope.kind === 'owner' && (project !== null || chatKey !== null)) throw new MigrationMemoryError('storage_invalid', 'Stored owner scope is invalid');
-  if (scope.kind === 'project' && (!project || chatKey !== null)) throw new MigrationMemoryError('storage_invalid', 'Stored project scope is invalid');
+  if (scope.kind === 'owner' && (directory !== null || chatKey !== null)) throw new MigrationMemoryError('storage_invalid', 'Stored owner scope is invalid');
+  if (scope.kind === 'directory' && (!directory || chatKey !== null)) throw new MigrationMemoryError('storage_invalid', 'Stored directory scope is invalid');
   if (scope.kind === 'chat' && !chatKey) throw new MigrationMemoryError('storage_invalid', 'Stored chat scope is invalid');
-  return { kind: scope.kind as MemoryScope['kind'], ownerId, project, chatKey };
+  return { kind: scope.kind as MemoryScope['kind'], ownerId, directory, chatKey };
 }
 
 export class MigrationMemory {

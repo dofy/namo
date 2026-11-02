@@ -1,3 +1,4 @@
+import { directoryConfiguration } from './legacy-config.js';
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync,
   statSync, writeFileSync,
@@ -62,8 +63,8 @@ export interface OpenClawInspection {
 }
 
 export interface MigrationConflict {
-  path: 'feishu.appId' | 'feishu.appSecret' | 'feishu.domain' | 'codex.projects';
-  kind: 'different-value' | 'project-name-in-use';
+  path: 'feishu.appId' | 'feishu.appSecret' | 'feishu.domain' | 'codex.directories';
+  kind: 'different-value';
   sensitive: boolean;
   message: string;
 }
@@ -81,8 +82,7 @@ export interface OpenClawMigrationPreview extends OpenClawInspection {
     allowedChatCount: number;
     wildcardPermissionsExcluded: boolean;
     sourceRequireMention: boolean;
-    workspaceProjectAvailable: boolean;
-    projectName: string;
+    workspaceDirectoryAvailable: boolean;
   };
 }
 
@@ -92,16 +92,15 @@ export interface ImportPermissions {
   mention?: 'require' | 'use-source';
 }
 
-export interface ImportProject {
+export interface ImportDirectory {
   importWorkspace: boolean;
-  projectName?: string;
 }
 
 export interface ImportOptions {
   directories?:string[];
   conflictResolutions?: Partial<Record<MigrationConflict['path'], MigrationConflictResolution>>;
   permissions?: ImportPermissions;
-  project?: ImportProject;
+  directory?: ImportDirectory;
   approvedCandidateIds?: string[];
 }
 
@@ -305,8 +304,8 @@ function targetRaw(file: string): JsonObject | undefined {
   const feishu = object(root.feishu);
   const codex = object(root.codex);
   for (const value of [feishu?.appId, feishu?.appSecret, feishu?.appSecretEnv, feishu?.domain]) if (value !== undefined && typeof value !== 'string') throw new MigrationError('target_invalid', 'The Namo target identity fields have unsupported types and were not changed.');
-  if (codex?.projects !== undefined && !object(codex.projects)) throw new MigrationError('target_invalid', 'The Namo target projects structure is invalid and was not changed.');
-  return root;
+  if (codex?.directories !== undefined && (!Array.isArray(codex.directories)||codex.directories.some(value=>typeof value!=='string'))) throw new MigrationError('target_invalid', 'The Namo target directories structure is invalid and was not changed.');
+  return directoryConfiguration(root);
 }
 
 function fileFingerprint(file: string): string {
@@ -324,10 +323,10 @@ function sourcePermissions(config: JsonObject): { users: string[]; chats: string
 }
 
 function conflict(path: MigrationConflict['path'], sensitive: boolean, message: string): MigrationConflict {
-  return { path, kind: path === 'codex.projects' ? 'project-name-in-use' : 'different-value', sensitive, message };
+  return { path, kind: 'different-value', sensitive, message };
 }
 
-export function previewOpenClawMigration(input: { sourceFile: string; sourceInstanceId: string; accountId: string; targetConfigFile: string; projectName?: string }): OpenClawMigrationPreview {
+export function previewOpenClawMigration(input: { sourceFile: string; sourceInstanceId: string; accountId: string; targetConfigFile: string }): OpenClawMigrationPreview {
   validateInstanceId(input.sourceInstanceId);
   if (!input.accountId) throw new MigrationError('application_selection_required', 'Select one OpenClaw Feishu account explicitly, even when only one is present.');
   const source = parseSource(resolve(input.sourceFile));
@@ -337,23 +336,18 @@ export function previewOpenClawMigration(input: { sourceFile: string; sourceInst
   const targetFile = resolve(input.targetConfigFile);
   const target = targetRaw(targetFile);
   const targetFeishu = object(target?.feishu);
-  const targetCodex = object(target?.codex);
   const conflicts: MigrationConflict[] = [];
   if (typeof targetFeishu?.appId === 'string' && targetFeishu.appId && targetFeishu.appId !== selected.appId) conflicts.push(conflict('feishu.appId', true, 'The target already identifies a different Feishu application.'));
   const targetHasSecret = typeof targetFeishu?.appSecret === 'string' && !!targetFeishu.appSecret || typeof targetFeishu?.appSecretEnv === 'string' && !!targetFeishu.appSecretEnv;
   if (selected.appSecret && targetHasSecret && targetFeishu?.appSecret !== selected.appSecret) conflicts.push(conflict('feishu.appSecret', true, 'The target already has a different protected App Secret or environment reference.'));
   if (typeof targetFeishu?.domain === 'string' && targetFeishu.domain !== selected.domain) conflicts.push(conflict('feishu.domain', false, 'The target Feishu/Lark domain differs from the source.'));
   const permissions = sourcePermissions(selected.policy);
-  const projectName = input.projectName ?? 'openclaw';
-  if (!/^[a-zA-Z0-9_-]{1,48}$/.test(projectName)) throw new MigrationError('project_name_invalid', 'Project name must contain only letters, numbers, underscores, and dashes.');
-  const projects = object(targetCodex?.projects);
-  if (source.workspace && projects?.[projectName] !== undefined && projects[projectName] !== source.workspace) conflicts.push(conflict('codex.projects', false, `The target project name ${projectName} is already in use.`));
   const inspection = publicInspection(source, input.sourceInstanceId);
   return { ...inspection, status: 'supported', accountId: input.accountId,
     selectedApplication: inspection.applications.find(app => app.accountId === input.accountId)!, targetConfigFile: targetFile,
     targetFingerprint: fileFingerprint(targetFile), conflicts,
     proposed: { credentialImportable: !!selected.appSecret, allowedUserCount: permissions.users.length, allowedChatCount: permissions.chats.length,
-      wildcardPermissionsExcluded: permissions.wildcard, sourceRequireMention: permissions.requireMention, workspaceProjectAvailable: !!source.workspace, projectName } };
+      wildcardPermissionsExcluded: permissions.wildcard, sourceRequireMention: permissions.requireMention, workspaceDirectoryAvailable: !!source.workspace } };
 }
 
 function dataDirectory(target: JsonObject | undefined, targetFile: string): string {
@@ -485,23 +479,16 @@ export function importOpenClawMigration(preview: OpenClawMigrationPreview, input
   if ((options.permissions?.chats ?? 'keep-target') === 'use-source') feishu.allowedChatIds = permissions.chats;
   else feishu.allowedChatIds = strings(feishu.allowedChatIds);
   feishu.requireMention = options.permissions?.mention === 'use-source' ? permissions.requireMention : true;
-  if (options.project?.importWorkspace) {
-    if (!source.workspace) throw new MigrationError('workspace_unavailable', 'No safe source workspace is available to import as a project.');
-    const projectName = options.project.projectName ?? preview.proposed.projectName;
-    if (projectName !== preview.proposed.projectName) throw new MigrationError('project_selection_changed', 'Project name changed after preview. Generate and review a new preview.');
-    if (!/^[a-zA-Z0-9_-]{1,48}$/.test(projectName)) throw new MigrationError('project_name_invalid', 'Project name must contain only letters, numbers, underscores, and dashes.');
-    const codex = object(next.codex)!;
-    const projects = object(codex.projects) ?? {};
-    if (projects[projectName] !== undefined && projects[projectName] !== source.workspace && options.conflictResolutions?.['codex.projects'] !== 'use-source') throw new MigrationError('conflict_unresolved', 'The selected project name is already in use.');
-    if(Array.isArray(codex.directories)){codex.directories=[...new Set([...codex.directories,source.workspace])];}
-    else {projects[projectName] = source.workspace; codex.projects = projects;}
-    if (codex.directories===undefined&&(typeof codex.defaultProject !== 'string' || !codex.defaultProject)) codex.defaultProject = projectName;
+  if (options.directory?.importWorkspace) {
+    if (!source.workspace) throw new MigrationError('workspace_unavailable', 'No safe source workspace is available to import as a directory.');
+    const codex=object(next.codex)!;
+    codex.directories=[...new Set([...(directoryConfiguration(next).codex.directories as string[]),source.workspace])];
   }
   if(options.directories!==undefined) {
     if(!Array.isArray(options.directories)||!options.directories.length)throw new MigrationError('directories_required','Choose at least one accessible directory.');
     const codex=object(next.codex)!;
     codex.directories=options.directories.map(value=>{const directory=realpathSync(expandPath(value,dirname(preview.targetConfigFile)));if(!statSync(directory).isDirectory()||directory==='/'||directory===realpathSync(homedir()))throw new MigrationError('directory_invalid','Choose a specific directory.');return directory;});
-    for(const key of ['projects','projectAccess','defaultProject','readPaths'])delete codex[key];
+
     codex.sandbox='workspace-write';codex.allowLocalCommits=true;
     parseConfig(next,preview.targetConfigFile);
   }

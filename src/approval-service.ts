@@ -68,20 +68,16 @@ export class ApprovalService {
     return approvalJobs(this.store.db).list("state='queued'", [], 'ORDER BY createdAt,inboxKey LIMIT 1')[0];
   }
   private task(id: string,directory?:string): ApprovalTaskContext & { state: string } {
-    const row = this.store.db.prepare('SELECT id,ownerId,chatKey,project,cwd,policyHash,state FROM tasks WHERE id=?').get(id) as Record<string, unknown> | undefined;
+    const row = this.store.db.prepare('SELECT id,ownerId,chatKey,cwd,policyHash,state FROM tasks WHERE id=?').get(id) as Record<string, unknown> | undefined;
     if (!row) throw new ApprovalError('task_missing', '任务不存在。');
-    const project = row.project == null ? undefined : String(row.project), cwd = String(row.cwd), savedPolicy = String(row.policyHash);
-    const projects = this.config.codex.projects ?? {};
-    if (savedPolicy !== selectedPolicyHash(this.config, new Tasks(this.store).selection(id) ?? selectAgent(this.config, 'codex'))) throw new ApprovalError('task_configuration_changed', '任务创建后的项目权限配置已更改，不能申请或执行 push。');
-    if (project && (!Object.hasOwn(projects, project) || projects[project] !== cwd)) {
-      throw new ApprovalError('task_configuration_changed', '任务绑定的项目已移除或路径已更改，不能申请或执行 push。');
-    }
-    return { taskId: String(row.id), ownerId: String(row.ownerId), chatKey: String(row.chatKey), project,
-      cwd:approvalDirectory(this.store,this.config,id,cwd,directory), policyHash: savedPolicy, state: String(row.state) };
+    const savedPolicy = String(row.policyHash);
+    if (savedPolicy !== selectedPolicyHash(this.config, new Tasks(this.store).selection(id) ?? selectAgent(this.config, 'codex'))) throw new ApprovalError('task_configuration_changed', '任务创建后的目录权限配置已更改，不能申请或执行 push。');
+    return { taskId: String(row.id), ownerId: String(row.ownerId), chatKey: String(row.chatKey),
+      cwd:approvalDirectory(this.store,this.config,id,directory), policyHash: savedPolicy, state: String(row.state) };
   }
   private view(id: string): string {
     const record = this.approvals.get(id); if (!record) throw new ApprovalError('approval_missing', '审批不存在。');
-    return JSON.stringify({ id: record.id, state: record.state, taskId: record.task.taskId, project: record.task.project, directory:record.task.cwd,
+    return JSON.stringify({ id: record.id, state: record.state, taskId: record.task.taskId, directory:record.task.cwd,
       remote: record.target.remote, ref: record.target.ref, headSha: record.target.headSha, remoteBeforeSha: record.target.remoteBeforeSha,
       expiresAt: record.expiresAt, reason: record.reason, limitedProtection: true,
       limitation: '只保护本审批入口；通用 Agent 运行环境仍可能存在其他联网或凭据绕过路径。' });
@@ -98,7 +94,7 @@ export class ApprovalService {
       if (task.ownerId !== incoming.senderId || task.chatKey !== incoming.chatKey) throw new ApprovalError('task_owner_mismatch', '只能为本人在本聊天中的任务申请 push。');
       if (task.state !== 'succeeded') throw new ApprovalError('task_not_complete', '任务尚未成功完成，不能申请 push。');
       const preview = await this.approvals.request(task, { remote: job.args[1]!, ref: job.args[2]!, configRevision: revision() });
-      return JSON.stringify({ ...preview, scope: { taskId: task.taskId, project: task.project ?? null, chat: 'current' } });
+      return JSON.stringify({ ...preview, scope: { taskId: task.taskId, chat: 'current' } });
     }
     const id = job.args[0]!, record = this.approvals.get(id); if (!record) throw new ApprovalError('approval_missing', '审批不存在。');
     const incoming = this.store.get(job.inboxKey)!;

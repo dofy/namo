@@ -8,7 +8,7 @@ import type { AutoMemoryInput } from '../src/auto-memory.js';
 import { extractConversationMemory, RuntimeError } from '../src/runtime.js';
 import { waitFor } from './helpers.js';
 
-const input: AutoMemoryInput = { ownerId: 'fixture-user', chatKey: 'fixture-dm', chatType: 'p2p', project: 'fixture-project', existing: [],
+const input: AutoMemoryInput = { ownerId: 'fixture-user', chatKey: 'fixture-dm', chatType: 'p2p', directory: 'fixture-directory', existing: [],
   messages: [{ messageId: 'fixture-message', text: 'I prefer concise answers.' }] };
 
 function fixture(t: TestContext, mode: 'complete' | 'tool' | 'hang' | 'ignore-init' | 'ignore-thread' | 'ignore-turn' = 'complete') {

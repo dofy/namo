@@ -2,7 +2,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { acquireLock } from './safety.js';
-import { loadConfig, parseConfig, migrateDirectoryConfiguration, type Config } from './config.js';
+import { loadConfig, parseConfig, migrateDirectoryConfiguration, needsDirectoryConfigurationMigration, type Config } from './config.js';
 import { digest } from './paths.js';
 import type { Store } from './store.js';
 import type { RuntimeFactory, RuntimeHost } from './runtime-host.js';
@@ -31,12 +31,12 @@ export function queuedConfiguration(saved:Config):{config:Config;revision:string
 }
 
 function retainModelContexts(store:Store,before:Config,after:Config):void {
-  const rows=store.db.prepare('SELECT w.id,w.policyHash,w.project,t.inboxKey FROM workstreams w JOIN tasks t ON t.id=(SELECT id FROM tasks WHERE workstreamId=w.id ORDER BY rowid DESC LIMIT 1)').all();
+  const rows=store.db.prepare('SELECT w.id,w.policyHash,t.inboxKey FROM workstreams w JOIN tasks t ON t.id=(SELECT id FROM tasks WHERE workstreamId=w.id ORDER BY rowid DESC LIMIT 1)').all();
   for(const row of rows) {
     const message=store.get(String(row.inboxKey));if(!message)continue;
     try {
-      const oldPolicy=executionPolicy(before.codex,before.feishu,message,row.project?String(row.project):undefined,before.github);
-      const newPolicy=executionPolicy(after.codex,after.feishu,message,row.project?String(row.project):undefined,after.github);
+      const oldPolicy=executionPolicy(before.codex,before.feishu,message);
+      const newPolicy=executionPolicy(after.codex,after.feishu,message);
       if(legacyPolicyHash({...oldPolicy,model:undefined})!==legacyPolicyHash({...newPolicy,model:undefined}))continue;
       const oldConfig={...before,codex:oldPolicy},newConfig={...after,codex:newPolicy};
       if(row.policyHash!==selectedPolicyHash(oldConfig,selectAgent(oldConfig,'codex')))continue;
@@ -54,7 +54,7 @@ export function watchConfiguration(store:Store, host:RuntimeHost, initial:Config
   let applied=revision, appliedConfig=initial, pending=false, closed=false, running:Promise<void>|undefined;
   const observe=()=>{
     if(closed)return;
-    try { if(appliedConfig.codex.directories===undefined||digest(readFileSync(initial.file,'utf8'))!==applied){pending=true;host.drainConfiguration(true);report('pending');} }
+    try { if(needsDirectoryConfigurationMigration(initial.file)||digest(readFileSync(initial.file,'utf8'))!==applied){pending=true;host.drainConfiguration(true);report('pending');} }
     catch {pending=true;host.drainConfiguration(true);report('error');}
   };
   const tick=async()=>{

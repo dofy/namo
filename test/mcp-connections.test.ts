@@ -9,7 +9,6 @@ import { loadConfig } from '../src/config.js';
 import { Management } from '../src/management.js';
 import { assertMcpDelivery, mcpRead, parseMcpConnections } from '../src/mcp-connections.js';
 import { authorizationRevision } from '../src/runtime-config.js';
-import { Engine } from '../src/engine.js';
 const token='lin_test_readonly_123';
 const request={connection:'linear',operation:'list'};
 test('shared directory mode makes authorized MCPs discoverable to any admitted group member without an enable switch',async t=>{
@@ -35,71 +34,33 @@ test('shared MCP calls wait for the requesting member approval in the original g
 function fixture(t:any,chatType:'p2p'|'group'='p2p',sender='alice',tenant='tenant'){
   const {dir,store}=storeFixture(t,'namo-mcp-');const file=join(dir,'config.json');
   const config={dataDir:dir,feishu:{appId:'app',appSecret:'synthetic-feishu-secret',allowedUserIds:['alice'],access:{mode:'organization',tenantKey:'tenant'}},
-    codex:{home:join(dir,'auth'),projects:{app:dir},defaultProject:'app',projectAccess:{app:{organization:true,userIds:[],chatIds:[],permission:'read-only'}}},
-    mcpConnections:[{id:'linear',type:'linear',ownerUserId:'alice',enabled:true,audience:{organization:false,userIds:['alice'],chatIds:['group1']},projects:['app'],token}]};
+    codex:{home:join(dir,'auth'),directories: []},
+    mcpConnections:[{id:'linear',type:'linear',ownerUserId:'alice',token}]};
   writeFileSync(file,JSON.stringify(config));
   store.enqueue({key:'input',messageId:'input',chatKey:'app:chat',chatId:chatType==='group'?'group1':'chat',senderId:sender,text:'Linear task',envelope:{version:1,type:'text',kind:'instruction',scopeKey:'app:chat',chatType,tenantKey:tenant,materials:[],limitations:[]}});
-  const task=new Tasks(store).create(store.get('input')!,{cwd:dir,policyHash:'test',project:'app'});
+  const task=new Tasks(store).create(store.get('input')!,{cwd:dir,policyHash:'test'});
   const edit=(fn:(c:any)=>void)=>{const raw=JSON.parse(readFileSync(file,'utf8'));fn(raw);writeFileSync(file,JSON.stringify(raw));};
   return {dir,file,store,task,edit,config,manager:new Management(file)};
 }
-test('group members cannot approve calls using an unowned shared credential',async t=>{
- const f=fixture(t,'group','bob');let calls=0;
- f.edit(c=>{delete c.mcpConnections[0].ownerUserId;});
- await assert.rejects(mcpRead(f.store,f.file,f.task,{connection:'linear',operation:'call',tool:'delete_issue',arguments:{}},new AbortController().signal,async()=>{calls++;return [];}),/mcp_owner_required/);
- assert.equal(calls,0);
- assert.equal(f.store.db.prepare("SELECT count(*) AS n FROM settings WHERE key LIKE 'mcp-approval:%'").get()?.n,0);
-});
-test('group MCP calls require credential owner approval in the established private chat',async t=>{
- const f=fixture(t,'group','bob'),signal=new AbortController().signal;
- f.edit(c=>{c.mcpConnections[0].ownerUserId='alice';});
- f.store.enqueue({key:'owner-dm',messageId:'owner-dm',chatKey:'app:owner-chat',chatId:'owner-chat',senderId:'alice',text:'hello',envelope:{version:1,type:'text',kind:'instruction',scopeKey:'app:owner-chat',chatType:'p2p',tenantKey:'tenant',materials:[],limitations:[]}});
- f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);
- let calls=0;const tool={name:'delete_issue',inputSchema:{type:'object'}};
- const fake=async(connection:any,request:any,_signal:AbortSignal,beforeCall?:(tool:unknown)=>void)=>{if(request.operation==='list')return [tool];beforeCall?.(tool);assert.equal(connection.token,token);calls++;return {};};
- const pending=mcpRead(f.store,f.file,f.task,{connection:'linear',operation:'call',tool:'delete_issue',arguments:{id:'issue'}},signal,undefined,undefined,fake);
- await new Promise(resolve=>setImmediate(resolve));
- const row=f.store.db.prepare("SELECT key FROM settings WHERE key LIKE 'mcp-approval:%'").get()!;const id=String(row.key).slice('mcp-approval:'.length);
- const preview=f.store.db.prepare('SELECT chatId,route FROM outbox WHERE kind=?').get(`mcp-approval:${id}`);assert.equal(preview?.chatId,'owner-chat');assert.equal(preview?.route,null);
- const sent:string[]=[];const engine=new Engine(f.store,{async run(){throw Error('unexpected');}},{async send(chatId,_text,uuid){sent.push(chatId);return uuid;}},loadConfig(f.file));
- await (engine as unknown as {flush():Promise<void>}).flush();assert.deepEqual(sent,['owner-chat']);
- const {mcpApprovalCommand}=await import('../src/mcp-write-approval.js');
- const cmd=(key:string,senderId:string,chatKey:string,chatId:string,chatType:'group'|'p2p')=>{f.store.enqueue({key,messageId:key,chatKey,chatId,senderId,text:`/mcp-approve ${id} --confirm`,envelope:{version:1,type:'text',kind:'instruction',scopeKey:chatKey,chatType,tenantKey:'tenant',materials:[],limitations:[]}});mcpApprovalCommand(f.store,f.store.get(key)!);};
- cmd('bob-approve','bob','app:chat','group1','group');assert.equal(calls,0);
- cmd('owner-group','alice','app:chat','group1','group');assert.equal(calls,0);
- cmd('owner-approve','alice','app:owner-chat','owner-chat','p2p');await pending;assert.equal(calls,1);
-});
-test('group MCP approval fails closed if the credential owner is removed while waiting',async t=>{
- const f=fixture(t,'group','bob'),signal=new AbortController().signal;f.edit(c=>{c.mcpConnections[0].ownerUserId='alice';});
- f.store.enqueue({key:'owner-dm',messageId:'owner-dm',chatKey:'app:owner',chatId:'owner',senderId:'alice',text:'hello',envelope:{version:1,type:'text',kind:'instruction',scopeKey:'app:owner',chatType:'p2p',tenantKey:'tenant',materials:[],limitations:[]}});
- f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);let calls=0;const tool={name:'update',inputSchema:{type:'object'}};
- const fake=async(_c:any,r:any,_s:AbortSignal,before?:(v:unknown)=>void)=>{if(r.operation==='list')return [tool];before?.(tool);calls++;return {};};
- const pending=mcpRead(f.store,f.file,f.task,{connection:'linear',operation:'call',tool:'update'},signal,undefined,undefined,fake);await new Promise(resolve=>setImmediate(resolve));
- const row=f.store.db.prepare("SELECT key FROM settings WHERE key LIKE 'mcp-approval:%'").get()!,id=String(row.key).slice('mcp-approval:'.length);
- f.edit(c=>{c.feishu.allowedUserIds=[];});
- f.store.enqueue({key:'approve',messageId:'approve',chatKey:'app:owner',chatId:'owner',senderId:'alice',text:`/mcp-approve ${id} --confirm`,envelope:{version:1,type:'text',kind:'instruction',scopeKey:'app:owner',chatType:'p2p',tenantKey:'tenant',materials:[],limitations:[]}});
- const {mcpApprovalCommand}=await import('../src/mcp-write-approval.js');mcpApprovalCommand(f.store,f.store.get('approve')!);
- await assert.rejects(pending,/mcp_approval_changed/);assert.equal(calls,0);
-});
 test('editing MCP connections does not change the global task authorization revision',t=>{
  const f=fixture(t),before=authorizationRevision(loadConfig(f.file));
  f.edit(c=>{c.mcpConnections.push({...c.mcpConnections[0],id:'disabled',type:'remote',enabled:false,url:'https://other.example/mcp'});});
  assert.equal(authorizationRevision(loadConfig(f.file)),before);
 });
 test('connection validation rejects arbitrary transports and unsafe tokens',()=>{
-  const good={id:'linear',type:'linear',enabled:true,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:[],token};
+  const good={id:'linear',type:'linear',token};
   assert.equal(parseMcpConnections([good])[0].id,'linear');
-  for(const item of [{...good,url:'https://evil.invalid'}, {...good,type:'stdio'}, {...good,token:'token\r\nheader'}, {...good,token:''},{...good,id:'../x'}])assert.throws(()=>parseMcpConnections([item]));
+  for(const item of [{...good,url:'https://evil.invalid'}, {...good,type:'stdio'}, {...good,token:'token\r\nheader'}, {...good,id:'../x'}])assert.throws(()=>parseMcpConnections([item]));
   assert.throws(()=>parseMcpConnections([good,good]));
 });
 test('management saves scoped connection without revealing token and preserves it across edits',t=>{
  const f=fixture(t),view=f.manager.config();assert.doesNotMatch(JSON.stringify(view),new RegExp(token));
  assert.equal(view.mcpConnections[0].credentialConfigured,true);
- const saved=f.manager.save(view.revision,{mcpConnections:[{id:'linear',type:'remote',url:'https://mcp.linear.app/mcp/readonly',oauthScope:'read',enabled:true,audience:{...f.config.mcpConnections[0].audience,chatIds:['group1','group2']},projects:['app']}]});
+ const saved=f.manager.save(view.revision,{mcpConnections:[{id:'linear',type:'remote',url:'https://mcp.linear.app/mcp/readonly',oauthScope:'read'}]});
  assert.equal(loadConfig(f.file).mcpConnections![0].token,token);assert.doesNotMatch(JSON.stringify(saved),new RegExp(token));
  assert.throws(()=>f.manager.save(view.revision,{mcpConnections:[]}),/配置已被|configuration/i);
  const revision=f.manager.config().revision;
- assert.throws(()=>f.manager.save(revision,{mcpConnections:[{id:'linear',type:'linear',enabled:true,audience:f.config.mcpConnections[0].audience,projects:['other']}]}));
+ assert.throws(()=>f.manager.save(revision,{mcpConnections:[{id:'linear',type:'linear',}]}));
  assert.equal(loadConfig(f.file).mcpConnections![0].token,token);
 });
 test('task identity, chat and project grants are checked before calling and after revocation',async t=>{
@@ -107,25 +68,25 @@ test('task identity, chat and project grants are checked before calling and afte
  const f=fixture(t),sig=new AbortController().signal;
  const result=await mcpRead(f.store,f.file,f.task,request,sig,reader);assert.doesNotMatch(JSON.stringify(result),new RegExp(token));assert.equal(calls,1);
  assertMcpDelivery(f.store,loadConfig(f.file),f.task);
- f.edit(c=>{c.mcpConnections[0].audience.userIds=[];});
+ f.edit(c=>{c.mcpConnections[0].token='';});
  await assert.rejects(mcpRead(f.store,f.file,f.task,request,sig,reader),/mcp_access/);
  assert.throws(()=>assertMcpDelivery(f.store,loadConfig(f.file),f.task),/mcp_access/);assert.equal(calls,1);
- for(const [type,user,tenant] of [['p2p','bob','tenant'],['p2p','alice','other']] as const){const denied=fixture(t,type,user,tenant);await assert.rejects(mcpRead(denied.store,denied.file,denied.task,request,sig,reader),/mcp_access/);}
+ for(const [type,user,tenant] of [['p2p','alice','other']] as const){const denied=fixture(t,type,user,tenant);await assert.rejects(mcpRead(denied.store,denied.file,denied.task,request,sig,reader),/mcp_access/);}
  const group=fixture(t,'group','bob');await mcpRead(group.store,group.file,group.task,request,sig,reader);assert.equal(calls,2);
 });
 test('in-flight result is rejected after permission is revoked',async t=>{
  const f=fixture(t),sig=new AbortController().signal;
- await assert.rejects(mcpRead(f.store,f.file,f.task,request,sig,async()=>{f.edit(c=>{c.mcpConnections[0].enabled=false;});return {data:'private'};}),/mcp_access/);
+ await assert.rejects(mcpRead(f.store,f.file,f.task,request,sig,async()=>{f.edit(c=>{c.mcpConnections[0].token='';});return {data:'private'};}),/mcp_access/);
 });
 test('unrelated audience changes preserve prior MCP reads and repeated tasks share a receipt',async t=>{
  const f=fixture(t),signal=new AbortController().signal,reader=async()=>({data:'reference'}),tasks=new Tasks(f.store);
  await mcpRead(f.store,f.file,f.task,request,signal,reader);
- f.edit(c=>{c.mcpConnections[0].audience.userIds.push('bob');c.feishu.allowedUserIds.push('bob');});
+ f.edit(c=>{c.feishu.allowedUserIds.push('bob');});
  assert.doesNotThrow(()=>assertMcpDelivery(f.store,loadConfig(f.file),f.task));
  for(let i=0;i<205;i++){
   const original=f.store.get('input')!,key=`next-${i}`;
   f.store.enqueue({...original,key,messageId:key});
-  const task=tasks.create(f.store.get(key)!,{cwd:f.dir,policyHash:'test',project:'app'});
+  const task=tasks.create(f.store.get(key)!,{cwd:f.dir,policyHash:'test'});
   assert.equal(task.workstreamId,f.task.workstreamId);
   await mcpRead(f.store,f.file,task,request,signal,reader);
  }
@@ -136,28 +97,19 @@ test('unrelated audience changes preserve prior MCP reads and repeated tasks sha
 });
 test('legacy MCP receipts migrate only after their original scope is verified',t=>{
  const f=fixture(t),c=loadConfig(f.file),m=f.store.get('input')!,connection=c.mcpConnections![0];
- const scope=createHash('sha256').update(JSON.stringify({connection,appId:c.feishu.appId,access:c.feishu.access,allowedUsers:c.feishu.allowedUserIds,allowedChats:c.feishu.allowedChatIds,taskId:f.task.id,owner:f.task.ownerId,chat:m.chatId,project:f.task.project})).digest('hex');
+ const scope=createHash('sha256').update(JSON.stringify({connection,appId:c.feishu.appId,access:c.feishu.access,allowedUsers:c.feishu.allowedUserIds,allowedChats:c.feishu.allowedChatIds,taskId:f.task.id,owner:f.task.ownerId,chat:m.chatId,})).digest('hex');
  const key=`mcp-read-scope:${f.task.workstreamId}`;
  f.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(key,JSON.stringify([{taskId:f.task.id,id:'linear',scope}]));
  assert.doesNotThrow(()=>assertMcpDelivery(f.store,c,f.task));
- assert.equal(JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key)!.value))[0].version,2);
+ assert.equal(JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key)!.value))[0].version,3);
  f.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify([{taskId:f.task.id,id:'linear',scope:'0'.repeat(64)}]),key);
  assert.throws(()=>assertMcpDelivery(f.store,c,f.task),/mcp_access_changed/);
  assert.equal(JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key)!.value))[0].version,undefined);
 });
 test('applied snapshot prevents new grants before configuration is applied',async t=>{
- const f=fixture(t),applied=loadConfig(f.file);f.edit(c=>{c.mcpConnections[0].audience.organization=true;});
- await assert.rejects(mcpRead(f.store,f.file,f.task,request,new AbortController().signal,async()=>({ok:true}),applied),/mcp_access_changed/);
+ const f=fixture(t);f.edit(c=>{c.mcpConnections[0].token='';});const applied=loadConfig(f.file);f.edit(c=>{c.mcpConnections[0].token=token;});
+ await assert.rejects(mcpRead(f.store,f.file,f.task,request,new AbortController().signal,async()=>({ok:true}),applied),/mcp_access/);
 });
-test('project and chat grants do not imply other projects or private users',async t=>{
- const f=fixture(t,'group','bob');const signal=new AbortController().signal;let calls=0;
- f.edit(c=>{c.mcpConnections[0].audience.chatIds=['other-group'];});
- await assert.rejects(mcpRead(f.store,f.file,f.task,request,signal,async()=>{calls++;return {};}),/mcp_access_denied/);
- f.edit(c=>{c.mcpConnections[0].audience.chatIds=['group1'];c.mcpConnections[0].projects=[];c.codex.projectAccess.app.organization=false;});
- await assert.rejects(mcpRead(f.store,f.file,f.task,request,signal,async()=>{calls++;return {};}),/mcp_access_denied/);
- assert.equal(calls,0);
-});
-
 test('managed runtime refuses unmanaged MCP servers and disabled feature overrides',async t=>{
  const {mkdtempSync,mkdirSync,rmSync,writeFileSync}=await import('node:fs');
  const {tmpdir}=await import('node:os');
@@ -180,19 +132,19 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\\n');});`,{mode:0o700});
 
 test('connection discovery exposes only currently authorized, applied connection IDs',async t=>{
  const f=fixture(t),signal=new AbortController().signal,applied=loadConfig(f.file);let calls=0;
- f.edit(c=>{c.mcpConnections.push({id:'private',type:'linear',enabled:true,audience:{organization:false,userIds:['bob'],chatIds:[]},projects:['app'],token:'private_token_123'});});
+ f.edit(c=>{c.mcpConnections.push({id:'private',type:'linear',token:'private_token_123'});});
  const result=await mcpRead(f.store,f.file,f.task,{operation:'connections'},signal,async()=>{calls++;return {};},applied);
  assert.deepEqual(result,{connections:[{id:'linear',type:'remote'}]});assert.equal(calls,0);
  const foreign=fixture(t,'p2p','bob','other');
  assert.deepEqual(await mcpRead(foreign.store,foreign.file,foreign.task,{operation:'connections'},signal),{connections:[]});
- f.edit(c=>{c.mcpConnections[0].enabled=false;});
+ f.edit(c=>{c.mcpConnections=[];});
  assert.deepEqual(await mcpRead(f.store,f.file,f.task,{operation:'connections'},signal),{connections:[]});
  await assert.rejects(mcpRead(f.store,f.file,f.task,{operation:'connections',connection:'linear'},signal),/mcp_invalid_request/);
 });
 
 test('remote calls require a bound one-time approval and recheck tool metadata before dispatch',async t=>{
  const f=fixture(t),signal=new AbortController().signal;
- f.edit(c=>{c.mcpConnections=[{id:'remote',type:'remote',ownerUserId:'alice',url:'https://mcp.example/mcp',enabled:true,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:['app'],token:''}];});
+ f.edit(c=>{c.mcpConnections=[{id:'remote',type:'remote',ownerUserId:'alice',url:'https://mcp.example/mcp',token:'remote_token_123'}];});
  f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);
  let calls=0;const tool={name:'update',description:'Update',inputSchema:{type:'object'},approvalRequired:true};
  const fake=async(_connection:any,request:any,_signal:AbortSignal,beforeCall?:(tool:unknown)=>void)=>{if(request.operation==='list')return [tool];beforeCall?.(tool);calls++;return {content:[{type:'text',text:'ok'}]};};
@@ -205,16 +157,16 @@ test('remote calls require a bound one-time approval and recheck tool metadata b
 });
 
 test('remote connections accept only public HTTPS endpoints and preserve credentials only for their original target',t=>{
- const f=fixture(t),audience={organization:false,userIds:['alice'],chatIds:[]};
- for(const url of ['http://example.com/mcp','https://127.0.0.1/mcp','https://example.com/mcp?token=private'])assert.throws(()=>parseMcpConnections([{id:'remote',type:'remote',url,enabled:true,audience,projects:[],token:''}]));
- const view=f.manager.config();const saved=f.manager.save(view.revision,{mcpConnections:[{id:'remote',type:'remote',url:'https://example.com/mcp',enabled:true,audience,projects:[],newToken:'secret_token_123'}]});
+ const f=fixture(t);
+ for(const url of ['http://example.com/mcp','https://127.0.0.1/mcp','https://example.com/mcp?token=private'])assert.throws(()=>parseMcpConnections([{id:'remote',type:'remote',url,token:''}]));
+ const view=f.manager.config();const saved=f.manager.save(view.revision,{mcpConnections:[{id:'remote',type:'remote',url:'https://example.com/mcp',newToken:'secret_token_123'}]});
  assert.doesNotMatch(JSON.stringify(saved),/secret_token_123/);
- assert.throws(()=>f.manager.save(saved.revision,{mcpConnections:[{id:'remote',type:'remote',url:'https://elsewhere.example/mcp',enabled:true,audience,projects:[]}]}),/mcp_credential_target_changed/);
+ assert.throws(()=>f.manager.save(saved.revision,{mcpConnections:[{id:'remote',type:'remote',url:'https://elsewhere.example/mcp'}]}),/mcp_credential_target_changed/);
 });
 
 test('remote tool changes after approval never reach the remote dispatch',async t=>{
  const f=fixture(t),signal=new AbortController().signal;
- f.edit(c=>{c.mcpConnections=[{id:'remote',type:'remote',ownerUserId:'alice',url:'https://mcp.example/mcp',enabled:true,audience:{organization:false,userIds:['alice'],chatIds:[]},projects:['app'],token:''}];});
+ f.edit(c=>{c.mcpConnections=[{id:'remote',type:'remote',ownerUserId:'alice',url:'https://mcp.example/mcp',token:'remote_token_123'}];});
  f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);
  let dispatched=false;const tool={name:'update',description:'original',inputSchema:{type:'object'},approvalRequired:true};
  const fake=async(_connection:any,request:any,_signal:AbortSignal,beforeCall?:(tool:unknown)=>void)=>{if(request.operation==='list')return [tool];beforeCall?.({...tool,description:'changed'});dispatched=true;return {};};
@@ -227,10 +179,10 @@ test('remote tool changes after approval never reach the remote dispatch',async 
 
 
 test('admin can test a disabled connection without enabling task access or invoking tools',async t=>{
- const f=fixture(t);f.edit(c=>{c.mcpConnections[0].enabled=false;});
+ const f=fixture(t);f.edit(c=>{c.mcpConnections[0].token='';});
  let calls=0;
  const manager=new Management(f.file,{mcpReader:async(connection,request)=>{
-  calls++;assert.equal(connection.enabled,false);assert.deepEqual(request,{operation:'list'});return [{name:'lookup'}];
+  calls++;assert.equal(connection.token,'');assert.deepEqual(request,{operation:'list'});return [{name:'lookup'}];
  }});t.after(()=>manager.close());
  const before=readFileSync(f.file,'utf8'),revision=manager.config().revision;
  assert.deepEqual(await manager.testMcp(revision,'linear'),{toolCount:1});assert.equal(calls,1);
@@ -244,7 +196,7 @@ test('management rejects duplicate endpoints for add, edit and OAuth before savi
  const f=fixture(t),view=f.manager.config(),original=view.mcpConnections.map(({credentialConfigured:_configured,credentialSource:_source,...v}:any)=>v);
  const before=readFileSync(f.file,'utf8');
  // URL normalization accounts for host case, the default port and dot segments.
- const duplicate={...original[0],id:'another',url:'https://MCP.LINEAR.APP:443/mcp/../mcp/readonly',enabled:false};
+ const duplicate={...original[0],id:'another',url:'https://MCP.LINEAR.APP:443/mcp/../mcp/readonly'};
  assert.throws(()=>f.manager.save(view.revision,{mcpConnections:[...original,duplicate]}),/mcp_duplicate_endpoint/);
  const {McpOAuthFlow}=await import('../src/mcp-oauth-flow.js');let networkCalls=0;
  const flow=new McpOAuthFlow(f.manager,()=> 'http://127.0.0.1:45678',async()=>{networkCalls++;throw new Error('unexpected_oauth_network');});
@@ -264,7 +216,7 @@ test('existing duplicate connections retain independent credentials and grants a
  const view=f.manager.config(),values=view.mcpConnections.map(({credentialConfigured:_configured,credentialSource:_source,...v}:any)=>v);
  assert.equal(loadConfig(f.file).mcpConnections!.length,2);
  const saved=f.manager.save(view.revision,{mcpConnections:values});
- assert.deepEqual(loadConfig(f.file).mcpConnections!.map(v=>({id:v.id,token:v.token,users:v.audience.userIds})),[{id:'linear',token,users:['alice']},{id:'old-copy',token:'separate_token_123',users:['bob']}]);
+ assert.deepEqual(loadConfig(f.file).mcpConnections!.map(v=>({id:v.id,token:v.token})),[{id:'linear',token},{id:'old-copy',token:'separate_token_123'}]);
  assert.doesNotThrow(()=>f.manager.prepareMcpOAuth(saved.revision,'old-copy',values[1]));
  const removed=f.manager.save(saved.revision,{mcpConnections:[values[0]]});assert.equal(removed.mcpConnections.length,1);
  assert.equal(loadConfig(f.file).mcpConnections![0].token,token);
@@ -274,4 +226,19 @@ test('endpoint identity preserves distinct environments and path semantics',asyn
  const {duplicateMcpEndpoint}=await import('../src/mcp-endpoint-contract.js'),base={id:'first',url:'https://api.example/mcp'};
  for(const url of ['https://staging.example/mcp','https://api.example/MCP','https://api.example/mcp/','https://api.example/mcp/readonly'])assert.equal(duplicateMcpEndpoint([base],{id:'second',url}),undefined);
  assert.equal(duplicateMcpEndpoint([base],{id:'second',url:'https://API.EXAMPLE:443/./mcp'})?.id,'first');
+});
+
+test('v15 receipt keeps its original identity check across directory migration and still rejects revocation',t=>{
+  const f=fixture(t),c=loadConfig(f.file),m=f.store.get('input')!,resource=c.mcpConnections![0];
+  const key=`mcp-read-scope:${f.task.workstreamId}`,legacyContext='old-label';
+  const scope=createHash('sha256').update(JSON.stringify({resource,appId:c.feishu.appId,tenant:m.envelope?.tenantKey,owner:f.task.ownerId,chat:m.chatId,project:legacyContext})).digest('hex');
+  const original=JSON.stringify([{taskId:f.task.id,id:'linear',scope,version:2,legacyContext}]);
+  f.store.db.prepare('INSERT INTO settings VALUES(?,?)').run(key,original);
+  const revoked=structuredClone(c);revoked.mcpConnections![0].token='';
+  assert.throws(()=>assertMcpDelivery(f.store,revoked,f.task),/mcp_access/);
+  assert.equal(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value,original);
+  assert.doesNotThrow(()=>assertMcpDelivery(f.store,c,f.task));
+  const receipt=JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key)!.value))[0];
+  assert.equal(receipt.version,3);assert.equal('legacyContext' in receipt,false);
+  assert.notEqual(receipt.scope,scope);assert.doesNotThrow(()=>assertMcpDelivery(f.store,c,f.task));
 });

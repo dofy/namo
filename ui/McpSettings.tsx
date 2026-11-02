@@ -11,7 +11,7 @@ import {getLocale,t as tr} from './i18n';
 
 type Draft=McpConnectionPatch;
 type Editor={originalId:string;revision:string;draft:Draft};
-const patch=(v:ConfigView['mcpConnections'][number]):Draft=>({id:v.id,type:v.type,url:v.url,enabled:true,audience:{organization:true,userIds:[],chatIds:[]},projects:[],...(v.oauthScope?{oauthScope:v.oauthScope}:{})});
+const patch=(v:ConfigView['mcpConnections'][number]):Draft=>({id:v.id,type:v.type,url:v.url,...(v.oauthScope?{oauthScope:v.oauthScope}:{})});
 const errorMessage=(error:unknown)=>{const code=message(error);const keys={mcp_duplicate_endpoint:'mcp.endpointDuplicate',mcp_oauth_invalid_scope:'mcp.scopeInvalid',mcp_oauth_scope:'mcp.scopeGrantedMismatch',mcp_config_changed:'mcp.conflict',mcp_credential_target_changed:'mcp.targetChanged',mcp_oauth_failed:'mcp.oauthFailed',mcp_connection_failed:'mcp.testFailed',mcp_invalid_config:'mcp.invalid',codex_mcp_duplicate:'mcp.importDuplicate',codex_mcp_config_changed:'mcp.importChanged'} as const;return code in keys?tr(keys[code as keyof typeof keys]):code;};
 export function McpSettings({config,refresh,expired}:{config:ConfigView;refresh:()=>Promise<unknown>;expired:boolean}) {
  const [editor,setEditor]=useState<Editor|null>(null),[busy,setBusy]=useState(false),[waiting,setWaiting]=useState(false);
@@ -24,7 +24,7 @@ export function McpSettings({config,refresh,expired}:{config:ConfigView;refresh:
  const createsDuplicate=!!duplicate&&(!prior||mcpEndpointKey(prior.url)!==mcpEndpointKey(draft!.url));
  const credentialChange=!!prior?.credentialConfigured&&!draft?.clearToken&&!draft?.newToken&&(prior.url!==draft?.url||prior.credentialSource==='oauth'&&(prior.oauthScope??'')!==(draft?.oauthScope??''));
  const update=(value:Partial<Draft>)=>{setEditor(old=>old?{...old,draft:{...old.draft,...value}}:old);setError('');};
- const open=(id?:string)=>{setError('');setNotice('');setAuthLink('');setWaiting(false);const value=config.mcpConnections.find(c=>c.id===id);setEditor({originalId:id??'',revision:config.revision,draft:value?patch(value):{id:'',type:'remote',url:'',enabled:true,audience:{organization:true,userIds:[],chatIds:[]},projects:[]}});};
+ const open=(id?:string)=>{setError('');setNotice('');setAuthLink('');setWaiting(false);const value=config.mcpConnections.find(c=>c.id===id);setEditor({originalId:id??'',revision:config.revision,draft:value?patch(value):{id:'',type:'remote',url:''}});};
  const close=async()=>{if(busy)return;if(waiting&&editor)await api.cancelMcpOAuth(editor.originalId);setEditor(null);setWaiting(false);setAuthLink('');setError('');};
  const exit=useEditorExit({open:!!editor,dirty:!!editor&&(dirty||waiting),busy:!!editor&&busy,onClose:close,description:waiting?tr('mcp.discardAuthorization'):undefined});
  useEffect(()=>{
@@ -61,7 +61,7 @@ export function McpSettings({config,refresh,expired}:{config:ConfigView;refresh:
      </section>
      <section className="mcp-editor-section" aria-labelledby="mcp-authorization-heading"><div className="mcp-section-heading"><Heading as="h3" size="3" id="mcp-authorization-heading">{tr('mcp.authorizationTitle')}</Heading>{prior?.credentialConfigured&&<Badge color="green" variant="soft">{tr('mcp.authorizationSaved')}</Badge>}</div>
      <McpScopes url={draft.url} revision={editor.revision} value={draft.oauthScope??''} onChange={oauthScope=>update({oauthScope})}/>
-     <details className="mcp-advanced mcp-credentials"><summary>{tr('mcp.credentialAdvanced')}</summary><Text as="p" size="1" color="gray">{tr('mcp.advancedHelp')}</Text><Field label={tr('mcp.remoteAuth')} htmlFor="mcp-editor-token"><TextField.Root id="mcp-editor-token" type="password" autoComplete="new-password" value={draft.newToken??''} onChange={e=>update({newToken:e.target.value,clearToken:false})} placeholder={prior?.credentialConfigured?tr('mcp.configured'):tr('mcp.remoteTokenPlaceholder')}/></Field>{prior?.credentialConfigured&&<Text as="label" size="2"><Flex gap="2" align="center"><Checkbox checked={draft.clearToken??false} onCheckedChange={v=>update({clearToken:v===true,newToken:'',...(v===true?{enabled:false}:{})})}/>{tr('mcp.clearAuthorization')}</Flex></Text>}</details>
+     <details className="mcp-advanced mcp-credentials"><summary>{tr('mcp.credentialAdvanced')}</summary><Text as="p" size="1" color="gray">{tr('mcp.advancedHelp')}</Text><Field label={tr('mcp.remoteAuth')} htmlFor="mcp-editor-token"><TextField.Root id="mcp-editor-token" type="password" autoComplete="new-password" value={draft.newToken??''} onChange={e=>update({newToken:e.target.value,clearToken:false})} placeholder={prior?.credentialConfigured?tr('mcp.configured'):tr('mcp.remoteTokenPlaceholder')}/></Field>{prior?.credentialConfigured&&<Text as="label" size="2"><Flex gap="2" align="center"><Checkbox checked={draft.clearToken??false} onCheckedChange={v=>update({clearToken:v===true,newToken:''})}/>{tr('mcp.clearAuthorization')}</Flex></Text>}</details>
      </section>
      <Text as="p" size="1" color="gray">{tr('directories.sharedMcp')}</Text>
     </fieldset>

@@ -24,13 +24,13 @@ interface Draft extends Omit<ConfigValues, 'directories' | 'readPaths' | 'denyPa
 }
 function fromConfig(config:ConfigView):Draft {
   const v=config.values;
-  return {...v,directories:(v.directories??Object.values(v.projects)).join('\n'),readPaths:'',denyPaths:v.denyPaths.join('\n'),
+  return {...v,directories:(v.directories??[]).join('\n'),readPaths:'',denyPaths:v.denyPaths.join('\n'),
     timeoutSeconds:String(v.timeoutMs/1000),concurrency:String(v.concurrency),newSecret:'',
     progressDelayMs:String(v.progressDelayMs??200),progressIntervalMs:String(v.progressIntervalMs??5000),progressHeartbeatMs:String(v.progressHeartbeatMs??30000)};
 }
 function toPatch(draft:Draft):ConfigValues&{newSecret:string} {
   const {timeoutSeconds,...values}=draft;
-  return {...values,directories:draft.directories.split('\n').map(x=>x.trim()).filter(Boolean),projects:{},projectAccess:{},defaultProject:'',
+  return {...values,directories:draft.directories.split('\n').map(x=>x.trim()).filter(Boolean),
     sandbox:'workspace-write',allowLocalCommits:true,readPaths:[],denyPaths:draft.denyPaths.split('\n').map(x=>x.trim()).filter(Boolean),
     concurrency:Number(draft.concurrency),timeoutMs:Number(timeoutSeconds)*1000,
     progressDelayMs:Number(draft.progressDelayMs),progressIntervalMs:Number(draft.progressIntervalMs),progressHeartbeatMs:Number(draft.progressHeartbeatMs)};
@@ -60,7 +60,7 @@ export function SettingsPage({ config, recoveryAvailable, refresh, notify }: {
     catch (e) { setError(message(e)); } finally { setSaving(false); }
   }}>
     {error && <Notice error>{error}</Notice>}
-    {!config.valid && <Notice>{tr("common.configurationValidationFailedCheckProjectDirectoriesPermissions")}</Notice>}
+    {!config.valid && <Notice>{tr("common.configurationValidationFailedCheckDirectoriesPermissions")}</Notice>}
     {dirty && revision !== config.revision && <Notice>{tr("settings.configurationChangedAnotherPageProgramDraftPreserved")}</Notice>}
     <fieldset disabled={saving}>
       <PageSection icon="settings" title={tr('directories.title')} description={tr('directories.help')}>

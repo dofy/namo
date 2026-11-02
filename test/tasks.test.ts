@@ -21,11 +21,11 @@ const result = { text: 'answer', threadId: 'thread', turnId: 'turn' };
 
 test('new directory configuration refreshes the native session in the same workstream and retains historical snapshots',t=>{
   const {store}=storeFixture(t,'namo-directory-context-'),tasks=new Tasks(store);
-  store.enqueue(msg('old'));const old=tasks.create(store.get('old')!,{cwd:'/old/project',project:'legacy',policyHash:'old'});
+  store.enqueue(msg('old'));const old=tasks.create(store.get('old')!,{cwd:'/old/project',policyHash:'old'});
   store.saveThread(tasks.sessionKey(old),'old-native-session');
   store.db.prepare("UPDATE tasks SET state='succeeded',finishedAt=? WHERE id=?").run(Date.now(),old.id);
   store.enqueue(msg('new'));const next=tasks.create(store.get('new')!,{cwd:'/namo/scratch',directories:['/shared/source'],policyHash:'new'});
-  assert.equal(next.workstreamId,old.workstreamId);assert.equal(tasks.thread(next),undefined);assert.equal(next.project,null);
+  assert.equal(next.workstreamId,old.workstreamId);assert.equal(tasks.thread(next),undefined);assert.equal(Object.hasOwn(next,'project'),false);
   assert.deepEqual(tasks.directories(next),['/namo/scratch','/shared/source']);assert.deepEqual(tasks.directories(old),['/old/project']);
   assert.equal(tasks.refreshContext(next).length,1);assert.equal(tasks.get(old.id)?.cwd,'/old/project');
 });
@@ -34,7 +34,7 @@ function setup(t: { after: (fn: () => void | Promise<void>) => void }, runtime?:
   for (const p of ['one', 'two']) mkdirSync(join(dir, p));
   const store = new Store(join(dir, 'bot.sqlite')); const tasks = new Tasks(store); const prompts: string[] = [];
   const codex = { bin: 'codex', home: join(dir, 'auth'), timeoutMs: 10_000, sandbox: 'workspace-write' as const,
-    ...(projects ? { projects: { one: join(dir, 'one'), two: join(dir, 'two') }, defaultProject: 'one' } : {}) };
+    directories:projects?[join(dir,'one'),join(dir,'two')]:[] };
   const config = { dataDir: dir, concurrency: 3, codex };
   const engine = new Engine(store, runtime ?? { async run(r) { prompts.push(r.prompt); r.onThread('thread'); r.onTurn('turn'); return result; } },
     { async send(_c, _t, uuid) { return uuid; } }, config);
@@ -123,36 +123,25 @@ test('running image amendments are rejected visibly without changing the task or
   done!(result);await wait(()=>f.tasks.get(task.id)?.state==='succeeded');
 });
 
-test('different chats sharing a project serialize while an independent project runs', async t => {
-  const running: { r: RunRequest; done: (v: typeof result) => void }[] = [];
-  const f = setup(t, { run(r) { return new Promise(resolve => running.push({ r, done: resolve })); } }, true);
-  f.engine.accept(msg('a'));
-  const b = { ...msg('b'), chatKey: 'b', chatId: 'b', envelope: undefined };
-  const c = { ...msg('c'), chatKey: 'c', chatId: 'c', envelope: undefined };
-  f.engine.accept(b); f.store.setProject('c', 'two'); f.engine.accept(c); f.engine.start();
-  await wait(() => running.length === 2);
-  assert.deepEqual(running.map(x => x.r.cwd), [join(f.dir, 'one'), join(f.dir, 'two')]);
-  running[0].done(result); running[1].done(result); await wait(() => running.length === 3);
-  assert.equal(running[2].r.cwd, join(f.dir, 'one')); running[2].done(result);
-  await wait(() => f.tasks.owned(f.store.get('b')!.taskId!, b)?.state === 'succeeded');
-  assert.ok(pathsOverlap(join(f.dir, 'one'), join(f.dir, 'one', '..hidden')));
-  assert.ok(!pathsOverlap(join(f.dir, 'one'), join(f.dir, 'one-more')));
+test('different chats sharing writable directories serialize even with separate scratch paths', async t => {
+ const requests:RunRequest[]=[];const f=setup(t,{async run(r){requests.push(r);await new Promise(resolve=>setTimeout(resolve,20));return result;}},true);
+ f.engine.accept(msg('a'));f.engine.accept({...msg('b'),chatKey:'b',chatId:'b',envelope:undefined});
+ let concurrent=false;const original=f.tasks.start.bind(f.tasks);f.tasks.start=(task)=>{concurrent ||= !!f.store.db.prepare("SELECT 1 FROM tasks WHERE state='running'").get();return original(task);};
+ f.engine.start();await wait(()=>f.store.get('b')?.state==='replied');
+ assert.equal(requests.length,2);assert.notEqual(requests[0].cwd,requests[1].cwd);assert.equal(concurrent,false);
+ for(const request of requests)assert.ok(request.cwd.startsWith(join(f.dir,'workspaces')));
+ assert.ok(pathsOverlap(join(f.dir,'one'),join(f.dir,'one','child')));assert.ok(!pathsOverlap(join(f.dir,'one'),join(f.dir,'one-more')));
 });
-
-test('project and permission snapshots do not follow a changed default or expanded policy', async t => {
-  const dirs: string[] = []; const f = setup(t, { async run(r) { dirs.push(r.cwd); return result; } }, true);
-  f.engine.accept(msg('first')); f.config.codex.defaultProject = 'two'; f.engine.start();
-  await wait(() => f.tasks.list(msg('x'))[0]?.state === 'succeeded'); assert.deepEqual(dirs, [join(f.dir, 'one')]);
-  f.engine.accept(msg('blocked')); f.config.codex.sandbox = 'read-only' as 'workspace-write';
-  await wait(() => f.tasks.get(f.store.get('blocked')!.taskId!)?.state === 'failed');
-  assert.equal(dirs.length, 1);
+test('accepted tasks keep a directory snapshot and new tasks see changed configuration',t=>{
+ const f=setup(t,undefined,true);f.engine.accept(msg('old'));const old=f.tasks.get(f.store.get('old')!.taskId!)!;
+ f.config.codex.directories=[join(f.dir,'two')];f.engine.accept(msg('next'));const next=f.tasks.get(f.store.get('next')!.taskId!)!;
+ assert.ok(f.tasks.directories(old).includes(join(f.dir,'one')));assert.ok(!f.tasks.directories(next).includes(join(f.dir,'one')));
+ assert.equal(old.cwd,next.cwd);assert.notEqual(old.workstreamId,next.workstreamId);
 });
-
-test('materials cannot migrate to a different selected project', async t => {
-  const f = setup(t, undefined, true); f.engine.accept(msg('m', '/material 旧项目材料'));
-  f.engine.accept(msg('switch', '/project two')); f.engine.accept(msg('new', '新项目开发')); f.engine.start();
-  await wait(() => f.tasks.get(f.store.get('new')!.taskId!)?.state === 'succeeded');
-  assert.doesNotMatch(f.prompts[0], /旧项目材料/); assert.equal(f.store.get('m')?.state, 'material');
+test('staged material stays pinned to the accepted directory configuration',async t=>{
+ const f=setup(t,undefined,true);f.engine.accept(msg('material','/material PINNED_CONTENT'));
+ f.config.codex.directories=[join(f.dir,'two')];f.engine.accept(msg('next','new instruction'));f.engine.start();
+ await wait(()=>f.store.get('next')?.state==='replied');assert.doesNotMatch(f.prompts[0],/PINNED_CONTENT/);assert.equal(f.store.get('material')?.state,'material');
 });
 
 test('task references and cancellation require the same verified owner and chat', async t => {
@@ -212,11 +201,11 @@ test('a revision between claim and runtime readiness is sent exactly once, outsi
   assert.equal(inputs.length, 1); assert.equal(steers.length, 1); assert.doesNotMatch(inputs[0], /UNIQUE_REVISION/); assert.match(steers[0], /UNIQUE_REVISION/);
 });
 
-test('legacy selected project and same-owner session survive the first structured task', async t => {
+test('legacy cwd is not adopted as a scratch directory for new tasks', async t => {
   const requests: RunRequest[] = []; const f = setup(t, { async run(r) { requests.push(r); return result; } }, true);
-  f.store.setProject('chat', 'two'); f.store.bindWorkspace('chat', join(f.dir, 'two')); f.store.saveThread('chat', 'old-session');
+   f.store.bindWorkspace('chat', join(f.dir, 'two')); f.store.saveThread('chat', 'old-session');
   f.engine.start(); f.engine.accept(msg('first')); await wait(() => requests.length === 1);
-  assert.equal(requests[0].cwd, join(f.dir, 'two')); assert.equal(requests[0].threadId, 'old-session');
+  assert.notEqual(requests[0].cwd, join(f.dir, 'two')); assert.equal(requests[0].threadId, undefined);
 });
 
 test('a cancellation with failed durable acceptance does not interrupt the execution', async t => {

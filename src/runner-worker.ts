@@ -57,16 +57,15 @@ async function main(): Promise<void> {
       const revision = digest(snapshot ?? readFileSync(file, 'utf8'));
       const current = loadConfig(file);
       const message=store.get(task.inboxKey)!;
-      if (config.file !== file || !taskAuthorizationValid(config,current,message,task.project,task.cwd))
+      if (config.file !== file || !taskAuthorizationValid(config,current,message))
         throw new RuntimeError('task_configuration_changed');
       if(config.codex.directories?.some(path=>!tasks.directories(task).includes(path)))throw new RuntimeError('task_directory_snapshot_changed');
-      const policy = executionPolicy(config.codex,config.feishu,store.get(task.inboxKey)!,task.project??undefined,config.github);
+      const policy = executionPolicy(config.codex,config.feishu,store.get(task.inboxKey)!);
       const effectiveConfig = {...config,codex:policy};
       const selection = tasks.selection(task.id) ?? selectAgent(effectiveConfig, 'codex');
       const selectedConfig = agentCodexConfig(effectiveConfig, selection);
       if (resolve(database) !== join(config.dataDir, 'bot.sqlite') || revision !== runnerJob(store, runId)!.configRevision
-        || task.policyHash !== selectedPolicyHash(effectiveConfig, selection) || realpathSync(task.cwd) !== task.cwd
-        || (task.project && config.codex.projects?.[task.project] !== task.cwd)) throw new RuntimeError('task_configuration_changed');
+        || task.policyHash !== selectedPolicyHash(effectiveConfig, selection) || realpathSync(task.cwd) !== task.cwd) throw new RuntimeError('task_configuration_changed');
       const redact = makeRedactor([config.feishu.appSecret,config.github?.token??'',...(config.mcpConnections??[]).map(c=>c.token)]);
       if (store.get(task.inboxKey)?.cancelRequested || abort.signal.aborted) throw new RuntimeError('cancelled');
       write(() => { evidence = new EvidenceRecorder(store, runId, task.cwd, selectedConfig.denyPaths, redact); });
@@ -97,7 +96,7 @@ async function main(): Promise<void> {
           if(now>=nextAccessCheck){
             try {
               const current = loadConfig(file);
-              if (!taskAuthorizationValid(config,current,message,task.project,task.cwd)) abort.abort('access_configuration_changed');
+              if (!taskAuthorizationValid(config,current,message)) abort.abort('access_configuration_changed');
             } catch { abort.abort('access_configuration_changed'); }
             nextAccessCheck=now+1000;
           }

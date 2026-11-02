@@ -10,7 +10,7 @@ export async function doctor(file: string, live = false): Promise<Check[]> {
   if (!existsSync(file)) return [...checks, { id: 'config', status: 'fail', message: tr("doctor.noConfiguration", file), next: tr("doctor.runNamoInitUseConfigSelectExisting") }];
   let c;
   try { c = loadConfig(file); }
-  catch { return [...checks, { id: 'config', status: 'fail', message: tr("doctor.configurationInvalidUnreadableReferencesMissingProjectDirectory"), next: tr("doctor.runNamoInitFixSettingsConfigurationContents") }]; }
+  catch { return [...checks, { id: 'config', status: 'fail', message: tr("doctor.configurationInvalidUnreadableReferencesMissingDirectoryDirectory"), next: tr("doctor.runNamoInitFixSettingsConfigurationContents") }]; }
   checks.push({ id: 'config', status: 'ok', message: tr("doctor.configuration", c.file) });
   checks.push(...await probeAgent(c));
   const connection = new FeishuSetupConnection(c.feishu);

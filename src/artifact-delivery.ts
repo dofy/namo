@@ -8,27 +8,27 @@ import { prepareArtifact, ArtifactError, type PreparedArtifact } from './artifac
 import { chatWorkspace } from './safety.js';
 import { pathsOverlap } from './path-policy.js';
 
-export interface Delivery {id:string; inboxKey:string; taskId:string; ownerId:string; chatId:string; projectRoot:string; path:string; state:string; uuid:string; createdAt:number; sha256?:string; size?:number; fileKey?:string; platformId?:string; error?:string;}
+export interface Delivery {id:string; inboxKey:string; taskId:string; ownerId:string; chatId:string; rootDirectory:string; path:string; state:string; uuid:string; createdAt:number; sha256?:string; size?:number; fileKey?:string; platformId?:string; error?:string;}
 export class ArtifactDelivery {
   private busy=false;
   constructor(private store:Store,private sender:Sender,private denyPaths:string[]=[],private isolation?:{dataDir:string;explicitDenyPaths:string[]},private canAccess:(taskId:string)=>boolean=()=>true){ }
   private denied(taskId:string,root:string,path:string):boolean{
     if(!this.canAccess(taskId))return true;
-    const target=resolve(root,path),task=this.store.db.prepare(`SELECT t.project,t.chatKey,t.scopeKey,t.ownerId,t.cwd,i.envelope
+    const target=resolve(root,path),task=this.store.db.prepare(`SELECT t.chatKey,t.scopeKey,t.ownerId,t.cwd,i.envelope
       FROM tasks t JOIN inbox i ON i.key=t.inboxKey WHERE t.id=?`).get(taskId);
-    // Engine.project binds current messages to scope+owner. Only legacy inbox
+    // Engine.workspace binds current messages to scope+owner. Only legacy inbox
     // rows without an envelope used the old chat-wide workspace key.
     const workspaceKey=task?(task.envelope===null||task.envelope===undefined?String(task.chatKey):`${task.scopeKey}:user:${task.ownerId}`):'';
-    const safeDefault=!!this.isolation&&task&&!task.project&&task.cwd===root&&root===chatWorkspace(this.isolation.dataDir,workspaceKey);
+    const safeDefault=!!this.isolation&&task&&task.cwd===root&&root===chatWorkspace(this.isolation.dataDir,workspaceKey);
     return this.denyPaths.some(denied=>pathsOverlap(denied,target)&&!(safeDefault&&denied===this.isolation!.dataDir&&!this.isolation!.explicitDenyPaths.some(explicit=>pathsOverlap(explicit,target))));
   }
   enqueue(input:Incoming,task:Task,path:string):string{
     if(input.senderId!==task.ownerId||input.chatKey!==task.chatKey||input.envelope?.kind==='material'||input.envelope?.type==='card_action')throw new ArtifactError('artifact_not_authorized');
     if(!['succeeded','failed','cancelled','needs_attention','interrupted'].includes(task.state))throw new ArtifactError('artifact_task_not_finished');
-    const binding={taskId:task.id,ownerId:input.senderId,chatId:input.chatId,projectRoot:task.cwd,projectRelativePath:path};
+    const binding={taskId:task.id,ownerId:input.senderId,chatId:input.chatId,rootDirectory:task.cwd,relativePath:path};
     if(this.denied(task.id,task.cwd,path))throw new ArtifactError('artifact_path_denied');
     const prepared=prepareArtifact(binding,{...binding,source:'task_instruction'});
-    const id=`artifact:${input.key}`,row:Delivery={id,inboxKey:input.key,taskId:task.id,ownerId:input.senderId,chatId:input.chatId,projectRoot:task.cwd,path:prepared.relativePath,state:'pending',uuid:randomUUID(),createdAt:Date.now(),sha256:prepared.sha256,size:prepared.size};
+    const id=`artifact:${input.key}`,row:Delivery={id,inboxKey:input.key,taskId:task.id,ownerId:input.senderId,chatId:input.chatId,rootDirectory:task.cwd,path:prepared.relativePath,state:'pending',uuid:randomUUID(),createdAt:Date.now(),sha256:prepared.sha256,size:prepared.size};
     deliveries(this.store.db).save(row,'ignore');return id;
   }
   intent(input:Incoming,task:Task,path:string):void{
@@ -59,8 +59,8 @@ export class ArtifactDelivery {
       const input=this.store.get(row.inboxKey);if(!input)throw new ArtifactError('artifact_input_missing');
       try{
         if(row.state==='pending'){
-          const binding={taskId:row.taskId,ownerId:row.ownerId,chatId:row.chatId,projectRoot:row.projectRoot,projectRelativePath:row.path};
-          if(this.denied(row.taskId,row.projectRoot,row.path))throw new ArtifactError('artifact_path_denied');
+          const binding={taskId:row.taskId,ownerId:row.ownerId,chatId:row.chatId,rootDirectory:row.rootDirectory,relativePath:row.path};
+          if(this.denied(row.taskId,row.rootDirectory,row.path))throw new ArtifactError('artifact_path_denied');
           const artifact:PreparedArtifact=prepareArtifact(binding,{...binding,source:'task_instruction'});
           if(artifact.sha256!==row.sha256||artifact.size!==row.size)throw new ArtifactError('artifact_changed_since_authorization');
           row.state='uploading';this.save(row);row.fileKey=await this.sender.uploadArtifact(artifact);row.state='uploaded';this.save(row);

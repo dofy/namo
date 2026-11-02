@@ -1,3 +1,4 @@
+import { legacyDatabase } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -36,7 +37,7 @@ test('due reminders and tasks use durable outbox and ordinary task engine',async
   const m=message(key,`/schedule add ${kind} once 2030-01-01T09:00+08:00 hello ${kind}`);store.enqueue(m);assert.match(new Schedules(store).command(m,()=>({}),Date.parse('2029-01-01'))!,/已创建/);
  }
  // Bind the task to the actual project policy selected by the engine.
- const source=store.get('b')!;const bound=(engine as unknown as {project(m:Incoming):unknown}).project(source);
+ const source=store.get('b')!;const bound=(engine as unknown as {workspace(m:Incoming):unknown}).workspace(source);
  store.db.prepare("UPDATE schedules SET binding=?,nextAt=? WHERE kind='task'").run(JSON.stringify(bound),Date.now()-1);
  store.db.prepare("UPDATE schedules SET nextAt=? WHERE kind='reminder'").run(Date.now()-1);
  store.db.prepare("UPDATE inbox SET state='replied' WHERE key IN ('a','b')").run();
@@ -59,10 +60,10 @@ test('schedule tasks keep their own workstream and do not consume a user convers
  assert.doesNotMatch(tasks.prompt(first),/staged/);
 });
 
-test('version 13 upgrades in place and keeps existing rows', t=>{
+test('version 13 upgrades in place and keeps existing rows', async t=>{
  const dir=mkdtempSync(join(tmpdir(),'namo-schedule-migrate-')),path=join(dir,'db');t.after(()=>rmSync(dir,{recursive:true,force:true}));
- const old=new Store(path);old.enqueue(message('kept','hello'));old.db.exec('DROP TABLE task_directories; DROP TABLE schedules; PRAGMA user_version=13');old.close();
- const upgraded=new Store(path);assert.equal(upgraded.get('kept')?.text,'hello');assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version,15);
+ const old=await legacyDatabase(path,13);old.exec("INSERT INTO inbox(key,messageId,chatKey,chatId,senderId,text,createdAt) VALUES('kept','kept','c','c','u','hello',1)");old.close();
+ const upgraded=new Store(path);assert.equal(upgraded.get('kept')?.text,'hello');assert.equal(upgraded.db.prepare('PRAGMA user_version').get()?.user_version,16);
  assert.deepEqual(upgraded.db.prepare('PRAGMA foreign_key_check').all(),[]);upgraded.close();
 });
 
@@ -110,19 +111,16 @@ test('revoked user cannot trigger a saved reminder after restart',async t=>{
  await waitFor(()=>store.db.prepare('SELECT state FROM schedules').get()?.state==='paused',3000);assert.equal(sent,0);
 });
 
-test('a schedule paused by changed binding records a reason and notifies its owner',async t=>{
- const dir=mkdtempSync(join(tmpdir(),'namo-schedule-')),store=new Store(join(dir,'db')),sent:string[]=[];
+test('scheduled work adopts current directories after the obsolete named binding is removed',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-schedule-')),store=new Store(join(dir,'db'));let cwd='';
  const source=message('origin','/schedule add task once 2030-01-01T09:00+08:00 work');store.enqueue(source);
- const reply=new Schedules(store).command(source,()=>({cwd:dir,policyHash:'old'}),Date.parse('2029-01-01'))!,id=/S-[A-F0-9]{12}/.exec(reply)![0];
+ const reply=new Schedules(store).command(source,()=>({cwd:'/obsolete',policyHash:'old'}),Date.parse('2029-01-01'))!,id=/S-[A-F0-9]{12}/.exec(reply)![0];
  store.db.prepare('UPDATE schedules SET nextAt=? WHERE id=?').run(Date.now()-1,id);store.db.prepare("UPDATE inbox SET state='replied' WHERE key='origin'").run();
- const engine=new Engine(store,{async run(){throw Error('unexpected');}},{async send(_chat,text,uuid){sent.push(text);return uuid;}},{dataDir:dir,concurrency:1,feishu:{allowedUserIds:['user'],allowedChatIds:[],progressUpdates:false,reactions:false}});
+ const engine=new Engine(store,{async run(r){cwd=r.cwd;return {text:'done',threadId:'thread',turnId:'turn'};}},{async send(_chat,_text,uuid){return uuid;}},{dataDir:dir,concurrency:1,feishu:{allowedUserIds:['user'],allowedChatIds:[],progressUpdates:false,reactions:false}});
  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});engine.start();
- await waitFor(()=>sent.some(text=>text.includes('已暂停')),3000);
- assert.match(new Schedules(store).command(message('list','/schedule list'),()=>({}))!,/暂停原因：目录或权限绑定已变化/);
- assert.match(new Schedules(store).command(message('wrong',`/schedule resume ${id}`),()=>({cwd:'/different',policyHash:'new'}))!,/切换回/);
- assert.equal(store.db.prepare('SELECT state FROM schedules WHERE id=?').get(id)?.state,'paused');
- assert.match(new Schedules(store).command(message('resume',`/schedule resume ${id}`),()=>({cwd:dir,policyHash:'new'}))!,/重新绑定/);
- assert.ok(Number(store.db.prepare('SELECT nextAt FROM schedules WHERE id=?').get(id)?.nextAt)>Date.now()-100);
+ await waitFor(()=>store.db.prepare("SELECT state FROM tasks").get()?.state==='succeeded',3000);
+ assert.notEqual(cwd,'/obsolete');assert.match(cwd,/workspaces/);
+ assert.equal(store.db.prepare('SELECT state FROM schedules WHERE id=?').get(id)?.state,'completed');
 });
 
 test('overlapping schedule triggers are counted for the owner',async t=>{
@@ -144,7 +142,7 @@ test('an unrelated saved authorization change does not pause an authorized sched
  const engine=new Engine(store,{async run(){calls++;return {text:'done',threadId:'t',turnId:'r'};}},{async send(_c,_t,id){return id;}},config);
  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
  const source=message('create','/schedule add task once 2030-01-01T09:00+08:00 work');store.enqueue(source);
- const project=(engine as unknown as {project(m:Incoming):unknown}).project(source);
+ const project=(engine as unknown as {workspace(m:Incoming):unknown}).workspace(source);
  new Schedules(store).command(source,()=>project,Date.parse('2029-01-01'));
  store.db.prepare('UPDATE schedules SET nextAt=?').run(Date.now()-1);store.db.prepare("UPDATE inbox SET state='replied' WHERE key='create'").run();
  raw.feishu.allowedUserIds.push('other');writeFileSync(file,JSON.stringify(raw));engine.start();

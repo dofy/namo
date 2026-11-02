@@ -7,8 +7,8 @@ export interface ArtifactBinding {
   taskId: string;
   ownerId: string;
   chatId: string;
-  projectRoot: string;
-  projectRelativePath: string;
+  rootDirectory: string;
+  relativePath: string;
 }
 
 export interface ArtifactAuthorization extends ArtifactBinding {
@@ -78,8 +78,8 @@ function sameBinding(request: ArtifactRequest, authorization: ArtifactAuthorizat
     && request.taskId === authorization.taskId
     && request.ownerId === authorization.ownerId
     && request.chatId === authorization.chatId
-    && request.projectRoot === authorization.projectRoot
-    && request.projectRelativePath === authorization.projectRelativePath;
+    && request.rootDirectory === authorization.rootDirectory
+    && request.relativePath === authorization.relativePath;
 }
 
 function extension(name: string): string {
@@ -150,7 +150,7 @@ class PreparedArtifactValue implements PreparedArtifact {
 }
 
 /**
- * Validate and freeze a task-authorized project artifact for later delivery.
+ * Validate and freeze a task-authorized directory artifact for later delivery.
  * This function performs no network access and does not send anything.
  */
 export function prepareArtifact(request: ArtifactRequest, authorization: ArtifactAuthorization,
@@ -158,8 +158,8 @@ export function prepareArtifact(request: ArtifactRequest, authorization: Artifac
   const limits = configuredLimits(options);
   if (![request.taskId, request.ownerId, request.chatId].every(validIdentity)) throw new ArtifactError('invalid_artifact_binding');
   if (!sameBinding(request, authorization)) throw new ArtifactError('artifact_not_authorized');
-  if (!isAbsolute(request.projectRoot) || CONTROL.test(request.projectRoot)) throw new ArtifactError('invalid_project_root');
-  const raw = request.projectRelativePath;
+  if (!isAbsolute(request.rootDirectory) || CONTROL.test(request.rootDirectory)) throw new ArtifactError('invalid_directory_root');
+  const raw = request.relativePath;
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > limits.maxPathLength || CONTROL.test(raw)
     || isAbsolute(raw) || raw.includes('\\')) throw new ArtifactError('invalid_artifact_path');
   const parts = raw.split('/');
@@ -170,16 +170,16 @@ export function prepareArtifact(request: ArtifactRequest, authorization: Artifac
 
   let physicalRoot: string;
   try {
-    const rootInfo = lstatSync(request.projectRoot);
-    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new ArtifactError('invalid_project_root');
-    physicalRoot = realpathSync(request.projectRoot);
-    if (dirname(physicalRoot) === physicalRoot) throw new ArtifactError('invalid_project_root');
+    const rootInfo = lstatSync(request.rootDirectory);
+    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new ArtifactError('invalid_directory_root');
+    physicalRoot = realpathSync(request.rootDirectory);
+    if (dirname(physicalRoot) === physicalRoot) throw new ArtifactError('invalid_directory_root');
   } catch (error) {
     if (error instanceof ArtifactError) throw error;
-    throw new ArtifactError('invalid_project_root');
+    throw new ArtifactError('invalid_directory_root');
   }
   const candidate = resolve(physicalRoot, ...parts);
-  if (!within(physicalRoot, candidate)) throw new ArtifactError('artifact_outside_project');
+  if (!within(physicalRoot, candidate)) throw new ArtifactError('artifact_outside_directory');
   let cursor = physicalRoot, leafIsFile = false;
   try {
     for (const part of parts) {
@@ -195,7 +195,7 @@ export function prepareArtifact(request: ArtifactRequest, authorization: Artifac
   if (!leafIsFile) throw new ArtifactError('artifact_not_file');
   let resolvedFile: string;
   try { resolvedFile = realpathSync(candidate); } catch { throw new ArtifactError('artifact_missing'); }
-  if (!within(physicalRoot, resolvedFile)) throw new ArtifactError('artifact_outside_project');
+  if (!within(physicalRoot, resolvedFile)) throw new ArtifactError('artifact_outside_directory');
 
   const started = Date.now();
   let fd: number | undefined;
@@ -218,7 +218,7 @@ export function prepareArtifact(request: ArtifactRequest, authorization: Artifac
   }
   if (Date.now() - started > limits.maxReadMs) throw new ArtifactError('artifact_read_timeout');
   try {
-    if (realpathSync(candidate) !== resolvedFile || realpathSync(request.projectRoot) !== physicalRoot
+    if (realpathSync(candidate) !== resolvedFile || realpathSync(request.rootDirectory) !== physicalRoot
       || !statIdentity(before!, statSync(candidate))) throw new ArtifactError('artifact_changed_during_read');
   } catch (error) {
     if (error instanceof ArtifactError) throw error;

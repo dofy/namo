@@ -26,7 +26,7 @@ function fixture(t: any, callId = 'call-one') {
   let store = new Store(database);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   store.enqueue(message('first')); let tasks = new Tasks(store);
-  const task = tasks.create(store.get('first')!, { cwd: dir, policyHash: 'policy', project: 'app' });
+  const task = tasks.create(store.get('first')!, { cwd: dir, policyHash: 'policy' });
   const runId = tasks.start(task); tasks.saveRun(runId, 'thread-one', 'turn-one');
   const request: WaitRequest = { threadId: 'thread-one', turnId: 'turn-one', callId,
     question: 'untrusted model summary is ignored', external };

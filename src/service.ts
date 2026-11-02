@@ -122,13 +122,13 @@ export function renderLaunchAgent(c: Config, label: string, cli: string, node: s
 <key>StandardErrorPath</key><string>${xml(join(c.dataDir, 'service.error.log'))}</string>
 </dict></plist>`;
 }
-export function releaseUpgradeBlockers(database: string, allowSchema13Migration = false): string[] {
+export function releaseUpgradeBlockers(database: string, allowSchemaMigration = false): string[] {
   if (!existsSync(database)) return [];
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(database, { readOnly: true });
     const schema = Number(db.prepare('PRAGMA user_version').get()?.user_version);
-    const compatible = schema === SCHEMA_VERSION || (allowSchema13Migration && [13,14].includes(schema) && SCHEMA_VERSION === 15);
+    const compatible = schema === SCHEMA_VERSION || (allowSchemaMigration && [13,14,15].includes(schema));
     if (!compatible) return ['database-schema'];
     const checks: [string, string][] = [
       ['receiver-queue', "SELECT 1 FROM inbox WHERE state IN ('queued','running','waiting','awaiting_reply') LIMIT 1"],

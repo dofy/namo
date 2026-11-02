@@ -52,7 +52,7 @@ export function Evidence({ reports = [] }: { reports?: RunEvidence[] }) {
         <Text as="p" size="2" color="gray">{report.git.status === 'changed'
           ? 'HEAD ' + report.git.before?.slice(0, 12) + ' → ' + report.git.after?.slice(0, 12) + tr("evidence.headChangeConfirmedCommitOwnershipPushStatus")
           : report.git.status === 'unchanged' ? tr("evidence.headWasUnchangedCompletionWorkingTreeMay")
-          : report.git.after ? tr("evidence.finalHead") + report.git.after.slice(0, 12) + tr("evidence.noComparableBaselineVerifiedCommitOwnership") : tr("evidence.noComparableGitHeadProjectRoot")}</Text>
+          : report.git.after ? tr("evidence.finalHead") + report.git.after.slice(0, 12) + tr("evidence.noComparableBaselineVerifiedCommitOwnership") : tr("evidence.noComparableGitHeadDirectoryRoot")}</Text>
         {report.items.some(i => i.kind === 'tool') && <Text as="p" size="2" color="gray">{tr("evidence.otherToolsWereCalledTheirContentExternal")}</Text>}
       </div>;
     })}

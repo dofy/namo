@@ -28,9 +28,9 @@ function forceDue(store: Store) {
 }
 function fixture(t: TestContext, runtime: Runtime, concurrency = 1) {
   const dir = mkdtempSync(join(tmpdir(), 'namo-auto-memory-engine-')), file = join(dir, 'bot.sqlite');
-  mkdirSync(join(dir, 'project'));
+  mkdirSync(join(dir, 'directory'));
   const codex: Config['codex'] = { bin: 'fixture-codex', home: join(dir, 'home'), sandbox: 'read-only', timeoutMs: 1000,
-    projects: { atlas: realpathSync(join(dir, 'project')) }, defaultProject: 'atlas' };
+    directories: [realpathSync(join(dir, 'directory'))] };
   const config = { dataDir: dir, concurrency, codex,
     feishu: { appId: 'fixture-app', appSecret: '', domain: 'feishu' as const, allowedUserIds: ['alice'], allowedChatIds: [], requireMention: true } };
   const store = new Store(file), sent: string[] = [], fatal: string[] = [];
@@ -40,14 +40,14 @@ function fixture(t: TestContext, runtime: Runtime, concurrency = 1) {
   return { dir, file, store, engine, config, sent, fatal };
 }
 
-test('accepted conversation automatically queues extraction with verified owner, chat and project while preserving the task reply', async t => {
+test('accepted conversation automatically queues extraction with verified owner, chat and directory while preserving the task reply', async t => {
   let runCalls = 0, extracted: AutoMemoryInput | undefined;
   const f = fixture(t, {
     async run(request) { runCalls++; request.onThread('user-thread'); request.onTurn('user-turn'); return { text: 'Normal task answer.', threadId: 'user-thread', turnId: 'user-turn' }; },
     async extractMemory(input) {
       extracted = input;
       return { memories: [{ key: 'person.concise', kind: 'preference', level: 'global', privacy: 'shared', text: 'Alice prefers concise answers.',
-        project: null, evidence: [{ messageId: input.messages[0]!.messageId, quote: 'I prefer concise answers.' }] }] };
+        directory: null, evidence: [{ messageId: input.messages[0]!.messageId, quote: 'I prefer concise answers.' }] }] };
     },
   });
   assert.equal(f.engine.accept(message('first')), true);
@@ -59,9 +59,9 @@ test('accepted conversation automatically queues extraction with verified owner,
   forceDue(f.store); await f.engine.pump();
   await waitFor(() => jobs(f.store).some(row => row.value.state === 'completed'));
   assert.equal(extracted?.ownerId, 'alice'); assert.equal(extracted?.chatKey, 'alice-dm');
-  assert.equal(extracted?.chatType, 'p2p'); assert.equal(extracted?.project, 'atlas');
+  assert.equal(extracted?.chatType, 'p2p'); assert.equal(extracted?.directory, f.store.db.prepare('SELECT cwd FROM tasks LIMIT 1').get()?.cwd);
   assert.deepEqual(extracted?.messages, [{ messageId: 'first', text: 'I prefer concise answers.' }]);
-  assert.equal(new Memories(f.store).search({ kind: 'verified-user', authenticated: true, ownerId: 'alice', chatKey: 'alice-dm', chatType: 'p2p', project: 'atlas' })[0]?.text,
+  assert.equal(new Memories(f.store).search({ kind: 'verified-user', authenticated: true, ownerId: 'alice', chatKey: 'alice-dm', chatType: 'p2p', directory: 'atlas' })[0]?.text,
     'Alice prefers concise answers.');
   assert.deepEqual(f.fatal, []);
 });
@@ -151,17 +151,17 @@ test('unpaired sources do not create automatic extraction jobs', async t => {
   assert.equal(jobs(f.store).length, 0);
 });
 
-test('a queued task blocked by an active project does not repeatedly abort extraction in the other slot', async t => {
+test('a queued task blocked by an active directory does not repeatedly abort extraction in the other slot', async t => {
   let mainCalls = 0, extractionCalls = 0, extractionAborts = 0, extractionActive = false;
   let releaseFirst: (() => void) | undefined;
   const f = fixture(t, {
     async run(request) {
-      const call = ++mainCalls; request.onThread('project-thread-' + call); request.onTurn('project-turn-' + call);
+      const call = ++mainCalls; request.onThread('directory-thread-' + call); request.onTurn('directory-turn-' + call);
       if (call === 1) await new Promise<void>((resolve, reject) => {
         releaseFirst = resolve;
         request.signal.addEventListener('abort', () => reject(new Error('test-cleanup')), { once: true });
       });
-      return { text: 'Project result ' + call, threadId: 'project-thread-' + call, turnId: 'project-turn-' + call };
+      return { text: 'Project result ' + call, threadId: 'directory-thread-' + call, turnId: 'directory-turn-' + call };
     },
     async extractMemory(_input, signal) {
       extractionCalls++; extractionActive = true;
@@ -171,16 +171,16 @@ test('a queued task blocked by an active project does not repeatedly abort extra
       finally { extractionActive = false; }
     },
   }, 2);
-  const first = message('project-first', { chatKey: 'chat-a', chatId: 'chat-a',
+  const first = message('directory-first', { chatKey: 'chat-a', chatId: 'chat-a',
     envelope: { version: 1, type: 'text', kind: 'instruction', chatType: 'p2p', scopeKey: 'chat-a', materials: [], limitations: [] } });
-  const second = message('project-second', { chatKey: 'chat-b', chatId: 'chat-b',
+  const second = message('directory-second', { chatKey: 'chat-b', chatId: 'chat-b',
     envelope: { version: 1, type: 'text', kind: 'instruction', chatType: 'p2p', scopeKey: 'chat-b', materials: [], limitations: [] } });
   f.engine.accept(first); f.engine.start(); await waitFor(() => mainCalls === 1);
   forceDue(f.store); await f.engine.pump(); await waitFor(() => extractionActive);
   f.engine.accept(second);
   for (let i = 0; i < 5; i++) { await f.engine.pump(); await new Promise(resolve => setTimeout(resolve, 10)); }
-  assert.equal(mainCalls, 1, 'same-project work must remain blocked despite its distinct chat');
-  assert.equal(f.store.db.prepare('SELECT state FROM tasks WHERE inboxKey=?').get('project-second')?.state, 'queued');
+  assert.equal(mainCalls, 1, 'same-directory work must remain blocked despite its distinct chat');
+  assert.equal(f.store.db.prepare('SELECT state FROM tasks WHERE inboxKey=?').get('directory-second')?.state, 'queued');
   assert.equal(extractionCalls, 1); assert.equal(extractionAborts, 0); assert.equal(extractionActive, true);
   releaseFirst!(); await waitFor(() => mainCalls === 2);
   assert.equal(extractionAborts, 0, 'the released foreground slot is enough for the newly unblocked task');

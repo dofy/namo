@@ -1,7 +1,7 @@
 import { sessionList } from './session-list.js';
 import { mcpApprovalCommand } from './mcp-write-approval.js';
-import { memoryProjects } from './memory-access.js';
-import { selectAgent, selectedPolicyHash, AgentRegistryError, type AgentSelection } from './agent-registry.js';
+import { memoryDirectories } from './memory-access.js';
+import { AgentRegistryError, selectAgent, selectedPolicyHash, type AgentSelection } from './agent-registry.js';
 import { mkdirSync, realpathSync, readFileSync } from 'node:fs';
 import { pathsOverlap } from './path-policy.js';
 export { pathsOverlap } from './path-policy.js';
@@ -11,7 +11,7 @@ import { ApprovalService } from './approval-service.js';
 import { chatWorkspace } from './safety.js';
 import { Store, type Incoming, type Inbox } from './store.js';
 import { RuntimeError, type Runtime, type RunControls } from './runtime.js';
-import { Tasks, TaskInputError, policyHash, scopeOf, type Task, type ProjectBinding } from './tasks.js';
+import { Tasks, TaskInputError, policyHash, scopeOf, type Task, type WorkspaceBinding } from './tasks.js';
 import { randomUUID } from 'node:crypto';
 import { Recovery, RecoveryError } from './recovery.js';
 import { Cards, renderTaskListCard, type CardEvent } from './cards.js';
@@ -40,7 +40,7 @@ import { TaskImages, type ImageInput } from './image-inputs.js';
 import type { MaterialReadAdapter } from './materials.js';
 import { richPost, openFence, hasMarkdown } from './richtext.js';
 import { Feedback, recordActivity } from './feedback.js';
-import { admitted, projectAllowed, executionPolicy, taskAuthorizationValid } from './access.js';
+import { admitted, executionPolicy, taskAuthorizationValid } from './access.js';
 import { assertMcpDelivery, assertMcpApprovalScope, mcpRead } from './mcp-connections.js';
 import { assertReviewDelivery, readReview, reviewCoverageBrief } from './github-review.js';
 import { recordProgress } from './public-progress.js';
@@ -108,8 +108,8 @@ export class Engine {
             const f=this.contextConfig().feishu;
             return admitted(f,row.senderId,row.chatId,row.envelope?.tenantKey);
           } catch { return false; }
-        },allowedProjects:row=>{
-          try {return memoryProjects(this.contextConfig(),row);} catch {return [];}
+        },allowedDirectories:row=>{
+          try {return memoryDirectories(this.contextConfig(),row,this.tasks.binding(row)?.cwd);} catch {return [];}
         },redact,extract:(input,signal)=>runtime.extractMemory!(input,signal)});
     }
 
@@ -149,27 +149,27 @@ export class Engine {
   }
   private routeAccepted(m: Incoming): void {
     if (!this.handleControl(m)) this.route(this.store.get(m.key)!);
-    this.autoMemories?.enqueue([m.key],this.tasks.binding(m)?.project??null,`message:${m.key}`);
+    this.autoMemories?.enqueue([m.key],this.tasks.binding(m)?.cwd??null,`message:${m.key}`);
     if (this.store.get(m.key)?.taskId && this.config.feishu?.reactions !== false) this.feedback.accepted(m.key);
   }
   private handleControl(m: Incoming): boolean {
     if (m.envelope?.kind === 'material') return false;
     if(this.approvals?.handleControl(m))return true;
     if(mcpApprovalCommand(this.store,m))return true;
-    const scheduleReply=new Schedules(this.store).command(m,()=>this.project(m));
+    const scheduleReply=new Schedules(this.store).command(m,()=>this.workspace(m));
     if(scheduleReply!==undefined){if(this.store.claim(m.key))this.store.finish(m.key,scheduleReply);return true;}
     const knownUsers=this.config.feishu?.access?[m.senderId]:this.config.feishu?.allowedUserIds??[];
-    const memoryReply=memoryCommand(this.store,m,knownUsers,this.tasks.binding(m)?.project??this.config.codex?.defaultProject??null,this.redact,memoryProjects(this.contextConfig(),m));
+    const memoryReply=memoryCommand(this.store,m,knownUsers,this.tasks.binding(m)?.cwd??null,this.redact,memoryDirectories(this.contextConfig(),m,this.tasks.binding(m)?.cwd));
     if(memoryReply!==undefined){if(this.store.claim(m.key))this.store.finish(m.key,memoryReply);return true;}
     const command = m.text.trim().split(/\s/)[0];
-    if (['/deliver','/profile','/model','/issues','/issue','/resolve','/status', '/version', '/whoami', '/cancel', '/reset', '/new', '/refresh', '/directories', '/session', '/tasks', '/task', '/help', '/project', '/unsupported', '/too-long'].includes(command)) {
+    if (['/deliver','/profile','/model','/issues','/issue','/resolve','/status', '/version', '/whoami', '/cancel', '/reset', '/new', '/refresh', '/directories', '/session', '/tasks', '/task', '/help', '/unsupported', '/too-long'].includes(command)) {
       if (!this.store.claim(m.key)) return true;
       let reply: string;
       if(command === '/deliver') {
         const match=/^\/deliver\s+(N-[A-Fa-f0-9]{12})\s+(.+)$/.exec(m.text.trim());
         const task=match?this.tasks.owned(match[1],m):undefined;
-        try {if(!task||!match)throw new ArtifactError('用法：/deliver N-任务编号 项目相对路径');const bound=this.project(m,task);if(bound.cwd!==task.cwd||bound.policyHash!==task.policyHash)throw new ArtifactError('task_configuration_changed');this.artifacts.enqueue(m,task,match[2]);reply='文件交付请求已保存，正在校验并上传。';}
-        catch(e){reply=e instanceof ArtifactError?e.code:'文件交付请求被拒绝，请核对任务、项目和相对路径。';}
+        try {if(!task||!match)throw new ArtifactError('用法：/deliver N-任务编号 目录相对路径');const bound=this.workspace(m,task);if(bound.cwd!==task.cwd||bound.policyHash!==task.policyHash)throw new ArtifactError('task_configuration_changed');this.artifacts.enqueue(m,task,match[2]);reply='文件交付请求已保存，正在校验并上传。';}
+        catch(e){reply=e instanceof ArtifactError?e.code:'文件交付请求被拒绝，请核对任务、目录和相对路径。';}
       }
       else if (command === '/profile') reply = this.profileCommand(m);
       else if (command === '/model') reply = this.modelCommand(m);
@@ -193,7 +193,7 @@ export class Engine {
         } catch(e) {if(!(e instanceof RecoveryError))throw e;reply=e.message;}
       }
       else if (command === '/whoami') reply = `用户 open_id：${m.senderId}\n会话 chat_id：${m.chatId}`;
-      else if (command === '/tasks') reply = this.tasks.list(m).map(t => `${taskStateLabel(t.state)}${t.project ? ` · ${t.project}` : ''} · \`/task ${t.id}\``).join('\n') || '尚无任务记录。';
+      else if (command === '/tasks') reply = this.tasks.list(m).map(t => `${taskStateLabel(t.state)} · \`/task ${t.id}\``).join('\n') || '尚无任务记录。';
       else if (command === '/task') { const id = m.text.trim().split(/\s+/)[1]; const t = id ? this.tasks.owned(id, m) : this.tasks.latest(m); reply = t && this.taskAccessible(t) ? taskStatus(this.store, t) : '未找到可访问的任务。用 /tasks 查看任务编号。'; }
       else if (command === '/session') {
         const wid = m.text.trim().split(/\s+/)[1];
@@ -208,17 +208,10 @@ export class Engine {
       else if (command === '/version') reply = `**版本信息**\n${this.versionLines(m)}`;
       else if (command === '/status') {
         const pending = this.tasks.pending(m);
-        reply = `**服务可用**\n当前项目：${this.tasks.binding(m)?.project ?? this.store.project(this.projectScope(m)) ?? this.config.codex?.defaultProject ?? '隔离工作区'}\n\n**版本信息**\n${this.versionLines(m)}\n\n**任务状态**\n正在处理 ${pending.filter(t => t.state === 'running').length} 项 · 排队 ${pending.filter(t => t.state === 'queued').length} 项 · 等待补充 ${pending.filter(t => t.state === 'waiting').length} 项\n\n用 \`/tasks\` 查看本人的任务。`;
+        reply = `**服务可用**\n工作目录：${this.workspaceLabel(m)}\n\n**版本信息**\n${this.versionLines(m)}\n\n**任务状态**\n正在处理 ${pending.filter(t => t.state === 'running').length} 项 · 排队 ${pending.filter(t => t.state === 'queued').length} 项 · 等待补充 ${pending.filter(t => t.state === 'waiting').length} 项\n\n用 \`/tasks\` 查看本人的任务。`;
       }
-      else if(command==='/directories'||command==='/project'&&this.config.codex?.directories!==undefined) reply=`**可访问目录（读写）**\n${(this.config.codex?.directories??[]).map(path=>'`'+path+'`').join('\n')||'尚未配置目录'}\n\n已准入的成员共享这些目录；任务在独立工作目录中启动。`;
-      else if (command === '/project') {
-        const name = m.text.trim().split(/\s+/)[1];
-        const projects = Object.fromEntries(Object.entries(this.config.codex?.projects??{}).filter(([name])=>!this.config.feishu?.access || projectAllowed(this.config.codex!,this.config.feishu as Config['feishu'],m,name)));
-        if (!name) reply = `**当前目录**\n${this.workspaceLabel(m).replace(/[\\`*_{}\[\]()#~!>|+-]/g,'\\$&')}\n\n**可选项目**\n${Object.entries(projects).map(([n, p]) => `\`${n}\` → ${p.replace(/[\\`*_{}\[\]()#~!>|+-]/g,'\\$&')}`).join('\n') || '尚未配置'}\n\n切换：\`/project 项目名\`（开始新上下文）`;
-        else if (!Object.hasOwn(projects, name)) reply = '未配置该项目。用 /project 查看可选项目；新增目录需修改本地配置。';
-        else if (this.store.hasPending(m.chatKey, m.key,m.senderId,scopeOf(m))) reply = '本会话仍有未完成的请求，暂不能切换项目。请等待完成，或 /cancel 后再切换。';
-        else { this.store.setProject(this.projectScope(m), name); this.store.clearThread(m.chatKey); this.tasks.reset(m); reply = `已切换到 ${name}：${projects[name]}。下一条消息开始新的 Codex 上下文。`; }
-      }
+      else if(command==='/directories') reply=`**可访问目录（读写）**\n${(this.config.codex?.directories??[]).map(path=>'`'+path+'`').join('\n')||'尚未配置目录'}\n\n已准入的成员共享这些目录；任务在独立工作目录中启动。`;
+
       else if (command === '/unsupported') reply = '这类消息暂不支持处理。可发送文字、支持的图片或文本附件并附上说明；语音及其他未支持的内容请先转为文字。';
       else if (command === '/too-long') reply = '这条消息超过 16000 字符，尚未交给模型。请拆成较短的消息。';
       else if (command === '/help') reply = [
@@ -298,7 +291,7 @@ export class Engine {
         + '只向本人私聊及本机管理入口展示，不改变配对或权限；在助手设置中明确开启档案使用后，后续本人私聊任务可采用这些偏好。清空不删除历史聊天和备份。';
     } catch (e) { if (!(e instanceof ProfileError)) throw e; return e.message; }
   }
-  private projectScope(m: Incoming): string { return m.envelope ? `${scopeOf(m)}:user:${m.senderId}` : m.chatKey; }
+  private workspaceScope(m: Incoming): string { return m.envelope ? `${scopeOf(m)}:user:${m.senderId}` : m.chatKey; }
   private selectedAgent(m: Incoming, reference?: Task): AgentSelection | undefined {
     if (!this.config.codex) return;
     const c = {...this.config, codex: this.config.codex};
@@ -314,44 +307,21 @@ export class Engine {
     } catch { /* Invalid or missing runtime is reported without leaking paths or errors. */ }
     return `Namo：\`${NAMO_VERSION}\`\nCodex CLI：${version ? `\`${version}\`` : '暂不可用，检测中或未安装'}`;
   }
-  private project(m: Incoming, reference?: Task): ProjectBinding {
+  private workspace(m: Incoming, reference?: Task): WorkspaceBinding {
     const c = this.config.codex, f=this.config.feishu as Config['feishu'];
-    const bound = reference ?? this.tasks.binding(m);
-    if(c?.directories!==undefined) {
-      const policy=executionPolicy(c,f,m),selection=this.selectedAgent(m,reference)!;
-      const scratch=chatWorkspace(this.config.dataDir,this.projectScope(m));
-      const cwd=scratch;
-      mkdirSync(cwd,{recursive:true,mode:0o700});
-      return {cwd:realpathSync(cwd),directories:c.directories,policyHash:selectedPolicyHash({...this.config,codex:policy},selection),...(selection.profileId!=='codex'?{agentSelection:selection}:{})};
-    }
-    const legacy = !m.envelope?.threadId ? this.store.project(m.chatKey) : undefined;
-    let name = bound?.project ?? this.store.project(this.projectScope(m)) ?? legacy ?? c?.defaultProject;
-    if (f?.access && name && c && !projectAllowed(c,f,m,name)) {
-      if (bound?.project) throw new RuntimeError('project_access_denied');
-      name=undefined;
-    }
     let policy=c;
-    try { if (c && f && (f.access || this.config.github?.mode==='simple')) policy=executionPolicy(c,f,m,name,this.config.github); } catch { throw new RuntimeError('organization_access_denied'); }
-    let selection: AgentSelection | undefined, hash: string;
+    try {if(c&&f)policy=executionPolicy(c,f,m);}catch{throw new RuntimeError('organization_access_denied');}
     try {
-      selection = this.selectedAgent(m, reference);
-      hash = policy && selection ? selectedPolicyHash({...this.config,codex:policy},selection) : policyHash(policy);
-    } catch (e) { if (e instanceof AgentRegistryError) throw new RuntimeError(e.code); throw e; }
-    const agent = selection && selection.profileId !== 'codex' ? {agentSelection:selection} : {};
-    if (name) {
-      if (!c?.projects || !Object.hasOwn(c.projects, name)) throw new RuntimeError('project_unavailable');
-      try { if (realpathSync(c.projects[name]) !== c.projects[name]) throw new Error(); }
-      catch { throw new RuntimeError('project_unavailable'); }
-      if (bound && bound.cwd !== c.projects[name]) throw new RuntimeError('project_changed');
-      return { project: name, cwd: c.projects[name], policyHash: hash, ...agent };
-    }
-    const cwd = bound?.cwd ?? chatWorkspace(this.config.dataDir, this.projectScope(m));
-    mkdirSync(cwd, { recursive: true, mode: 0o700 });
-    return { cwd: realpathSync(cwd), policyHash: hash, ...agent };
+      const selection=this.selectedAgent(m,reference);
+      const cwd=chatWorkspace(this.config.dataDir,this.workspaceScope(m));
+      mkdirSync(cwd,{recursive:true,mode:0o700});
+      return {cwd:realpathSync(cwd),directories:c?.directories??[],policyHash:policy&&selection?selectedPolicyHash({...this.config,codex:policy},selection):policyHash(policy),
+        ...(selection&&selection.profileId!=='codex'?{agentSelection:selection}:{})};
+    } catch(error) {if(error instanceof AgentRegistryError)throw new RuntimeError(error.code);throw error;}
   }
   private workspaceLabel(m: Incoming): string {
-    try { return this.project(m).cwd; }
-    catch (e) { if (e instanceof RuntimeError) return '当前项目已从配置移除，请用 /project 选择其他项目'; throw e; }
+    try { return this.workspace(m).cwd; }
+    catch (e) { if (e instanceof RuntimeError) return '工作目录暂不可用，请检查目录配置'; throw e; }
   }
   start(paused = false): void {
     this.paused = paused;
@@ -408,8 +378,8 @@ export class Engine {
           if(this.config.file) {
             try { const current=loadConfig(this.config.file);
               if(current.feishu.appId!==this.config.feishu?.appId||current.feishu.domain!==this.config.feishu?.domain)return false;
-              if(schedule.kind==='task') {const binding=JSON.parse(schedule.binding??'null') as ProjectBinding|null;
-                if(!binding||typeof binding.cwd!=='string'||!taskAuthorizationValid(this.config as Config,current,source,binding.project,binding.cwd))return false;}
+              if(schedule.kind==='task') {const binding=JSON.parse(schedule.binding??'null') as WorkspaceBinding|null;
+                if(!binding||typeof binding.cwd!=='string'||!taskAuthorizationValid(this.config as Config,current,source))return false;}
             }
             catch { return false; }
           }
@@ -418,7 +388,7 @@ export class Engine {
             const current=this.contextConfig();
             admittedNow=admitted(current.feishu,source.senderId,source.chatId,source.envelope?.tenantKey);
             allowed=admittedNow
-              && (schedule.kind==='reminder' || this.config.codex?.directories!==undefined || JSON.stringify(this.project(source))===schedule.binding);
+              && (schedule.kind==='reminder' || !!schedule.binding);
           } catch { allowed=false; }
           if(!allowed){pause(admittedNow?'目录或权限绑定已变化':'接入权限已变化',admittedNow);return;}
           const prefix=`schedule:${schedule.id}:`,upper=prefix+'\uffff';
@@ -514,7 +484,7 @@ export class Engine {
     try {
       const reattaching = this.runtime.persistent && !!runnerJob(this.store, run);
       if (!reattaching) {
-        const current = this.project(m, task);
+        const current = this.workspace(m, task);
         if (current.policyHash !== task.policyHash || realpathSync(task.cwd) !== task.cwd) throw new RuntimeError('task_configuration_changed');
       }
       const cwd = task.cwd;
@@ -595,7 +565,7 @@ export class Engine {
       if (this.runtime.persistent && e instanceof RuntimeError && ['runner_observer_error','runner_record_missing'].includes(e.code)) throw e;
       const code = signal.aborted && !this.runtime.persistent ? 'cancelled' : e instanceof RuntimeError ? e.code : 'runtime_error';
       const text = code === 'cancelled' ? '这条请求已停止。已发生的操作不会自动撤销。'
-        : code === 'runner_lost' ? '独立执行进程失联，结果未确认，没有自动重跑。可能仍有子进程或外部操作；并发名额与项目占位保留。请在本机核对进程和操作后，通过异常核对入口解除占位。'
+        : code === 'runner_lost' ? '独立执行进程失联，结果未确认，没有自动重跑。可能仍有子进程或外部操作；并发名额与目录占位保留。请在本机核对进程和操作后，通过异常核对入口解除占位。'
         : code === 'turn_timeout' ? '这条请求超时，执行器已停止。执行结果未确认，没有自动重跑。'
         : `这条请求未完成（${code}）。请检查本地 Codex 登录与服务状态；为避免重复操作，没有自动重跑。`;
       await this.active.get(this.slotKey(task))?.steering;
@@ -629,11 +599,11 @@ export class Engine {
       const ref = explicit ? this.tasks.owned(explicit[1], m) : this.tasks.referenced(m);
       const materialRef = !explicit ? this.tasks.referenceMaterial(m) : undefined;
       if ((explicit || m.envelope?.parentId) && !ref && !materialRef) { this.reply(m, '未找到本人在本聊天中的引用任务或待处理材料。请用 /tasks 选择任务，或将引用材料和要求一并贴出。'); return; }
-      const project = this.project(m, ref);
-      if (materialRef && this.tasks.materialProject(materialRef.key) !== JSON.stringify(project)) {
-        this.reply(m, '引用材料属于另一项目或权限版本，尚未开工。请先选择对应项目，或重新提交材料和要求。'); return;
+      const workspace = this.workspace(m, ref);
+      if (materialRef && this.tasks.materialBinding(materialRef.key) !== JSON.stringify(workspace)) {
+        this.reply(m, '引用材料属于另一目录或权限版本，尚未开工。请先选择对应目录，或重新提交材料和要求。'); return;
       }
-      if (m.envelope?.kind === 'material') { this.tasks.material(m, project); return; }
+      if (m.envelope?.kind === 'material') { this.tasks.material(m, workspace); return; }
       if (ref?.state === 'waiting') { this.reply(m, '任务正在等待补充，请引用它的问题回复，或用 /task 查看恢复方式。'); return; }
       if (ref && ['queued', 'running'].includes(ref.state)) {
         this.tasks.amend(ref, m); this.reply(m, `补充已保存到 ${ref.id}。${ref.state === 'running' ? '正在尝试追加给执行器；提交结果会另行提示，不表示此前操作已撤销。' : '将在开工时一并处理。'}`); return;
@@ -644,7 +614,7 @@ export class Engine {
         let preference = f?.appId && f.domain ? userModel(this.store, {channel:f.domain,appId:f.appId,userId:m.senderId}) : '';
         if(m.envelope?.chatType==='group' || f?.access && !(this.config.codex?.allowedModels??[]).includes(preference))preference='';
         const configured = this.config.codex && selection ? agentCodexConfig({...this.config,codex:this.config.codex},selection).model : this.config.codex?.model;
-        const task=this.tasks.create(m,project,ref,selection,preference || configured || null);
+        const task=this.tasks.create(m,workspace,ref,selection,preference || configured || null);
         if(delivery)this.artifacts.intent(m,task,delivery[1]);
       });
       if (this.config.feishu?.progressUpdates !== false) {
@@ -655,16 +625,14 @@ export class Engine {
       if(e instanceof ArtifactError){this.reply(m,`文件交付指令无效：${e.code}`);return;}
       if (e instanceof TaskInputError || e instanceof WaitInputError) { this.reply(m, e.message); return; }
       if (!(e instanceof RuntimeError)) throw e;
-      this.reply(m, e.code === 'project_access_denied'
-        ? '原会话绑定的项目已不再向本聊天开放，尚未执行。请发送 /new 开启隔离会话，再重新发送请求；原会话和历史记录保留。'
-        : `项目不可用（${e.code}），尚未执行。请用 /project 选择已配置项目。`);
+      this.reply(m, `工作目录不可用（${e.code}），尚未执行。请检查目录配置。`);
     }
   }
   private taskAccessible(task:Task):boolean {
     if (!this.config.file) return true;
     try {
       const c=loadConfig(this.config.file), m=this.store.get(task.inboxKey)!;
-      if ((this.config.feishu?.access || c.feishu.access) && (!admitted(c.feishu,m.senderId,m.chatId,m.envelope?.tenantKey) || task.project && !projectAllowed(c.codex,c.feishu,m,task.project))) return false;
+      if ((this.config.feishu?.access || c.feishu.access) && (!admitted(c.feishu,m.senderId,m.chatId,m.envelope?.tenantKey))) return false;
       assertReviewDelivery(this.store,c,task); assertMcpDelivery(this.store,c,task); return true;
     } catch { return false; }
   }
@@ -710,7 +678,7 @@ export class Engine {
             const id=output.inboxKey.slice('mcp-owner-approval:'.length),row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`mcp-approval:${id}`);
             const approval=row?JSON.parse(String(row.value)):undefined,connection=current.mcpConnections?.find(item=>item.id===approval?.connection);
             const task=approval?this.tasks.get(approval.taskId):undefined;
-            if(!approval||approval.state!=='pending'||approval.approverId!==scheduled.senderId||!connection||connection.ownerUserId!==approval.approverId||!connection.enabled||!current.feishu.allowedUserIds.includes(approval.approverId)||task?.state!=='running')throw new Error('access_changed');
+            if(!approval||approval.state!=='pending'||approval.approverId!==scheduled.senderId||!connection||connection.ownerUserId!==approval.approverId||!connection.token||!current.feishu.allowedUserIds.includes(approval.approverId)||task?.state!=='running')throw new Error('access_changed');
             assertMcpApprovalScope(this.store,current,task,approval.connection,approval.scope);
           }
         } catch {this.store.deliveryFailed(output.id,false,'access_changed');continue;}
@@ -720,7 +688,7 @@ export class Engine {
           if(output.kind==='access_notice') {
             if(current.feishu.appId!==this.config.feishu?.appId || current.feishu.domain!==this.config.feishu?.domain || !admitted(current.feishu,message.senderId,message.chatId,message.envelope?.tenantKey)) throw new Error('access_changed');
           } else {
-            if (!taskAuthorizationValid(this.config as Config,current,message,task.project,task.cwd)) throw new Error('access_changed');
+            if (!taskAuthorizationValid(this.config as Config,current,message)) throw new Error('access_changed');
             assertReviewDelivery(this.store,current,task); assertMcpDelivery(this.store,current,task);
           }
         } catch {

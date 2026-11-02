@@ -30,7 +30,7 @@ export class Recovery {
       error: row.error, kind: row.kind, part: row.part, platformReceipt: delivery ? !!row.platformId : undefined,
       content: delivery ? row.content : undefined, reviewed, actionable,
       actions: actionable ? delivery ? ['received', ...(row.kind === 'result' ? ['retry'] : []), 'dismiss'] : ['reviewed'] : [],
-      guidance: lost.length ? tr("recovery.independentRunnerLostContactItsProjectConcurrency")
+      guidance: lost.length ? tr("recovery.independentRunnerLostContactItsDirectoryConcurrency")
         : delivery ? tr("recovery.checkFeishuFirstConfirmingReceiptUpdatesRecords")
         : tr("recovery.checkCodeGitExternalActionsFirstMarking"),
       history: this.store.db.prepare('SELECT action,note,createdAt FROM reconciliations WHERE subject=? ORDER BY id DESC LIMIT 20').all(subject),

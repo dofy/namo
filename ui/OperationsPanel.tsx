@@ -88,7 +88,7 @@ function ApprovalPanel({disabled}: {disabled: boolean}) {
       <Text as="p" size="2">{record.commitSummary}</Text>
       <dl className="operations-info">
         <div><dt>{tr('operations.approvalId')}</dt><dd>{record.id}</dd></div>
-        <div><dt>{tr('directories.repository')}</dt><dd>{record.directory??record.project??'—'}</dd></div>
+        <div><dt>{tr('directories.repository')}</dt><dd>{record.directory??record.directory??'—'}</dd></div>
         <div><dt>{tr('operations.completedTask')}</dt><dd>{record.taskId}</dd></div>
         <div><dt>{tr('operations.expires')}</dt><dd>{new Date(record.expiresAt).toLocaleString(getLocale())}</dd></div>
         <div className="operations-wide"><dt>{tr('operations.commit')}</dt><dd><Code variant="ghost">{record.headSha}</Code></dd></div>

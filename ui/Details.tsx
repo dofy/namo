@@ -43,7 +43,7 @@ export function Details({ target, close, changed, notify, restoreFocus }: {
       {error && <Notice error>{error}</Notice>}
       {!data && !error && <div className="loading"><Spinner />  {tr("taskDetails.loadingDetails")}</div>}
       {data?.type === 'task' && <>
-        <div className="detail-summary"><StatusBadge state={data.value.execution} /><Text size="2">{data.value.project || tr("common.isolatedDirectory")}  {tr("taskDetails.inputVersion")} {data.value.inputVersion}</Text></div>
+        <div className="detail-summary"><StatusBadge state={data.value.execution} /><Text size="2">{data.value.cwd || tr("common.isolatedDirectory")}  {tr("taskDetails.inputVersion")} {data.value.inputVersion}</Text></div>
         <Text as="p" size="2" color="gray">{data.value.ownerName || data.value.ownerId || tr("common.unnamedUser")} · {data.value.id}</Text>
         <div className="detail-times"><div><span>{tr("common.createdAt")}</span><DateTime value={data.value.createdAt} empty={tr("taskDetails.notRecorded")} /></div><div><span>{tr("taskDetails.firstStarted")}</span><DateTime value={data.value.startedAt} /></div><div><span>{tr("common.finishedAt")}</span><DateTime value={data.value.finishedAt} empty={tr("common.notFinished")} /></div></div>
         <Text as="p" size="2" color="gray">{tr("nav.sessions")} {data.value.workstream}</Text>

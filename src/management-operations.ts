@@ -31,7 +31,7 @@ export function serviceLogs(dataDir: string, redact: (text: string) => string): 
 
 export function approvalView(record: GitApprovalRecord): ApprovalView {
   const { id, revision, task, target, configRevision, commitSummary, expiresAt, reason } = record;
-  return { id, revision, taskId: task.taskId, project: task.project, directory:task.cwd, ownerId: task.ownerId,
+  return { id, revision, taskId: task.taskId, directory:task.cwd, ownerId: task.ownerId,
     state: ['pending', 'approved'].includes(record.state) && expiresAt <= Date.now() ? 'expired' : record.state,
     remote: target.remote, ref: target.ref, headSha: target.headSha, remoteBeforeSha: target.remoteBeforeSha,
     configRevision, commitSummary, expiresAt, reason };
@@ -47,13 +47,11 @@ export async function changeApproval(store: Store, config: Config, revision: str
   if (!policy?.gitBin) throw new ApprovalError('approval_unconfigured', tr('operations.approvalsUnavailable'));
   const approvals = new GitApprovals(store, policy, new ExecFileGitRunner(policy.gitBin));
   const task = (id: string, directory?:string): ApprovalTaskContext & { state: string } => {
-    const row = store.db.prepare('SELECT id,ownerId,chatKey,project,cwd,policyHash,state FROM tasks WHERE id=?').get(id) as Record<string, unknown> | undefined;
+    const row = store.db.prepare('SELECT id,ownerId,chatKey,cwd,policyHash,state FROM tasks WHERE id=?').get(id) as Record<string, unknown> | undefined;
     if (!row) throw new ApprovalError('task_missing', tr('cli.taskNotExist'));
-    const project = row.project == null ? undefined : String(row.project), cwd = String(row.cwd), projects = config.codex.projects ?? {};
     const selection = new Tasks(store).selection(id) ?? selectAgent(config, 'codex');
-    if (row.policyHash !== selectedPolicyHash(config, selection)) throw new ApprovalError('task_configuration_changed', tr('cli.agentProfileProjectPermissionsChangedTaskWas'));
-    if (project && (!Object.hasOwn(projects, project) || projects[project] !== cwd)) throw new ApprovalError('task_configuration_changed', tr('cli.taskProjectWasRemovedItsPathChanged'));
-    return { taskId: id, ownerId: String(row.ownerId), chatKey: String(row.chatKey), project, cwd:approvalDirectory(store,config,id,cwd,directory), policyHash: String(row.policyHash), state: String(row.state) };
+    if (row.policyHash !== selectedPolicyHash(config, selection)) throw new ApprovalError('task_configuration_changed', tr('cli.agentProfileDirectoryPermissionsChangedTaskWas'));
+    return { taskId: id, ownerId: String(row.ownerId), chatKey: String(row.chatKey), cwd:approvalDirectory(store,config,id,directory), policyHash: String(row.policyHash), state: String(row.state) };
   };
   const unchanged = () => {
     const current = currentRevision();

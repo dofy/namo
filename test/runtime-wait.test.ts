@@ -47,7 +47,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (mode === 'resume-wait' && ('dynamicTools' in threadParams || threadParams.threadId !== 'thread-one')) process.exit(21);
     if (mode !== 'resume-wait' && (!threadParams.dynamicTools || threadParams.dynamicTools[0]?.name !== 'wait_for_user'
       || threadParams.dynamicTools[1]?.name !== 'wait_for_external'
-      || !threadParams.developerInstructions.includes('/new'))) process.exit(22);
+      || !threadParams.developerInstructions.includes('/refresh'))) process.exit(22);
     if (mode === 'wait-fast') {
       requestWait();
       return setTimeout(() => write({ id: m.id, result: { turn: { id: 'turn-one' } } }), 10);

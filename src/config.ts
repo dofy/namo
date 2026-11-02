@@ -1,3 +1,4 @@
+import { directoryConfiguration } from './legacy-config.js';
 import { parseAgentRegistry, type AgentRegistryConfig } from './agent-registry.js';
 import { t as tr } from './locale.js';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -6,7 +7,7 @@ import { dirname, resolve, relative, isAbsolute, sep } from 'node:path';
 import { configFile, ConfigEditor } from './paths.js';
 import { parseGitHubAccessConfig, type GitHubAccessConfig } from './github-access.js';
 import { parseMcpConnections, type McpConnection } from './mcp-connections.js';
-import { parseOrganization, parseAudience, type OrganizationAccess, type ProjectAccess } from './access.js';
+import { parseOrganization, type OrganizationAccess } from './access.js';
 
 export interface Config {
   file: string;
@@ -22,8 +23,7 @@ export interface Config {
     directories?: string[];
     bin: string; home: string; model?: string; allowedModels?: string[]; dailyTurnLimit?:number; timeoutMs: number;
     sandbox: 'read-only' | 'workspace-write';
-    projects?: Record<string, string>; defaultProject?: string;
-    projectAccess?: Record<string, ProjectAccess>; accessScope?: string; managedMcp?: boolean;
+    accessScope?: string; managedMcp?: boolean;
     networkAccess?: boolean; explicitDenyPaths?:string[]; readPaths?: string[]; denyPaths?: string[]; allowLocalCommits?: boolean;
   };
   gitApprovals?: {
@@ -44,17 +44,18 @@ export function loadConfig(file?: string): Config {
   return parseConfig(d, absolute);
 }
 
+export function needsDirectoryConfigurationMigration(file:string):boolean {
+  const raw=JSON.parse(readFileSync(file,'utf8'));return JSON.stringify(directoryConfiguration(raw))!==JSON.stringify(raw);
+}
+
 /** One-way settings conversion; existing private backups retain the old queue's policy. */
 export function migrateDirectoryConfiguration(file:string):void {
-  const editor=new ConfigEditor(file),raw=editor.value;
-  if(raw.codex?.directories!==undefined)return;
-  const next=structuredClone(raw);next.codex??={};
-  next.codex.directories=[...new Set(Object.values(next.codex.projects??{}))];
-  for(const key of ['projects','projectAccess','defaultProject','readPaths'])delete next.codex[key];
-  next.codex.sandbox='workspace-write';next.codex.allowLocalCommits=true;
+  const editor=new ConfigEditor(file),next=directoryConfiguration(editor.value);
+  if(JSON.stringify(next)===JSON.stringify(editor.value))return;
   parseConfig(next,file);editor.save(next);
 }
 export function parseConfig(d: any, absolute: string): Config {
+  d=directoryConfiguration(d);
   if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error(tr("config.configurationMustJsonObject"));
   if (d.version !== undefined && d.version !== 1) throw new Error(tr("config.unsupportedConfigurationVersionUseMatchingVersionNamo"));
   const path = (p: string) => p.startsWith('~/') ? resolve(homedir(), p.slice(2)) : resolve(dirname(absolute), p);
@@ -74,8 +75,7 @@ export function parseConfig(d: any, absolute: string): Config {
   const access = parseOrganization(f.access);
   if(c.dailyTurnLimit!==undefined&&(!Number.isSafeInteger(c.dailyTurnLimit)||c.dailyTurnLimit<0||c.dailyTurnLimit>10000))throw new Error('codex_daily_turn_limit_invalid');
   if(!access && github?.allowedUserIds.some(id=>!pairedUserIds.includes(id)))throw new Error('github_access_user_not_paired');
-  const shared=c.directories!==undefined;
-  const mcpConnections = parseMcpConnections(d.mcpConnections,shared);
+  const mcpConnections = parseMcpConnections(d.mcpConnections);
   const g = d.gitApprovals ?? {};
   if (!g || typeof g !== 'object' || Array.isArray(g)) throw new Error('gitApprovals must be an object');
   if (d.agent !== undefined && d.agent !== 'codex') throw new Error(tr("config.codexOnly"));
@@ -99,7 +99,7 @@ export function parseConfig(d: any, absolute: string): Config {
   const timeoutMs = c.timeoutMs ?? 600_000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 7_200_000) throw new Error(tr("config.codexTimeoutmsMustBetween"));
   const dataDir = path(d.dataDir ?? './data');
-  const directories=shared?[...new Set(list(c.directories,'codex.directories').map(value=>{
+  const directories=[...new Set(list(c.directories,'codex.directories').map(value=>{
     const dir=realpathSync(path(value));
     if(!statSync(dir).isDirectory()||dir==='/'||dir===realpathSync(homedir()))throw new Error('directory_must_be_specific');
     for(const reserved of [dataDir,path(c.home??`${dataDir}/codex-home`)]) {
@@ -107,30 +107,11 @@ export function parseConfig(d: any, absolute: string): Config {
       if(!child||child!=='..'&&!child.startsWith(`..${sep}`)&&!isAbsolute(child))throw new Error('directory_is_private_storage');
     }
     return dir;
-  }))]:undefined;
+  }))];
   if(directories&&directories.length>64)throw new Error('directory_limit');
   if (c.networkAccess !== undefined && typeof c.networkAccess !== 'boolean') throw new Error(tr("config.codexNetworkaccessMustBoolean"));
   if (c.allowLocalCommits !== undefined && typeof c.allowLocalCommits !== 'boolean') throw new Error(tr("config.codexAllowlocalcommitsMustBoolean"));
   if (c.allowLocalCommits === true && c.sandbox !== 'workspace-write') throw new Error(tr("config.localCommitsRequireCodexSandboxWorkspaceWrite"));
-  const projects: Record<string, string> = {};
-  if (c.projects !== undefined && (!c.projects || typeof c.projects !== 'object' || Array.isArray(c.projects))) throw new Error(tr("config.codexProjectsMustMapProjectNamesDirectories"));
-  for (const [name, value] of Object.entries(shared?{}:c.projects ?? {})) {
-    if (['__proto__','prototype','constructor'].includes(name) || !/^[a-zA-Z0-9_-]{1,48}$/.test(name) || typeof value !== 'string' || !value.trim()) throw new Error(tr("config.projectNamesMayContainLettersNumbersUnderscores"));
-    const dir = realpathSync(path(value));
-    if (!statSync(dir).isDirectory() || dir === '/' || dir === homedir()) throw new Error(tr("config.projectMustExistingSpecificDirectoryNotRoot"));
-    projects[name] = dir;
-  }
-  for (const connection of mcpConnections) if (connection.projects.some(name => !Object.hasOwn(projects,name))) throw new Error('mcp_unknown_project');
-  if (!shared&&c.defaultProject !== undefined && (typeof c.defaultProject !== 'string' || !Object.hasOwn(projects, c.defaultProject))) throw new Error(tr("config.codexDefaultprojectMustReferenceConfiguredProject"));
-  if (Object.keys(projects).length && !c.defaultProject) throw new Error(tr("config.setCodexDefaultprojectProjectsConfigured"));
-  const projectAccess: Record<string, ProjectAccess> = {};
-  if (c.projectAccess !== undefined && (!c.projectAccess || typeof c.projectAccess !== 'object' || Array.isArray(c.projectAccess))) throw new Error('project_access_invalid');
-  for (const [name, raw] of Object.entries(shared?{}:c.projectAccess ?? {})) {
-    if (!Object.hasOwn(projects,name)) throw new Error('project_access_unknown_project');
-    const audience = parseAudience(raw), permission = (raw as any).permission;
-    if (!['read-only','workspace-write'].includes(permission)) throw new Error('project_access_invalid_permission');
-    projectAccess[name] = {...audience,permission};
-  }
   if (g.maxTtlMs !== undefined && (!Number.isSafeInteger(g.maxTtlMs) || g.maxTtlMs < 1_000 || g.maxTtlMs > 900_000)) throw new Error('gitApprovals.maxTtlMs must be between 1000 and 900000');
   if (g.remotes !== undefined && !Array.isArray(g.remotes)) throw new Error('gitApprovals.remotes must be an array');
   const gitRemotes: NonNullable<Config['gitApprovals']>['remotes'] = [];
@@ -160,11 +141,10 @@ export function parseConfig(d: any, absolute: string): Config {
     codex: {
       ...(directories?{directories}:{}),
       bin: c.bin && (c.bin.includes('/') || c.bin.includes('\\')) ? path(c.bin) : c.bin ?? 'codex', home: path(c.home ?? `${dataDir}/codex-home`),
-      model: c.model || undefined, allowedModels, dailyTurnLimit:c.dailyTurnLimit??(access?100:0), timeoutMs, sandbox: shared?'workspace-write':c.sandbox ?? 'read-only',
-      projects, defaultProject: shared?undefined:c.defaultProject, networkAccess: c.networkAccess ?? false,
-      ...(c.projectAccess !== undefined ? {projectAccess} : {}),
-      allowLocalCommits: shared?true:c.allowLocalCommits ?? false,
-      readPaths: shared?[]:list(c.readPaths ?? [], 'codex.readPaths').map(p => realpathSync(path(p))),
+      model: c.model || undefined, allowedModels, dailyTurnLimit:c.dailyTurnLimit??(access?100:0), timeoutMs, sandbox: 'workspace-write',
+      networkAccess: c.networkAccess ?? false,
+      allowLocalCommits: true,
+      readPaths: [],
       explicitDenyPaths:list(c.denyPaths??[], 'codex.denyPaths').map(path),
       denyPaths: [...new Set([absolute, dataDir, path(c.home ?? `${dataDir}/codex-home`),
         ...list(c.denyPaths ?? [], 'codex.denyPaths').map(path)])],

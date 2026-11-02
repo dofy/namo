@@ -1,6 +1,6 @@
+import { legacyMcpIdentity } from './legacy-config.js';
 import { createHash } from 'node:crypto';
-import { admitted, audienceAllows, identityList, parseAudience, projectAllowed } from './access.js';
-import type { Audience } from './access-contract.js';
+import { admitted, identityList } from './access.js';
 import { loadConfig, type Config } from './config.js';
 import type { Store } from './store.js';
 import type { Task } from './tasks.js';
@@ -10,53 +10,47 @@ import { isOAuthReference, resolveMcpCredential, LEGACY_LINEAR_URL } from './mcp
 import { publicHttpsUrl, publicNetwork } from './mcp-public-network.js';
 import { awaitMcpApproval } from './mcp-write-approval.js';
 
-export interface McpConnection { id:string; type:'remote'; enabled:boolean; audience:Audience; projects:string[]; token:string; url:string; oauthScope?:string; ownerUserId?:string }
+export interface McpConnection { id:string; type:'remote'; token:string; url:string; oauthScope?:string; ownerUserId?:string }
 export type McpConnectionView = Omit<McpConnection,'token'> & {credentialConfigured:boolean;credentialSource?:'oauth'};
 export class McpAccessError extends Error { constructor(readonly code:string){super(code);} }
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
-export function parseMcpConnections(raw:unknown,shared=false):McpConnection[] {
+export function parseMcpConnections(raw:unknown):McpConnection[] {
   if(raw===undefined)return [];
   if(!Array.isArray(raw)||raw.length>20)throw new McpAccessError('mcp_invalid_config');
   const ids=new Set<string>();
   return raw.map((v:any)=>{
-    if(shared&&v&&typeof v==='object'&&!Array.isArray(v))v={...v,enabled:!!v.token,audience:{organization:true,userIds:[],chatIds:[]},projects:[]};
-    if(!v||typeof v!=='object'||Array.isArray(v)||Object.keys(v).some(k=>!['id','type','enabled','audience','projects','token','url','oauthScope','ownerUserId'].includes(k))
-      ||typeof v.id!=='string'||!/^[a-z][a-z0-9_-]{0,47}$/.test(v.id)||ids.has(v.id)||!['linear','remote'].includes(v.type)||typeof v.enabled!=='boolean'
+    if(!v||typeof v!=='object'||Array.isArray(v)||Object.keys(v).some(k=>!['id','type','token','url','oauthScope','ownerUserId'].includes(k))
+      ||typeof v.id!=='string'||!/^[a-z][a-z0-9_-]{0,47}$/.test(v.id)||ids.has(v.id)||!['linear','remote'].includes(v.type)
       ||typeof v.token!=='string'||v.token.length>4096||v.token!==''&&(v.token.length<8||!/^[A-Za-z0-9_.~+\/-]+=*$/.test(v.token))
-      ||v.type==='linear'&&(v.url!==undefined||v.oauthScope!==undefined||v.enabled&&!v.token)
+      ||v.type==='linear'&&(v.url!==undefined||v.oauthScope!==undefined)
       ||v.type==='remote'&&(typeof v.url!=='string'||v.url.length>2048||v.url.includes('?'))
       ||v.oauthScope!==undefined&&(typeof v.oauthScope!=='string'||v.oauthScope.length>512||!/^[\x21\x23-\x5b\x5d-\x7e ]*$/.test(v.oauthScope)))throw new McpAccessError('mcp_invalid_config');
     const url=v.type==='linear'?LEGACY_LINEAR_URL:v.url;
     try{publicHttpsUrl(url);}catch{throw new McpAccessError('mcp_invalid_config');}
     ids.add(v.id);
-    const audience=parseAudience(v.audience),projects=identityList(v.projects);
-    if(projects.some(p=>!/^[A-Za-z0-9_-]{1,48}$/.test(p)))throw new McpAccessError('mcp_invalid_config');
     const ownerUserId=v.ownerUserId===undefined||v.ownerUserId===''?undefined:identityList([v.ownerUserId])[0];
-    return {id:v.id,type:'remote' as const,enabled:v.enabled,audience,projects,token:v.token,url,...(ownerUserId?{ownerUserId}:{}),...(v.type==='linear'?{oauthScope:'read'}:v.oauthScope?{oauthScope:v.oauthScope}: {})};
+    return {id:v.id,type:'remote' as const,token:v.token,url,...(ownerUserId?{ownerUserId}:{}),...(v.type==='linear'?{oauthScope:'read'}:v.oauthScope?{oauthScope:v.oauthScope}: {})};
   });
 }
 export const publicMcpConnections=(values:McpConnection[]):McpConnectionView[]=>values.map(({token,...v})=>({...v,credentialConfigured:!!token,...(isOAuthReference(token)?{credentialSource:'oauth' as const}:{})}));
 function authorized(store:Store,c:Config,task:Task,id:string):{connection:McpConnection;scope:string;identity:string} {
   const message=store.get(task.inboxKey),connection=c.mcpConnections?.find(x=>x.id===id);
-  if(!message||message.senderId!==task.ownerId||!connection?.enabled||!admitted(c.feishu,message.senderId,message.chatId,message.envelope?.tenantKey)
-    ||c.feishu.access&&task.project&&!projectAllowed(c.codex,c.feishu,message,task.project)
-    ||!audienceAllows(connection.audience,message)||connection.projects.length>0&&(!task.project||!connection.projects.includes(task.project)))throw new McpAccessError('mcp_access_denied');
-  const {audience:_audience,projects:_projects,enabled:_enabled,...resource}=connection;
-  return {connection,scope:hash({connection,appId:c.feishu.appId,access:c.feishu.access,allowedUsers:c.feishu.allowedUserIds,allowedChats:c.feishu.allowedChatIds,taskId:task.id,owner:task.ownerId,chat:message.chatId,project:task.project}),
-    identity:hash({resource,appId:c.feishu.appId,tenant:message.envelope?.tenantKey,owner:task.ownerId,chat:message.chatId,project:task.project})};
+  if(!message||message.senderId!==task.ownerId||!connection?.token||!admitted(c.feishu,message.senderId,message.chatId,message.envelope?.tenantKey))throw new McpAccessError('mcp_access_denied');
+  return {connection,scope:hash({connection,appId:c.feishu.appId,access:c.feishu.access,allowedUsers:c.feishu.allowedUserIds,allowedChats:c.feishu.allowedChatIds,taskId:task.id,owner:task.ownerId,chat:message.chatId}),
+    identity:hash({resource:connection,appId:c.feishu.appId,tenant:message.envelope?.tenantKey,owner:task.ownerId,chat:message.chatId})};
 }
 export function assertMcpApprovalScope(store:Store,c:Config,task:Task,id:string,scope:string):void {
   if(authorized(store,c,task,id).scope!==scope)throw new McpAccessError('mcp_access_changed');
 }
 const receiptKey=(workstream:string)=>'mcp-read-scope:'+workstream;
-type McpReceipt={taskId:string;id:string;scope:string;version?:2};
+type McpReceipt={taskId:string;id:string;scope:string;version?:2|3;legacyContext?:string|null};
 function remember(store:Store,task:Task,id:string,identity:string):void {
   store.transaction(()=>{
     const key=receiptKey(task.workstreamId),row=store.db.prepare('SELECT value FROM settings WHERE key=?').get(key);
     const entries:McpReceipt[]=row?JSON.parse(String(row.value)):[];
-    if(!entries.some(e=>e.version===2&&e.id===id&&e.scope===identity)){
+    if(!entries.some(e=>e.version===3&&e.id===id&&e.scope===identity)){
       if(entries.length>=200)throw new McpAccessError('mcp_session_limit');
-      entries.push({taskId:task.id,id,scope:identity,version:2});store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,JSON.stringify(entries));
+      entries.push({taskId:task.id,id,scope:identity,version:3});store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,JSON.stringify(entries));
     }
   });
 }
@@ -67,8 +61,12 @@ export function assertMcpDelivery(store:Store,c:Config,task:Task):void {
     const original=store.db.prepare('SELECT * FROM tasks WHERE id=?').get(entry.taskId) as unknown as Task|undefined;
     if(!original)throw new McpAccessError('mcp_access_changed');
     const current=authorized(store,c,original,entry.id);
-    if((entry.version===2?current.identity:current.scope)!==entry.scope)throw new McpAccessError('mcp_access_changed');
-    if(entry.version!==2){entry.version=2;entry.scope=current.identity;migrated=true;}
+    const message=store.get(original.inboxKey)!;
+    const expected=entry.version===3?current.identity:entry.version===2&&Object.hasOwn(entry,'legacyContext')
+      ?legacyMcpIdentity(current.connection,c.feishu.appId,message.envelope?.tenantKey,original.ownerId,message.chatId,entry.legacyContext??null)
+      :entry.version===2?current.identity:current.scope;
+    if(expected!==entry.scope)throw new McpAccessError('mcp_access_changed');
+    if(entry.version!==3){entry.version=3;entry.scope=current.identity;delete entry.legacyContext;migrated=true;}
   }
   if(migrated) {
     const dedup=entries.filter((e,i)=>entries.findIndex(x=>x.version===e.version&&x.id===e.id&&x.scope===e.scope)===i);

@@ -41,5 +41,5 @@ function ServiceAccessEditor({config,refresh,expired,onStateChange,cancelControl
 }
 
 export function ServiceAccessSettings(props:{config:ConfigView;profiles?:ProfileState;refresh:()=>Promise<unknown>;expired:boolean}) {
- return <SettingsPanelDialog icon="profiles" title={tr('serviceAccess.organizationAccessProjectPermissions')} summary={tr('serviceAccess.administratorsConfigureServiceConnectionsMembersNotNeed')} disabled={props.expired}>{controls=><ServiceAccessEditor {...props} {...controls}/>}</SettingsPanelDialog>;
+ return <SettingsPanelDialog icon="profiles" title={tr('serviceAccess.organizationAccessDirectoryPermissions')} summary={tr('serviceAccess.administratorsConfigureServiceConnectionsMembersNotNeed')} disabled={props.expired}>{controls=><ServiceAccessEditor {...props} {...controls}/>}</SettingsPanelDialog>;
 }

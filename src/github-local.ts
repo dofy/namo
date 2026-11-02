@@ -19,7 +19,7 @@ export function parseLocalGh(value: unknown): LocalGhConfig {
   return { executable: String(v.executable), configDir: String(v.configDir), login: v.login, userId: Number(v.userId) };
 }
 
-// Ambient tokens, debug flags, proxies and project config cannot override the
+// Ambient tokens, debug flags, proxies and directory config cannot override the
 // selected login. This environment is never forwarded to the model.
 export function localGhEnvironment(config: Pick<LocalGhConfig,'executable'|'configDir'>): NodeJS.ProcessEnv {
   return { HOME: homedir(), PATH: [dirname(config.executable),'/usr/bin','/bin'].join(delimiter),

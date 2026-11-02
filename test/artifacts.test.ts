@@ -18,7 +18,7 @@ function fixture(t: any) {
   const dir = mkdtempSync(join(tmpdir(), 'namo-artifact-')), project = join(dir, 'project');
   mkdirSync(join(project, 'output'), { recursive: true });
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const request = { taskId: 'N-ONE', ownerId: 'alice', chatId: 'chat', projectRoot: project, projectRelativePath: 'output/report.md' };
+  const request = { taskId: 'N-ONE', ownerId: 'alice', chatId: 'chat', rootDirectory: project, relativePath: 'output/report.md' };
   const authorization = { ...request, source: 'task_instruction' as const };
   return { dir, project, request, authorization };
 }
@@ -44,7 +44,7 @@ test('preparation binds task ownership and freezes verified payload and hash', t
 test('task, owner, chat, project and exact path authorization must all match', t => {
   const f = fixture(t); writeFileSync(join(f.project, 'output/report.md'), 'ok');
   for (const patch of [{ taskId: 'N-TWO' }, { ownerId: 'bob' }, { chatId: 'other' },
-    { projectRoot: join(f.dir, 'other') }, { projectRelativePath: 'output/other.md' }]) {
+    { rootDirectory: join(f.dir, 'other') }, { relativePath: 'output/other.md' }]) {
     assert.equal(code(() => prepareArtifact({ ...f.request, ...patch }, f.authorization)), 'artifact_not_authorized');
   }
   assert.equal(code(() => prepareArtifact(f.request, { ...f.authorization, source: 'material' as any })), 'artifact_not_authorized');
@@ -55,7 +55,7 @@ test('absolute, traversal, denied, external and symlink paths are rejected', t =
   const outside = join(f.dir, 'outside.md'); writeFileSync(outside, 'outside');
   symlinkSync(outside, join(f.project, 'output/link.md'));
   const attempt = (path: string) => {
-    const request = { ...f.request, projectRelativePath: path };
+    const request = { ...f.request, relativePath: path };
     return code(() => prepareArtifact(request, { ...request, source: 'task_instruction' }));
   };
   assert.equal(attempt(outside), 'invalid_artifact_path');
@@ -64,7 +64,7 @@ test('absolute, traversal, denied, external and symlink paths are rejected', t =
   for (const path of ['.git/result.md', 'config/result.md', 'data/result.md', 'logs/result.md', 'output/config.local.json', 'output/.env']) {
     assert.equal(attempt(path), 'artifact_path_denied');
   }
-  const deepRequest = { ...f.request, projectRelativePath: 'output/report.md' };
+  const deepRequest = { ...f.request, relativePath: 'output/report.md' };
   assert.equal(code(() => prepareArtifact(deepRequest, { ...deepRequest, source: 'task_instruction' }, { maxDepth: 1 })), 'invalid_artifact_path');
 });
 
@@ -72,7 +72,7 @@ test('unsupported, empty, oversized and signature-mismatched files fail before d
   const f = fixture(t);
   const attempt = (path: string, bytes: string | Buffer, options: any = {}) => {
     writeFileSync(join(f.project, 'output', path), bytes);
-    const request = { ...f.request, projectRelativePath: `output/${path}` };
+    const request = { ...f.request, relativePath: `output/${path}` };
     return code(() => prepareArtifact(request, { ...request, source: 'task_instruction' }, options));
   };
   assert.equal(attempt('run.sh', '#!/bin/sh'), 'artifact_type_unsupported');
@@ -86,11 +86,11 @@ test('supported image and PDF signatures are classified without reading them aga
   const f = fixture(t);
   const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('payload')]);
   writeFileSync(join(f.project, 'output/image.png'), png);
-  const imageRequest = { ...f.request, projectRelativePath: 'output/image.png' };
+  const imageRequest = { ...f.request, relativePath: 'output/image.png' };
   const image = prepareArtifact(imageRequest, { ...imageRequest, source: 'task_instruction' });
   assert.equal(image.kind, 'image'); assert.equal(image.mime, 'image/png'); assert.deepEqual(image.readPayload(), png);
   writeFileSync(join(f.project, 'output/report.pdf'), '%PDF-1.7\nfixture');
-  const pdfRequest = { ...f.request, projectRelativePath: 'output/report.pdf' };
+  const pdfRequest = { ...f.request, relativePath: 'output/report.pdf' };
   const pdf = prepareArtifact(pdfRequest, { ...pdfRequest, source: 'task_instruction' });
   assert.equal(pdf.platformFileType, 'pdf'); assert.equal(pdf.kind, 'file');
 });

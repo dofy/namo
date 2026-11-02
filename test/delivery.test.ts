@@ -224,10 +224,12 @@ test('/run delivery intent freezes the completed file and uploads and sends it e
   const project = realpathSync(projectAlias);
   const store = new Store(join(dir, 'bot.sqlite'));
   const original = Buffer.from('intent artifact bytes\n');
-  const file = join(project, 'output', 'report.md');
+  let file = '';
   let uploads = 0, artifactSends = 0, prompt = '';
   const runtime: Runtime = { async run(request) {
     prompt = request.prompt;
+    mkdirSync(join(request.cwd,'output'),{recursive:true});
+    file=join(request.cwd,'output','report.md');
     writeFileSync(file, original);
     return { text: 'created report', threadId: 'thread', turnId: 'turn' };
   } };
@@ -250,8 +252,8 @@ test('/run delivery intent freezes the completed file and uploads and sends it e
   };
   const engine = new Engine(store, runtime, sender, { dataDir: dir, concurrency: 1,
     codex: { bin: 'codex', home: join(dir, 'codex-home'), timeoutMs: 1_000, sandbox: 'workspace-write',
-      projects: { app: project }, defaultProject: 'app', networkAccess: false, denyPaths: [], explicitDenyPaths: [] },
-    feishu: { appId: 'app', reactions: false, progressUpdates: false } });
+      directories: [project], networkAccess: false, denyPaths: [], explicitDenyPaths: [] },
+    feishu: { appId: 'app', allowedUserIds:['alice'],allowedChatIds:[], reactions: false, progressUpdates: false } });
   t.after(async () => { await engine.stop(); store.close(); rmSync(dir, { recursive: true, force: true }); });
 
   engine.start();

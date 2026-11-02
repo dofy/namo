@@ -1,3 +1,4 @@
+import { chatWorkspace } from '../src/safety.js';
 import { waitFor } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -57,11 +58,11 @@ const message = (key: string, text = 'hold', chat = 'chat'): Incoming => ({
 });
 function fixture(t: { after(fn: () => Promise<void>): void }) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'namo-runner-')));
-  const data = join(dir, 'data'), project = join(dir, 'project'); mkdirSync(project); mkdirSync(data);
+  const data = join(dir, 'data'), project = chatWorkspace(data,'chat:user:alice'),source=join(dir,'source'); mkdirSync(project,{recursive:true});mkdirSync(source);
   const bin = join(dir, 'fake.mjs'); writeFileSync(bin, fake, { mode: 0o700 });
   const file = join(dir, 'config.json');
   writeFileSync(file, JSON.stringify({ dataDir: data, feishu: { appId: 'app', appSecret: 'TEST_PRIVATE_VALUE', allowedUserIds: ['alice'] },
-    concurrency: 2, codex: { bin, home: join(data, 'home'), timeoutMs: 12000, sandbox: 'workspace-write', projects: { one: project }, defaultProject: 'one' } }));
+    concurrency: 2, codex: { bin, home: join(data, 'home'), timeoutMs: 12000, sandbox: 'workspace-write', directories: [source] } }));
   const config = loadConfig(file), store = new Store(join(data, 'bot.sqlite')), tasks = new Tasks(store);
   const engines: Engine[] = [], deliveries: string[] = [];
   const receiver = (selectedConfig = config) => {
@@ -86,7 +87,7 @@ function fixture(t: { after(fn: () => Promise<void>): void }) {
 function organization(f: ReturnType<typeof fixture>, github?: object) {
   const raw = JSON.parse(readFileSync(f.file, 'utf8'));
   raw.feishu.access = { mode: 'organization', tenantKey: 'tenant' };
-  raw.codex.projectAccess = { one: { organization: false, userIds: ['alice'], chatIds: [], permission: 'workspace-write' } };
+
   if (github) raw.github = github;
   writeFileSync(f.file, JSON.stringify(raw)); Object.assign(f.config, loadConfig(f.file));
   const input = message('organization'); input.envelope!.tenantKey = 'tenant'; return input;
@@ -198,7 +199,7 @@ test('saving presentation settings does not cancel an organization worker; revoc
   const heartbeat = f.job().updatedAt;
   await wait(() => f.job().state !== 'running' || f.job().updatedAt > heartbeat + 400);
   assert.equal(f.job().state, 'running');
-  manager.save(manager.config().revision, { projectAccess: { one: { organization: false, userIds: [], chatIds: [], permission: 'workspace-write' } } });
+  manager.save(manager.config().revision, { serviceAccess:{access:{mode:'organization',tenantKey:'revoked'},allowedUserIds:['alice'],allowedChatIds:[]} });
   await wait(() => f.job().state === 'failed');
   assert.equal(f.calls(), 1); assert.equal(f.job().result, null);
 });
@@ -206,7 +207,7 @@ test('saving presentation settings does not cancel an organization worker; revoc
 test('an unrelated organization grant change does not interrupt or withhold a running task',async t=>{
  const f=fixture(t),input=organization(f),receiver=f.receiver();receiver.start();receiver.accept(input);
  await wait(()=>f.calls()===1);
- const raw=JSON.parse(readFileSync(f.file,'utf8'));raw.codex.projectAccess.one.userIds.push('bob');
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));raw.feishu.allowedUserIds.push('bob');
  writeFileSync(f.file,JSON.stringify(raw));
  const heartbeat=f.job().updatedAt;await wait(()=>f.job().state!=='running'||f.job().updatedAt>heartbeat+400);
  assert.equal(f.job().state,'running');writeFileSync(join(f.project,'release'),'release');
@@ -258,7 +259,7 @@ test('a withheld result emits only a generic notice to an admitted user',async t
  const f=fixture(t),input=organization(f),receiver=f.receiver();receiver.start();receiver.accept(input);
  await wait(()=>f.calls()===1);await receiver.stop();writeFileSync(join(f.project,'release'),'release');
  await wait(()=>f.job().state==='completed');
- const raw=JSON.parse(readFileSync(f.file,'utf8'));raw.codex.projectAccess.one.userIds=[];writeFileSync(f.file,JSON.stringify(raw));
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));raw.codex.directories=[];writeFileSync(f.file,JSON.stringify(raw));
  const next=f.receiver();next.start();
  await wait(()=>f.deliveries.some(text=>text.includes('结果未交付')));
  assert.equal(f.deliveries.some(text=>text.includes('saved answer')),false);
@@ -323,7 +324,7 @@ test('completed worker cannot be cancelled and saved result survives an unavaila
   assert.match(String(reply?.content),/已结束或失联/);assert.doesNotMatch(String(reply?.content),/已请求停止/);
   assert.equal(f.store.get('a')!.cancelRequested,0);
   renameSync(f.project,join(f.dir,'finished-project'));writeFileSync(f.project,'not a directory now');
-  const raw=JSON.parse(readFileSync(f.file,'utf8'));raw.codex.projects.one=join(f.dir,'finished-project');
+  const raw=JSON.parse(readFileSync(f.file,'utf8'));
   writeFileSync(f.file,JSON.stringify(raw));Object.assign(f.config,loadConfig(f.file));
   const next=f.receiver();next.start();await wait(()=>f.store.get('a')?.state==='replied');
   assert.equal(f.tasks.get(taskId)?.state,'succeeded');
@@ -407,18 +408,18 @@ e.start();e.accept(${JSON.stringify(message('a'))});`);
 
 test('global limit still counts a surviving worker when next task uses a different project', async t => {
   const f = fixture(t), other = join(f.dir, 'other'); mkdirSync(other);
-  const raw = JSON.parse(readFileSync(f.file, 'utf8')); raw.concurrency = 1; raw.codex.projects.two = other;
+  const raw = JSON.parse(readFileSync(f.file, 'utf8')); raw.concurrency = 1; raw.codex.directories = [other];
   writeFileSync(f.file, JSON.stringify(raw)); Object.assign(f.config, loadConfig(f.file));
   // Exercise the scheduler's one-slot behavior independently of config bounds.
   f.config.concurrency = 1;
   const first = f.receiver(); first.start(); first.accept(message('a'));
   await wait(() => f.calls() === 1); await first.stop();
-  const next = f.receiver(); next.start(); next.accept(message('switch', '/project two', 'other-chat'));
+  const next = f.receiver(); next.start();
   next.accept(message('b', 'instant', 'other-chat'));
   await new Promise(r => setTimeout(r, 400)); assert.equal(existsSync(join(other, 'calls')), false);
   writeFileSync(join(f.project, 'release'), 'release');
   await wait(() => f.store.get('b')?.state === 'replied');
-  assert.equal(readFileSync(join(other, 'calls'), 'utf8').trim(), 'turn');
+  const task=f.tasks.get(f.store.get('b')!.taskId!)!;assert.equal(readFileSync(join(task.cwd,'calls'),'utf8').trim(),'turn');
 });
 
 test('receiver restart retains project overlap and global capacity reservations', async t => {

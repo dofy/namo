@@ -8,7 +8,7 @@ import { Store } from '../src/store.js';
 import { Tasks } from '../src/tasks.js';
 import { Engine, SendError } from '../src/engine.js';
 import { RuntimeError, type Runtime } from '../src/runtime.js';
-import { EvidenceRecorder, projectEvidenceItem, readEvidence, evidenceSummary } from '../src/evidence.js';
+import { EvidenceRecorder, evidenceItem, readEvidence, evidenceSummary } from '../src/evidence.js';
 import { makeRedactor } from '../src/safety.js';
 import { Cards } from '../src/cards.js';
 import { GitHubRestAdapter } from '../src/external-waits.js';
@@ -33,8 +33,8 @@ test('durable evidence excludes private data, external and symlink paths, retain
   symlinkSync(f.dir, join(f.cwd, 'outside'));
   symlinkSync(join(f.dir, 'missing'), join(f.cwd, 'broken'));
   const recorder = new EvidenceRecorder(f.store, f.run, f.cwd, [join(f.cwd, 'private')], makeRedactor(['PRIVATE_FILENAME']));
-  recorder.observe(projectEvidenceItem(command('check'))!);
-  recorder.observe(projectEvidenceItem({ id: 'patch', type: 'fileChange', status: 'completed', changes: [
+  recorder.observe(evidenceItem(command('check'))!);
+  recorder.observe(evidenceItem({ id: 'patch', type: 'fileChange', status: 'completed', changes: [
     { path: join(f.cwd, 'src/result.txt'), kind: { type: 'add' }, diff: 'PRIVATE_DIFF' },
     { path: '../outside.txt', kind: { type: 'update' } },
     { path: 'outside/new.txt', kind: { type: 'add' } },
@@ -44,8 +44,8 @@ test('durable evidence excludes private data, external and symlink paths, retain
     { path: 'src/moved.txt', kind: { type: 'update', move_path: '../out.txt' } },
     { path: 'broken/new.txt', kind: { type: 'add' } },
   ] })!);
-  recorder.observe(projectEvidenceItem({ ...command('bad'), status: 'failed', exitCode: 2 })!);
-  recorder.observe(projectEvidenceItem(command('pending', 'inProgress'))!);
+  recorder.observe(evidenceItem({ ...command('bad'), status: 'failed', exitCode: 2 })!);
+  recorder.observe(evidenceItem(command('pending', 'inProgress'))!);
   recorder.finish(false); f.tasks.finish(f.task, f.run, 'cancelled', 'cancelled');
   const reopened = new Store(f.file, true);
   const [report] = readEvidence(reopened, f.task.id); reopened.close();
@@ -59,22 +59,22 @@ test('durable evidence excludes private data, external and symlink paths, retain
 
 test('duplicate and late events do not regress receipts, caps are explicit and existing items still complete', t => {
   const f = fixture(t), recorder = new EvidenceRecorder(f.store, f.run, f.cwd);
-  const start = projectEvidenceItem(command('one', 'inProgress'))!, end = projectEvidenceItem(command('one'))!;
+  const start = evidenceItem(command('one', 'inProgress'))!, end = evidenceItem(command('one'))!;
   recorder.observe(start); recorder.observe(end); recorder.observe(end); recorder.observe(start);
   assert.equal(recorder.report.items.length, 1); assert.equal(recorder.report.items[0].status, 'completed');
-  for (let n = 0; n < 100; n++) recorder.observe(projectEvidenceItem(command('cap-' + n, 'inProgress'))!);
+  for (let n = 0; n < 100; n++) recorder.observe(evidenceItem(command('cap-' + n, 'inProgress'))!);
   assert.equal(recorder.report.items.length, 60); assert.equal(recorder.report.truncated, true);
-  recorder.observe(projectEvidenceItem(command('cap-0'))!);
+  recorder.observe(evidenceItem(command('cap-0'))!);
   assert.equal(recorder.report.items[1].status, 'completed');
-  const long = projectEvidenceItem({ id: 'many', type: 'fileChange', status: 'completed',
+  const long = evidenceItem({ id: 'many', type: 'fileChange', status: 'completed',
     changes: Array.from({ length: 1000 }, (_, n) => ({ path: 'file-' + n, kind: { type: 'add' }, diff: 'PRIVATE' })) })!;
   assert.equal(long.files?.length, 8); assert.equal(long.limited, true);
 });
 
 test('crash recovery keeps completed evidence, marks unacknowledged actions unknown and does not invent old evidence', t => {
   const f = fixture(t), recorder = new EvidenceRecorder(f.store, f.run, f.cwd);
-  recorder.observe(projectEvidenceItem(command('done'))!);
-  recorder.observe(projectEvidenceItem(command('pending', 'inProgress'))!);
+  recorder.observe(evidenceItem(command('done'))!);
+  recorder.observe(evidenceItem(command('pending', 'inProgress'))!);
   f.store.recover(); f.tasks.recover();
   const [report] = readEvidence(f.store, f.task.id);
   assert.equal(report.state, 'partial'); assert.deepEqual(report.items.map(i => i.status), ['completed', 'unknown']);
@@ -102,16 +102,16 @@ test('Git evidence observes HEAD changes without attributing commits or treating
 });
 
 test('raw protocol tool arguments, reasoning and compound command scripts are never persisted', () => {
-  assert.equal(projectEvidenceItem({ type: 'reasoning', id: 'r', text: 'PRIVATE_REASONING' }), undefined);
-  const tool = projectEvidenceItem({ id: 'm', type: 'mcpToolCall', status: 'completed', arguments: { token: 'PRIVATE' }, result: 'PRIVATE' });
+  assert.equal(evidenceItem({ type: 'reasoning', id: 'r', text: 'PRIVATE_REASONING' }), undefined);
+  const tool = evidenceItem({ id: 'm', type: 'mcpToolCall', status: 'completed', arguments: { token: 'PRIVATE' }, result: 'PRIVATE' });
   assert.doesNotMatch(JSON.stringify(tool), /PRIVATE/);
-  assert.equal(projectEvidenceItem({ ...command('script'), command: 'pnpm test || true' })?.label, '脚本（内容未保存）');
-  assert.equal(projectEvidenceItem({ ...command('shell'), command: "/bin/zsh -lc 'pnpm test --password PRIVATE'" })?.label, 'pnpm test');
+  assert.equal(evidenceItem({ ...command('script'), command: 'pnpm test || true' })?.label, '脚本（内容未保存）');
+  assert.equal(evidenceItem({ ...command('shell'), command: "/bin/zsh -lc 'pnpm test --password PRIVATE'" })?.label, 'pnpm test');
 });
 
 test('final evidence and outbox commit together, and cards freeze the saved evidence summary', t => {
   const f = fixture(t), e = new EvidenceRecorder(f.store, f.run, f.cwd);
-  e.observe(projectEvidenceItem(command('check'))!);
+  e.observe(evidenceItem(command('check'))!);
   f.store.db.exec("CREATE TRIGGER fail_result BEFORE INSERT ON outbox WHEN NEW.kind='result' BEGIN SELECT RAISE(ABORT,'disk_full'); END");
   assert.throws(() => f.store.transaction(() => { e.finish(true); f.tasks.finish(f.task, f.run, 'answer' + evidenceSummary(e.report)); }), /disk_full/);
   assert.equal(readEvidence(f.store, f.task.id)[0].state, 'collecting');
@@ -131,7 +131,7 @@ for (const outcome of ['success', 'cancel', 'unknown-send'] as const) test('engi
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'namo-evidence-engine-'))), store = new Store(join(dir, 'bot.sqlite'));
   let calls = 0, attempts = 0;
   const runtime: Runtime = { async run(r) {
-    calls++; r.onThread('thread'); r.onTurn('turn'); r.onEvidence?.(projectEvidenceItem(command('check'))!);
+    calls++; r.onThread('thread'); r.onTurn('turn'); r.onEvidence?.(evidenceItem(command('check'))!);
     if (outcome === 'cancel') throw new RuntimeError('cancelled');
     return { text: 'MODEL_ANSWER', threadId: 'thread', turnId: 'turn' };
   } };
@@ -219,7 +219,7 @@ test('review context reads pinned source in chunks and rejects binary or changed
 });
 
 test('recognized PR reads record safe metadata without claiming missing execution',()=>{
-  const item=projectEvidenceItem({id:'pr-read',type:'dynamicToolCall',tool:'read_pull_request',status:'completed',arguments:{secret:'private'},contentItems:['private code']});
+  const item=evidenceItem({id:'pr-read',type:'dynamicToolCall',tool:'read_pull_request',status:'completed',arguments:{secret:'private'},contentItems:['private code']});
   assert.equal(item?.limited,undefined);assert.match(item!.label,/正文不保存/);assert.doesNotMatch(JSON.stringify(item),/private/);
 });
 

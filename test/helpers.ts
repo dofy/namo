@@ -57,3 +57,12 @@ export function seedRun(store: Store, runId: string, taskId = 'task:' + runId): 
     store.db.prepare('INSERT INTO task_runs(id,taskId,inputVersion,state,startedAt) VALUES(?,?,1,\'succeeded\',1)').run(runId,taskId);
   });
 }
+
+/** Frozen pre-refactor schema; never emulate an old DB by relabeling the current schema. */
+export async function legacyDatabase(file:string,version:13|14|15=15) {
+  const {DatabaseSync}=await import('node:sqlite');const {readFileSync}=await import('node:fs');
+  const db=new DatabaseSync(file);db.exec(readFileSync(new URL('../../test/fixtures/schema-v15.sql',import.meta.url),'utf8'));
+  if(version<15)db.exec('DROP TABLE task_directories');
+  if(version<14)db.exec('DROP TABLE schedules');
+  db.exec(`PRAGMA user_version=${version}`);return db;
+}

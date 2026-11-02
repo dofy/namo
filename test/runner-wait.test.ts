@@ -1,3 +1,4 @@
+import { chatWorkspace } from '../src/safety.js';
 import { waitFor } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -66,7 +67,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   }
   if (m.id === 900) {
     if (m.error || m.result?.success !== true) process.exit(33);
-    const database = join(dirname(cwd), 'data', 'bot.sqlite');
+    const database = join(dirname(dirname(cwd)), 'bot.sqlite');
     const db = new DatabaseSync(database, { readOnly: true });
     const row = db.prepare('SELECT id,state,question FROM task_waits WHERE callId=?').get(waitParams.callId);
     const link = external ? db.prepare('SELECT externalWaitId FROM external_wait_links WHERE taskWaitId=?').get(row?.id) : undefined;
@@ -117,13 +118,13 @@ class HeldCompletedRunner implements Runtime {
 
 test('detached worker durably requests a wait before ACK, survives receiver loss before park, exits, and resumes once', async t => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'namo-runner-wait-')));
-  const data = join(root, 'data'), project = join(root, 'project'); mkdirSync(data); mkdirSync(project);
+  const data = join(root, 'data'), project = chatWorkspace(data,'chat:user:alice'); mkdirSync(project,{recursive:true});
   const bin = join(root, 'fake-codex.mjs'); writeFileSync(bin, FAKE_CODEX, { mode: 0o700 });
   const file = join(root, 'config.json');
   writeFileSync(file, JSON.stringify({ dataDir: data,
     feishu: { appId: 'app', appSecret: 'TEST_ONLY_SECRET', allowedUserIds: ['alice'] }, concurrency: 1,
     codex: { bin, home: join(data, 'home'), timeoutMs: 5000, sandbox: 'workspace-write',
-      projects: { one: project }, defaultProject: 'one' } }));
+      directories: [] } }));
   const config = loadConfig(file), store = new Store(join(data, 'bot.sqlite')), tasks = new Tasks(store);
   const engines: Engine[] = []; const deliveries: string[] = [];
   const sender = { async send(_chat: string, text: string, uuid: string) { deliveries.push(text); return uuid; } };
@@ -171,13 +172,13 @@ test('detached worker durably requests a wait before ACK, survives receiver loss
 
 test('detached worker stores both external and task wait ledgers before ACK, then parks without a human bypass', async t => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'namo-runner-external-wait-')));
-  const data = join(root, 'data'), project = join(root, 'project'); mkdirSync(data); mkdirSync(project);
+  const data = join(root, 'data'), project = chatWorkspace(data,'chat:user:alice'); mkdirSync(project,{recursive:true});
   const bin = join(root, 'fake-codex.mjs'); writeFileSync(bin, FAKE_CODEX, { mode: 0o700 });
   const file = join(root, 'config.json');
   writeFileSync(file, JSON.stringify({ dataDir: data,
     feishu: { appId: 'app', appSecret: 'TEST_ONLY_SECRET', allowedUserIds: ['alice'] }, concurrency: 1,
     codex: { bin, home: join(data, 'home'), timeoutMs: 5000, sandbox: 'workspace-write',
-      projects: { one: project }, defaultProject: 'one' } }));
+      directories: [] } }));
   const config = loadConfig(file), store = new Store(join(data, 'bot.sqlite')), tasks = new Tasks(store);
   const engine = new Engine(store, new RunnerRuntime(store, config),
     { async send(_chat: string, _text: string, uuid: string) { return uuid; } }, config);
@@ -212,12 +213,12 @@ test('detached worker stores both external and task wait ledgers before ACK, the
 
 function recoveryFixture(t: { after(fn: () => Promise<void>): void }) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'namo-wait-recovery-')));
-  const data = join(root, 'data'), project = join(root, 'project'); mkdirSync(data); mkdirSync(project);
+  const data = join(root, 'data'), project = chatWorkspace(data,'chat:user:alice'); mkdirSync(project,{recursive:true});
   const bin = join(root, 'fake-codex.mjs'); writeFileSync(bin, FAKE_CODEX, { mode: 0o700 });
   const file = join(root, 'config.json');
   writeFileSync(file, JSON.stringify({ dataDir: data, concurrency: 1,
     feishu: { appId: 'app', appSecret: 'TEST_ONLY_SECRET', allowedUserIds: ['alice'] },
-    codex: { bin, home: join(data, 'home'), timeoutMs: 12000, sandbox: 'workspace-write', projects: { one: project }, defaultProject: 'one' } }));
+    codex: { bin, home: join(data, 'home'), timeoutMs: 12000, sandbox: 'workspace-write', directories: [] } }));
   const config = loadConfig(file), store = new Store(join(data, 'bot.sqlite')), tasks = new Tasks(store);
   const engines: Engine[] = [], deliveries: string[] = [];
   const receiver = () => {

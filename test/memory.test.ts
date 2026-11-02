@@ -12,15 +12,15 @@ function fixture(t: any, redact?: (text: string) => string | undefined) {
   const { dir, file, store } = storeFixture(t, 'namo-memory-');
   return { dir, file, store, memory: new Memories(store, redact) };
 }
-const ownerScope = (ownerId = 'alice'): MemoryScope => ({ kind: 'owner', ownerId, project: null, chatKey: null });
-const projectScope = (project = 'one', ownerId = 'alice'): MemoryScope => ({ kind: 'project', ownerId, project, chatKey: null });
-const chatScope = (chatKey = 'group-one', project: string | null = 'one', ownerId = 'alice'): MemoryScope => ({ kind: 'chat', ownerId, project, chatKey });
+const ownerScope = (ownerId = 'alice'): MemoryScope => ({ kind: 'owner', ownerId, directory: null, chatKey: null });
+const directoryScope = (directory = 'one', ownerId = 'alice'): MemoryScope => ({ kind: 'directory', ownerId, directory, chatKey: null });
+const chatScope = (chatKey = 'group-one', directory: string | null = 'one', ownerId = 'alice'): MemoryScope => ({ kind: 'chat', ownerId, directory, chatKey });
 const local = (ownerId = 'alice', ref = 'local-edit'): MemoryAuthority => ({ kind: 'local-owner', authenticated: true, ownerId,
   source: { kind: 'local-owner', ref } });
-const user = (ownerId = 'alice', chatKey = `dm-${ownerId}`, chatType: 'p2p' | 'group' = 'p2p', project: string | null = 'one', ref = 'message-1'): MemoryAuthority =>
-  ({ kind: 'verified-user', authenticated: true, ownerId, chatKey, chatType, project, source: { kind: 'message', ref } });
-const access = (ownerId = 'alice', chatKey = `dm-${ownerId}`, chatType: 'p2p' | 'group' = 'p2p', project: string | null = 'one'): MemoryAccess =>
-  ({ kind: 'verified-user', authenticated: true, ownerId, chatKey, chatType, project });
+const user = (ownerId = 'alice', chatKey = `dm-${ownerId}`, chatType: 'p2p' | 'group' = 'p2p', directory: string | null = 'one', ref = 'message-1'): MemoryAuthority =>
+  ({ kind: 'verified-user', authenticated: true, ownerId, chatKey, chatType, directory, source: { kind: 'message', ref } });
+const access = (ownerId = 'alice', chatKey = `dm-${ownerId}`, chatType: 'p2p' | 'group' = 'p2p', directory: string | null = 'one'): MemoryAccess =>
+  ({ kind: 'verified-user', authenticated: true, ownerId, chatKey, chatType, directory });
 
 test('explicit save and correction are durable, versioned, sourced, and conflict safe', t => {
   const f = fixture(t), saved = f.memory.save({ kind: 'preference', scope: ownerScope(), text: 'Answer in Chinese.' }, user());
@@ -34,23 +34,23 @@ test('explicit save and correction are durable, versioned, sourced, and conflict
   try { assert.equal(new Memories(second).search(access(), { query: 'English' })[0]?.version, 2); } finally { second.close(); }
 });
 
-test('owner, project, and chat visibility isolate users, projects, private chats, and groups before redaction', t => {
+test('owner, directory, and chat visibility isolate users, directories, private chats, and groups before redaction', t => {
   const redacted: string[] = [], f = fixture(t, value => { redacted.push(value); return value; });
   const own = f.memory.save({ kind: 'preference', scope: ownerScope(), text: 'ALICE_OWNER_PRIVATE' }, user());
-  const project = f.memory.save({ kind: 'project_knowledge', scope: projectScope('one'), text: 'ALICE_PROJECT_ONE' }, user());
-  const group = f.memory.save({ kind: 'project_knowledge', scope: chatScope('group-one', 'one'), text: 'ALICE_GROUP_ONE' }, user('alice', 'group-one', 'group'));
+  const directory = f.memory.save({ kind: 'knowledge', scope: directoryScope('one'), text: 'ALICE_PROJECT_ONE' }, user());
+  const group = f.memory.save({ kind: 'knowledge', scope: chatScope('group-one', 'one'), text: 'ALICE_GROUP_ONE' }, user('alice', 'group-one', 'group'));
   f.memory.save({ kind: 'preference', scope: ownerScope('bob'), text: 'BOB_ONLY' }, user('bob'));
 
   redacted.length = 0;
   assert.deepEqual(f.memory.search(access('bob')).map(item => item.text), ['BOB_ONLY']);
   assert.ok(!redacted.some(value => value.startsWith('ALICE_')), 'unauthorized content must not reach the redactor');
-  assert.deepEqual(new Set(f.memory.search(access()).map(item => item.id)), new Set([own.id, project.id]));
+  assert.deepEqual(new Set(f.memory.search(access()).map(item => item.id)), new Set([own.id, directory.id]));
   assert.deepEqual(f.memory.search(access('alice', 'dm-alice', 'p2p', 'two')).map(item => item.id), [own.id]);
   assert.deepEqual(f.memory.search(access('alice', 'group-one', 'group', 'one')).map(item => item.id), [group.id]);
   assert.deepEqual(f.memory.search(access('alice', 'group-two', 'group', 'one')).map(item => item.id), []);
-  assert.deepEqual(f.memory.search({kind:'verified-user',authenticated:true,ownerId:'alice',chatKey:'group-one',project:'one'}).map(item=>item.id),[]);
+  assert.deepEqual(f.memory.search({kind:'verified-user',authenticated:true,ownerId:'alice',chatKey:'group-one',directory:'one'}).map(item=>item.id),[]);
   assert.throws(() => f.memory.save({ kind: 'preference', scope: ownerScope(), text: 'from group' }, user('alice', 'group-one', 'group')), /private chat/);
-  assert.throws(() => f.memory.save({ kind: 'project_knowledge', scope: projectScope('two'), text: 'wrong project' }, user()), /project/);
+  assert.throws(() => f.memory.save({ kind: 'knowledge', scope: directoryScope('two'), text: 'wrong directory' }, user()), /directory/);
 });
 
 test('retrieval redacts before keyword matching and omits redaction failures', t => {
@@ -68,12 +68,12 @@ test('capacity, content, query, and expiry limits fail explicitly without partia
   assert.throws(() => f.memory.save({ kind: 'preference', scope: ownerScope(), text: 'x'.repeat(MEMORY_LIMITS.entryChars + 1) }, local()), /1-3000/);
   assert.throws(() => f.memory.save({ kind: 'preference', scope: ownerScope(), text: 'future', expiresAt: Date.now() + MEMORY_LIMITS.maxExpiryMs + 10_000 }, local()), /retention/);
   assert.equal(f.store.db.prepare("SELECT COUNT(*) AS n FROM memories").get()?.n, before);
-  const summary = f.memory.save({ kind: 'task_summary', scope: projectScope(), text: 'bounded summary' }, local());
+  const summary = f.memory.save({ kind: 'task_summary', scope: directoryScope(), text: 'bounded summary' }, local());
   assert.ok(summary.expiresAt && summary.expiresAt - summary.createdAt <= MEMORY_LIMITS.defaultEphemeralMs + 10);
   assert.equal(f.memory.search(access(), { now: summary.expiresAt! + 1 }).length, 0);
   assert.throws(() => f.memory.search(access(), { query: Array.from({ length: MEMORY_LIMITS.queryTerms + 1 }, (_, i) => `q${i}`).join(' ') }), /too many/);
-  for (let index = 1; index < MEMORY_LIMITS.scopeEntries; index++) f.memory.save({ kind: 'task_summary', scope: projectScope(), text: `item ${index}` }, local());
-  assert.throws(() => f.memory.save({ kind: 'task_summary', scope: projectScope(), text: 'one too many' }, local()), (error: unknown) => error instanceof MemoryError && error.code === 'capacity');
+  for (let index = 1; index < MEMORY_LIMITS.scopeEntries; index++) f.memory.save({ kind: 'task_summary', scope: directoryScope(), text: `item ${index}` }, local());
+  assert.throws(() => f.memory.save({ kind: 'task_summary', scope: directoryScope(), text: 'one too many' }, local()), (error: unknown) => error instanceof MemoryError && error.code === 'capacity');
 });
 
 test('disable excludes retrieval, delete removes current content, and neither can be silently restored', t => {
@@ -95,14 +95,14 @@ test('disable excludes retrieval, delete removes current content, and neither ca
 });
 
 test('handoff lineage is exact-scope and invalidates on correction, disable, or delete', t => {
-  const f = fixture(t), source = f.memory.save({ kind: 'project_knowledge', scope: projectScope(), text: 'API decision v1' }, local());
-  const handoff = f.memory.saveHandoff({ scope: projectScope(), goal: 'Continue the API migration', limitations: ['No production writes'],
+  const f = fixture(t), source = f.memory.save({ kind: 'knowledge', scope: directoryScope(), text: 'API decision v1' }, local());
+  const handoff = f.memory.saveHandoff({ scope: directoryScope(), goal: 'Continue the API migration', limitations: ['No production writes'],
     decisions: ['Use versioned payloads'], evidence: ['Unit tests passed'], unfinished: ['Wire the management route'],
     dependsOn: [{ id: source.id, version: source.version }] }, local('alice', 'handoff-1'));
   assert.match(handoff.text, /Goal: Continue/); assert.equal(f.memory.search(access(), { query: 'Continue' })[0]?.id, handoff.id);
   const corrected = f.memory.correct(source.id, 1, { text: 'API decision v2' }, local('alice', 'source-correct'));
   assert.equal(f.memory.search(access(), { query: 'Continue' }).length, 0, 'old handoff cannot outlive an exact-version source');
-  const current = f.memory.saveHandoff({ scope: projectScope(), goal: 'Current handoff', limitations: [], decisions: [], evidence: [], unfinished: [],
+  const current = f.memory.saveHandoff({ scope: directoryScope(), goal: 'Current handoff', limitations: [], decisions: [], evidence: [], unfinished: [],
     dependsOn: [{ id: source.id, version: corrected.version }] }, local('alice', 'handoff-2'));
   assert.throws(() => f.memory.saveHandoff({ scope: chatScope(), goal: 'broaden scope', limitations: [], decisions: [], evidence: [], unfinished: [],
     dependsOn: [{ id: source.id, version: corrected.version }] }, local()), /exact visibility/);
@@ -139,11 +139,11 @@ test('migration candidates remain inactive until explicit local review', t => {
 });
 
 function authority(overrides: Partial<MemoryAuthority> = {}): MemoryAuthority {
-  return { kind: 'local-owner', authenticated: true, ownerId: 'alice', chatKey: 'dm-alice', chatType: 'p2p', project: 'atlas',
+  return { kind: 'local-owner', authenticated: true, ownerId: 'alice', chatKey: 'dm-alice', chatType: 'p2p', directory: 'atlas',
     source: { kind: 'automatic', ref: 'auto-job-one' }, ...overrides };
 }
 function automaticMemoryStorageAccess(overrides: Partial<MemoryAccess> = {}): MemoryAccess {
-  return { kind: 'verified-user', authenticated: true, ownerId: 'alice', chatKey: 'dm-alice', chatType: 'p2p', project: 'atlas', ...overrides };
+  return { kind: 'verified-user', authenticated: true, ownerId: 'alice', chatKey: 'dm-alice', chatType: 'p2p', directory: 'atlas', ...overrides };
 }
 function candidate(overrides: Partial<AutomaticMemoryInput> = {}): AutomaticMemoryInput {
   return { key: 'person.alice.role', kind: 'user_fact', level: 'global', privacy: 'shared', text: 'Alice maintains Atlas.',
@@ -151,48 +151,48 @@ function candidate(overrides: Partial<AutomaticMemoryInput> = {}): AutomaticMemo
 }
 const ids = (memory: Memories, who: MemoryAccess) => memory.search(who, { limit: 20 }).map(row => row.id).sort();
 
-test('organization project ACL limits shared overviews, model misclassification, and derived handoffs', t => {
+test('organization directory ACL limits shared overviews, model misclassification, and derived handoffs', t => {
   const f = fixture(t);
-  const overview = f.memory.upsertAutomatic(candidate({ kind: 'project_knowledge', project: 'atlas' }), authority())!;
-  const mislabeled = f.memory.upsertAutomatic(candidate({ key: 'other', kind: 'user_fact', project: null }), authority())!;
-  const who = automaticMemoryStorageAccess({ ownerId: 'bob', project: 'other', allowedProjects: [] });
+  const overview = f.memory.upsertAutomatic(candidate({ kind: 'knowledge', directory: 'atlas' }), authority())!;
+  const mislabeled = f.memory.upsertAutomatic(candidate({ key: 'other', kind: 'user_fact', directory: null }), authority())!;
+  const who = automaticMemoryStorageAccess({ ownerId: 'bob', directory: 'other', allowedDirectories: [] });
   assert.deepEqual(ids(f.memory, who), []);
-  assert.deepEqual(ids(f.memory, { ...who, allowedProjects: ['atlas'] }), [overview.id, mislabeled.id].sort());
-  const handoff = f.memory.saveHandoff({ scope: { kind: 'chat', ownerId: 'bob', project: 'other', chatKey: 'dm-alice' },
+  assert.deepEqual(ids(f.memory, { ...who, allowedDirectories: ['atlas'] }), [overview.id, mislabeled.id].sort());
+  const handoff = f.memory.saveHandoff({ scope: { kind: 'chat', ownerId: 'bob', directory: 'other', chatKey: 'dm-alice' },
     goal: 'Continue', limitations: [], decisions: [], evidence: [], unfinished: [], dependsOn: [{ id: overview.id, version: overview.version }] },
-    authority({ ownerId: 'bob', project: 'other' }));
+    authority({ ownerId: 'bob', directory: 'other' }));
   assert.ok(!ids(f.memory, who).includes(handoff.id));
 });
 
-test('global memories retain host-owned project provenance after a local correction', t => {
-  const f = fixture(t), saved = f.memory.upsertAutomatic(candidate({ project: null }), authority())!;
-  const who = automaticMemoryStorageAccess({ ownerId: 'bob', allowedProjects: [] });
+test('global memories retain host-owned directory provenance after a local correction', t => {
+  const f = fixture(t), saved = f.memory.upsertAutomatic(candidate({ directory: null }), authority())!;
+  const who = automaticMemoryStorageAccess({ ownerId: 'bob', allowedDirectories: [] });
   assert.deepEqual(ids(f.memory, who), []);
-  assert.deepEqual(ids(f.memory, { ...who, allowedProjects: ['atlas'] }), [saved.id]);
+  assert.deepEqual(ids(f.memory, { ...who, allowedDirectories: ['atlas'] }), [saved.id]);
   f.memory.correct(saved.id, saved.version, { text: 'Corrected overview.' }, authority({ source: { kind: 'local-owner', ref: 'current-correction' } }));
   assert.deepEqual(ids(f.memory, who), []);
-  assert.deepEqual(f.memory.manage({ kind: 'local-owner', authenticated: true, ownerId: 'alice' })[0]?.resourceProjects, ['atlas']);
+  assert.deepEqual(f.memory.manage({ kind: 'local-owner', authenticated: true, ownerId: 'alice' })[0]?.resourceDirectories, ['atlas']);
 });
 
-test('handoffs can depend on shared global facts without carrying private or another project details', t => {
+test('handoffs can depend on shared global facts without carrying private or another directory details', t => {
   const f=fixture(t);
   const shared=f.memory.upsertAutomatic(candidate(),authority())!;
   const privateFact=f.memory.upsertAutomatic(candidate({key:'person.private',privacy:'private',text:'Private source.',evidence:['A private fact.']}),authority())!;
-  const detail=f.memory.upsertAutomatic(candidate({key:'project.detail',kind:'project_knowledge',level:'local',text:'Atlas specific detail.',evidence:['Atlas details.']}),authority())!;
-  const scope={kind:'chat' as const,ownerId:'bob',project:'other',chatKey:'other-team'};
+  const detail=f.memory.upsertAutomatic(candidate({key:'directory.detail',kind:'knowledge',level:'local',text:'Atlas specific detail.',evidence:['Atlas details.']}),authority())!;
+  const scope={kind:'chat' as const,ownerId:'bob',directory:'other',chatKey:'other-team'};
   const input={scope,goal:'Coordinate projects',limitations:[],decisions:[],evidence:[],unfinished:[],dependsOn:[{id:shared.id,version:shared.version}]};
-  const actor=authority({ownerId:'bob',chatKey:'other-team',chatType:'group',project:'other'});
+  const actor=authority({ownerId:'bob',chatKey:'other-team',chatType:'group',directory:'other'});
   const handoff=f.memory.saveHandoff(input,actor);
-  assert.ok(ids(f.memory,automaticMemoryStorageAccess({ownerId:'bob',chatKey:'other-team',chatType:'group',project:'other'})).includes(handoff.id));
+  assert.ok(ids(f.memory,automaticMemoryStorageAccess({ownerId:'bob',chatKey:'other-team',chatType:'group',directory:'other'})).includes(handoff.id));
   for(const source of [privateFact,detail])assert.throws(()=>f.memory.saveHandoff({...input,dependsOn:[{id:source.id,version:source.version}]},actor),/visibility/);
   f.memory.correct(shared.id,shared.version,{text:'New shared fact.'},authority());
-  assert.ok(!ids(f.memory,automaticMemoryStorageAccess({ownerId:'bob',chatKey:'other-team',chatType:'group',project:'other'})).includes(handoff.id));
+  assert.ok(!ids(f.memory,automaticMemoryStorageAccess({ownerId:'bob',chatKey:'other-team',chatType:'group',directory:'other'})).includes(handoff.id));
 });
 
 test('global shared facts survive reopening and are readable by other paired conversation principals', t => {
   const f = fixture(t), saved = f.memory.upsertAutomatic(candidate(), authority())!;
   assert.deepEqual(ids(f.memory, automaticMemoryStorageAccess({ ownerId: 'bob', chatKey: 'dm-bob' })), [saved.id]);
-  assert.deepEqual(ids(f.memory, automaticMemoryStorageAccess({ ownerId: 'bob', chatKey: 'team', chatType: 'group', project: 'other' })), [saved.id]);
+  assert.deepEqual(ids(f.memory, automaticMemoryStorageAccess({ ownerId: 'bob', chatKey: 'team', chatType: 'group', directory: 'other' })), [saved.id]);
   assert.throws(() => f.memory.search(automaticMemoryStorageAccess({ authenticated: false })), /not verified/);
   const reopened = new Store(f.file, true);
   try { assert.equal(new Memories(reopened).search(automaticMemoryStorageAccess({ ownerId: 'bob' }))[0]?.text, 'Alice maintains Atlas.'); }
@@ -210,25 +210,25 @@ test('private and conversation facts are filtered before private content reaches
   visited.length = 0;
   assert.deepEqual(ids(f.memory, automaticMemoryStorageAccess({ chatKey: 'other-team', chatType: 'group' })), []);
   assert.ok(!visited.includes('PRIVATE_ALICE_DETAIL') && !visited.includes('TEAM_DETAIL'));
-  assert.deepEqual(ids(f.memory, automaticMemoryStorageAccess({ project: 'other' })), [privateFact.id]);
+  assert.deepEqual(ids(f.memory, automaticMemoryStorageAccess({ directory: 'other' })), [privateFact.id]);
   assert.deepEqual(ids(f.memory, automaticMemoryStorageAccess({ ownerId: 'bob', chatKey: 'dm-bob' })), []);
 });
 
-test('project detail stays local while relevant global overviews support cross-project discussion', t => {
+test('directory detail stays local while relevant global overviews support cross-directory discussion', t => {
   const f = fixture(t);
-  const detail = f.memory.upsertAutomatic(candidate({ key: 'atlas.table-layout', level: 'local', kind: 'project_knowledge', text: 'Atlas table uses fixed pagination.' }), authority())!;
-  const overview = f.memory.upsertAutomatic(candidate({ key: 'atlas.overview', project: 'atlas', kind: 'project_knowledge', text: 'Atlas serves the internal admin tooling.' }), authority())!;
+  const detail = f.memory.upsertAutomatic(candidate({ key: 'atlas.table-layout', level: 'local', kind: 'knowledge', text: 'Atlas table uses fixed pagination.' }), authority())!;
+  const overview = f.memory.upsertAutomatic(candidate({ key: 'atlas.overview', directory: 'atlas', kind: 'knowledge', text: 'Atlas serves the internal admin tooling.' }), authority())!;
   assert.deepEqual(ids(f.memory, automaticMemoryStorageAccess({ ownerId: 'bob', chatType: 'group', chatKey: 'atlas-team' })), [detail.id, overview.id].sort());
-  const elsewhere = automaticMemoryStorageAccess({ ownerId: 'bob', chatKey: 'other-team', chatType: 'group', project: 'other' });
+  const elsewhere = automaticMemoryStorageAccess({ ownerId: 'bob', chatKey: 'other-team', chatType: 'group', directory: 'other' });
   assert.deepEqual(f.memory.search(elsewhere, { relevantText: 'Investigate billing failures.' }).map(row => row.id), []);
-  assert.deepEqual(f.memory.search(elsewhere, { relevantText: 'Compare Atlas with the other project.' }).map(row => row.id), [overview.id]);
-  assert.throws(() => f.memory.upsertAutomatic(candidate({ level: 'local', project: 'other' }), authority()), /project does not match/);
+  assert.deepEqual(f.memory.search(elsewhere, { relevantText: 'Compare Atlas with the other directory.' }).map(row => row.id), [overview.id]);
+  assert.throws(() => f.memory.upsertAutomatic(candidate({ level: 'local', directory: 'other' }), authority()), /directory does not match/);
 });
 
-test('cross-project relevance recognizes Chinese phrases and keeps empty context distinct from omitted context', t => {
+test('cross-directory relevance recognizes Chinese phrases and keeps empty context distinct from omitted context', t => {
   const f = fixture(t);
-  const overview = f.memory.upsertAutomatic(candidate({ key: 'atlas.cn', project: 'atlas', kind: 'project_knowledge', text: '负责订单处理和支付。' }), authority())!;
-  const elsewhere = automaticMemoryStorageAccess({ ownerId: 'bob', chatKey: 'other-team', chatType: 'group', project: 'other' });
+  const overview = f.memory.upsertAutomatic(candidate({ key: 'atlas.cn', directory: 'atlas', kind: 'knowledge', text: '负责订单处理和支付。' }), authority())!;
+  const elsewhere = automaticMemoryStorageAccess({ ownerId: 'bob', chatKey: 'other-team', chatType: 'group', directory: 'other' });
   assert.deepEqual(f.memory.search(elsewhere, { relevantText: '检查订单处理流程' }).map(row => row.id), [overview.id]);
   assert.deepEqual(f.memory.search(elsewhere, { relevantText: '' }).map(row => row.id), []);
   assert.deepEqual(f.memory.search(elsewhere).map(row => row.id), [overview.id]);
@@ -287,16 +287,16 @@ test('an automatic correction preserves privacy and automatic forgetting leaves 
   assert.ok(!ids(f.memory, automaticMemoryStorageAccess()).includes(secret.id));
 });
 
-test('private person concepts cannot widen or revive by moving from global into a local project scope', t => {
+test('private person concepts cannot widen or revive by moving from global into a local directory scope', t => {
   const f = fixture(t), first = f.memory.upsertAutomatic(candidate({ key: 'person.contact', privacy: 'private', text: 'Alice has a private contact route.',
     evidence: ['My contact route is private.'] }), authority())!;
-  const updated = f.memory.upsertAutomatic(candidate({ key: 'person.contact', level: 'local', project: 'atlas', privacy: 'shared',
+  const updated = f.memory.upsertAutomatic(candidate({ key: 'person.contact', level: 'local', directory: 'atlas', privacy: 'shared',
     text: 'Alice updated her private contact route.', evidence: ['I updated my private contact route.'], observedAt: 200 }), authority())!;
-  assert.equal(updated.id, first.id); assert.equal(updated.scope.kind, 'global'); assert.equal(updated.scope.project, null);
+  assert.equal(updated.id, first.id); assert.equal(updated.scope.kind, 'global'); assert.equal(updated.scope.directory, null);
   assert.deepEqual(updated.visibility, { privacy: 'private', chatKey: null });
   assert.deepEqual(ids(f.memory, automaticMemoryStorageAccess({ ownerId: 'bob', chatKey: 'atlas-team', chatType: 'group' })), []);
   f.memory.delete(updated.id, updated.version, authority({ source: { kind: 'local-owner', ref: 'explicit-forget' } }));
-  assert.equal(f.memory.upsertAutomatic(candidate({ key: 'person.contact', level: 'local', project: 'atlas', privacy: 'shared',
+  assert.equal(f.memory.upsertAutomatic(candidate({ key: 'person.contact', level: 'local', directory: 'atlas', privacy: 'shared',
     text: 'Recreated contact data.', evidence: ['An alternative claim about contact data.'], observedAt: 300 }), authority()), undefined);
   assert.deepEqual(ids(f.memory, automaticMemoryStorageAccess()), []);
 });
@@ -342,7 +342,7 @@ test('automatic provenance stores bounded evidence hashes rather than original q
 
 test('legacy owner memories remain private and legacy handoffs still invalidate with their source', t => {
   const f = fixture(t), local = authority({ source: { kind: 'local-owner', ref: 'legacy-setup' } });
-  const scope = { kind: 'owner' as const, ownerId: 'alice', project: null, chatKey: null };
+  const scope = { kind: 'owner' as const, ownerId: 'alice', directory: null, chatKey: null };
   const source = f.memory.save({ kind: 'preference', scope, text: 'Legacy private preference.' }, local);
   const handoff = f.memory.saveHandoff({ scope, goal: 'Continue private work', limitations: [], decisions: [], evidence: [], unfinished: [],
     dependsOn: [{ id: source.id, version: source.version }] }, local);
@@ -358,11 +358,11 @@ test('private commands can disable and forget owned automatic memories without r
   const f = fixture(t), actor = authority({ ownerId: 'owner', chatKey: 'app:chat' });
   const run = (text: string) => memoryCommand(f.store, message(text), ['owner'], 'atlas', x => x, ['atlas'])!;
   for (const level of ['global', 'local'] as const) for (const privacy of ['shared', 'private'] as const) {
-    const text = `Durable ${level} ${privacy} project fact.`, input = candidate({ key: `project.${level}.${privacy}`, level, privacy, text, evidence: [text] });
+    const text = `Durable ${level} ${privacy} directory fact.`, input = candidate({ key: `directory.${level}.${privacy}`, level, privacy, text, evidence: [text] });
     const saved = f.memory.upsertAutomatic(input, actor)!;
     assert.match(run(`/memory-correct ${saved.id} 1 unclassified content`), /未完成/);
     assert.match(run(`/memory-disable ${saved.id} 1`), /v2/);
-    const disabled = f.memory.manage({ ...actor, allowedProjects: ['atlas'] }).find(row => row.id === saved.id)!;
+    const disabled = f.memory.manage({ ...actor, allowedDirectories: ['atlas'] }).find(row => row.id === saved.id)!;
     assert.equal(disabled.status, 'disabled'); assert.deepEqual(disabled.visibility, saved.visibility);
     assert.match(run(`/forget ${saved.id} 1`), /未完成/);
     assert.match(run(`/forget ${saved.id} 2`), /v3/);
@@ -373,32 +373,31 @@ test('private commands can disable and forget owned automatic memories without r
   assert.deepEqual(f.store.db.prepare('PRAGMA foreign_key_check').all(), []);
 });
 
-test('automatic memory removal rejects other owners, groups, revoked projects and inaccessible chat scopes', t => {
+test('automatic memory removal rejects other owners, groups, revoked directories and inaccessible chat scopes', t => {
   const f = fixture(t), actor = authority({ ownerId: 'owner', chatKey: 'app:chat' });
   const saved = f.memory.upsertAutomatic(candidate({ level: 'local' }), actor)!;
   const command = message(`/forget ${saved.id} 1`);
-  for (const [incoming, project, allowed] of [
+  for (const [incoming, directory, allowed] of [
     [{ ...command, senderId: 'bob' }, 'atlas', ['atlas']],
     [{ ...command, envelope: { ...command.envelope!, chatType: 'group' as const } }, 'atlas', ['atlas']],
-    [command, 'other', ['atlas', 'other']],
     [command, 'atlas', []],
   ] as const) {
-    assert.match(memoryCommand(f.store, incoming, ['owner', 'bob'], project, x => x, allowed)!, /未完成|只接受/);
+    assert.match(memoryCommand(f.store, incoming, ['owner', 'bob'], directory, x => x, allowed)!, /未完成|只接受/);
     assert.equal(f.store.db.prepare('SELECT status FROM memories WHERE id=?').get(saved.id)?.status, 'active');
   }
-  const global = f.memory.upsertAutomatic(candidate({ key: 'project.global', text: 'Atlas overview.', evidence: ['Atlas overview.'] }), actor)!;
+  const global = f.memory.upsertAutomatic(candidate({ key: 'directory.global', text: 'Atlas overview.', evidence: ['Atlas overview.'] }), actor)!;
   assert.match(memoryCommand(f.store, message(`/forget ${global.id} 1`), ['owner'], 'atlas', x => x, [])!, /未完成/);
-  const chat = f.memory.upsertAutomatic(candidate({ key: 'project.chat', privacy: 'chat', text: 'Chat-specific fact.', evidence: ['Chat-specific fact.'] }), actor)!;
+  const chat = f.memory.upsertAutomatic(candidate({ key: 'directory.chat', privacy: 'chat', text: 'Chat-specific fact.', evidence: ['Chat-specific fact.'] }), actor)!;
   assert.match(memoryCommand(f.store, { ...message(`/forget ${chat.id} 1`), chatKey: 'another-chat' }, ['owner'], 'atlas', x => x, ['atlas'])!, /未完成/);
 });
 
 test('explicit private memory commands preserve ownership, version conflicts and deletion',t=>{
  const root=mkdtempSync(join(tmpdir(),'namo-memory-command-')),store=new Store(join(root,'db'));t.after(()=>{store.close();rmSync(root,{recursive:true,force:true});});
- const run=(text:string)=>memoryCommand(store,message(text),['owner'],'project',x=>x)!;
+ const run=(text:string)=>memoryCommand(store,message(text),['owner'],'directory',x=>x)!;
  assert.match(run('/remember owner concise answers'),/已保存/);const list=run('/memories');assert.match(list,/concise answers/);const id=list.match(/`(M-[A-F0-9]{16})`/)?.[1];assert.ok(id);
  assert.match(run(`/memory-correct ${id} 1 precise answers`),/v2/);assert.match(run(`/forget ${id} 1`),/未完成/);assert.match(run(`/forget ${id} 2`),/v3/);assert.doesNotMatch(run('/memories'),/precise answers/);
- const group=message('/remember owner injected');group.envelope!.chatType='group';assert.match(memoryCommand(store,group,['owner'],'project',x=>x)!,/只接受/);
- const quote=message('/remember owner injected');quote.envelope!.parentId='quoted';assert.match(memoryCommand(store,quote,['owner'],'project',x=>x)!,/引用/);
+ const group=message('/remember owner injected');group.envelope!.chatType='group';assert.match(memoryCommand(store,group,['owner'],'directory',x=>x)!,/只接受/);
+ const quote=message('/remember owner injected');quote.envelope!.parentId='quoted';assert.match(memoryCommand(store,quote,['owner'],'directory',x=>x)!,/引用/);
 });
 test('pending controls are isolated by owner and topic without changing chat scheduling',t=>{
  const root=mkdtempSync(join(tmpdir(),'namo-scope-')),store=new Store(join(root,'db'));t.after(()=>{store.close();rmSync(root,{recursive:true,force:true});});const m=message('work');store.enqueue(m);store.claim(m.key);
@@ -415,4 +414,12 @@ test('memory metadata, body version and audit commit together; invalid reference
   assert.equal(visible[0]?.version,1); assert.equal(visible[0]?.text,'Original');
   assert.equal(f.memory.history(saved.id,access()).length,1);
   assert.deepEqual(f.store.db.prepare('PRAGMA foreign_key_check').all(),[]);
+});
+
+
+test('chat memories survive a separate scratch cwd only within the same owner, chat and allowed directory',t=>{
+ const f=fixture(t),record=f.memory.save({kind:'knowledge',scope:chatScope('dm-alice','/shared/source'),text:'preserved chat knowledge'},local());
+ const current={...access('alice','dm-alice','p2p','/scratch'),allowedDirectories:['/shared/source']};
+ assert.deepEqual(f.memory.search(current).map(r=>r.id),[record.id]);
+ for(const denied of [{...current,ownerId:'bob'},{...current,chatKey:'other'},{...current,allowedDirectories:[]}])assert.equal(f.memory.search(denied).length,0);
 });

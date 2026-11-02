@@ -41,12 +41,7 @@ export async function probeAgent(source: Config, profileId?: string): Promise<Ch
   } catch (e) {
     checks.push({ id: 'agent.protocol', status: 'fail', message: tr("agents.appServerProbeFailed", e instanceof RuntimeError ? e.code : 'probe_failed'), next: tr("agents.runCodexVersionCheckInstallationProtocolBaseline") });
   }
-  if(c.codex.directories!==undefined) {
-    checks.push({id:'agent.directories',status:c.codex.directories.every(existsSync)?'ok':'fail',message:tr('directories.paths')});
-  } else if (c.codex.defaultProject) {
-    const cwd = c.codex.projects?.[c.codex.defaultProject];
-    checks.push({ id: 'agent.project', status: cwd && existsSync(cwd) ? 'ok' : 'fail', message: cwd ? tr("cli.workingDirectory", cwd) : tr("agents.defaultProjectNotFound") });
-  } else checks.push({ id: 'agent.project', status: 'warn', message: tr("agents.noProjectConfiguredUsingIsolatedSessionDirectory"), next: tr("agents.runNamoInitSelectProject") });
+  checks.push({id:'agent.directories',status:(c.codex.directories??[]).every(existsSync)?'ok':'fail',message:tr('directories.paths')});
   return checks;
 }
 export async function loginAgent(source: Config, profileId?: string): Promise<void> {

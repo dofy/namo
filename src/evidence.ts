@@ -32,7 +32,7 @@ function commandLabel(raw: unknown): string {
 }
 
 /** Bounded protocol projection. Never retain tool output, arguments or patch text. */
-export function projectEvidenceItem(raw: unknown): EvidenceItem | undefined {
+export function evidenceItem(raw: unknown): EvidenceItem | undefined {
   if (!raw || typeof raw !== 'object') return;
   const item = raw as Record<string, any>;
   if (typeof item.id !== 'string' || !item.id || item.id.length > 256) return;

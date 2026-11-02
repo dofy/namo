@@ -4,7 +4,7 @@ import { Button, Flex, Heading, Link, Popover, Text } from '@radix-ui/themes';
 import { uiRoutes, type ManagementState, type UiPage } from '../src/ui-contract';
 import { api, ApiError, message } from './api';
 import { Choice, Notice } from './components';
-import { PROJECT_URL } from '../src/project';
+import { REPOSITORY_URL } from '../src/repository';
 import type { LanguagePreference } from '../src/i18n';
 import { Details } from './Details';
 import { TasksPage, type DetailTarget } from './pages/TasksPage';
@@ -32,8 +32,8 @@ function currentRoute(): { page: NavigationPage; pathname: string; search: strin
 }
 export function App({ initial, startupError }: { initial?: ManagementState; startupError?: string }) {
   const locale = useLocale(), languagePreference = useLanguagePreference();
-  const pages: Record<NavigationPage, string> = { assistant:tr("nav.assistantSettings"), memory:tr("nav.memoryProfiles"), dashboard: tr("nav.dashboard"), tasks: tr("nav.tasks"), schedules:tr('nav.schedules'), sessions: tr("nav.sessions"), settings: tr("nav.projectPermissions"), connections: tr("nav.connections"), changelog:tr('changelog.title') };
-  const navigation: Record<NavigationPage, string> = { ...pages, assistant:tr("nav.assistant"), settings:tr("nav.projects"), connections:tr("nav.connections") };
+  const pages: Record<NavigationPage, string> = { assistant:tr("nav.assistantSettings"), memory:tr("nav.memoryProfiles"), dashboard: tr("nav.dashboard"), tasks: tr("nav.tasks"), schedules:tr('nav.schedules'), sessions: tr("nav.sessions"), settings: tr("nav.directoryPermissions"), connections: tr("nav.connections"), changelog:tr('changelog.title') };
+  const navigation: Record<NavigationPage, string> = { ...pages, assistant:tr("nav.assistant"), settings:tr("nav.directories"), connections:tr("nav.connections") };
   const descriptions: Record<NavigationPage, string> = { assistant:tr("app.configureAssistantIdentityPresentationPreferences"), memory:tr("app.manageMemoriesConversationsNamesLanguagesTimeZones"), dashboard: tr("app.activityItemsNeedAttention"), tasks: tr("app.findTasksFollowTheirProgressResults"), schedules:tr('schedules.description'), sessions: tr("app.pickUpWhereEachConversationLeftOff"), settings: tr("app.chooseWhereAgentWorksWhatCan"), connections: tr("app.manageCodexFeishuGithubConnections"), changelog:tr('changelog.description') };
   const [state, setState] = useState(initial), [route, setRoute] = useState(currentRoute), [target, setTarget] = useState<DetailTarget | null>(null);
   const { page: view, pathname, search } = route;
@@ -115,7 +115,7 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
               </dl><Text as="p" size="1" color="gray">{tr("app.localAccess")}</Text>
               <Link href={uiRoutes.changelog} onClick={event => { navigate(event, 'changelog'); setVersionOpen(false); }}>{tr('changelog.view')}</Link>
             </Popover.Content></Popover.Root>
-          <Link className="project-link" href={PROJECT_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub · dofy/namo"><Icon name="external" /><span>GitHub</span></Link>
+          <Link className="repository-link" href={REPOSITORY_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub · dofy/namo"><Icon name="external" /><span>GitHub</span></Link>
         </div>
       </div>
     </aside>
@@ -137,7 +137,7 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
         {view === 'dashboard' && <section aria-label={tr("app.dashboardContent")}><DashboardPage state={state} navigate={go} onOpen={onOpen} enabled={!expired} /></section>}
         {(view === 'tasks' || view === 'sessions') && <section aria-label={view === 'tasks' ? tr("app.taskContent") : tr("app.sessionContent")}><TasksPage key={view} kind={view} state={state} onOpen={onOpen} navigate={go} search={search} enabled={!expired} /></section>}
         {view === 'schedules' && <SchedulesPage state={state} search={search} navigate={go} enabled={!expired} />}
-        <section hidden={view !== 'settings'} aria-label={tr("app.projectsPermissionsContent")}><SettingsPage config={state.config} profiles={state.profiles} recoveryAvailable={state.recoveryAvailable && !expired} refresh={refresh} notify={notify} /></section>
+        <section hidden={view !== 'settings'} aria-label={tr("app.directoriesPermissionsContent")}><SettingsPage config={state.config} profiles={state.profiles} recoveryAvailable={state.recoveryAvailable && !expired} refresh={refresh} notify={notify} /></section>
         <section hidden={view !== 'connections'} aria-label={tr("app.agentFeishuContent")}><ConnectionsPage state={state} refresh={refresh} expired={expired} /></section>
         {view === 'changelog' && <ChangelogPage />}
       </ModelCatalogProvider>}

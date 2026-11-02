@@ -21,8 +21,8 @@ test('directory migration preserves credentials and backs up legacy configuratio
   const message={key:'m',messageId:'m',chatKey:'group',chatId:'group',senderId:'b',text:'task'};
   assert.equal(executionPolicy(current.codex,current.feishu,message).sandbox,'workspace-write');
   assert.throws(()=>executionPolicy(current.codex,current.feishu,{...message,senderId:'outsider'}));
-  assert.equal(taskAuthorizationValid(current,{...current,codex:{...current.codex,directories:[]}},message,null,root),false);
-  assert.equal(taskAuthorizationValid(current,{...current,codex:{...current.codex,directories:[...current.codex.directories!,join(root,'tools')]}},message,null,root),true);
+  assert.equal(taskAuthorizationValid(current,{...current,codex:{...current.codex,directories:[]}},message),false);
+  assert.equal(taskAuthorizationValid(current,{...current,codex:{...current.codex,directories:[...current.codex.directories!,join(root,'tools')]}},message),true);
   for(const directory of ['/',homedir(),join(root,'data')]) {
     writeFileSync(file,JSON.stringify({...raw,codex:{...raw.codex,directories:[directory]}}));assert.throws(()=>loadConfig(file));
   }
@@ -33,7 +33,7 @@ test('project configuration resolves cwd and enforces service credential exclusi
   t.after(() => rmSync(root, { recursive: true, force: true }));
   mkdirSync(join(root, 'project'));
   const file = join(root, 'config.json');
-  const base = { codex: { projects: { app: './project' }, defaultProject: 'app', networkAccess: true, sandbox: 'workspace-write' } };
+  const base = { codex: { directories: ['./project'], networkAccess: true, sandbox: 'workspace-write' } };
   const save = (c: unknown) => writeFileSync(file, JSON.stringify(c));
   save(base); const config = loadConfig(file);
   assert.equal(config.concurrency, 8);
@@ -42,14 +42,14 @@ test('project configuration resolves cwd and enforces service credential exclusi
   for(const value of [4,8,64]) {save({...base,concurrency:value}); assert.equal(loadConfig(file).concurrency,value);}
   for(const value of [0,65,2.5]) {save({...base,concurrency:value}); assert.throws(()=>loadConfig(file));}
   save(base);
-  assert.equal(config.codex.projects?.app, realpathSync(join(root, 'project')));
+  assert.equal(config.codex.directories?.[0], realpathSync(join(root, 'project')));
   assert.equal(config.codex.networkAccess, true);
-  assert.equal(config.codex.allowLocalCommits, false);
+  assert.equal(config.codex.allowLocalCommits, true);
   assert.ok(config.codex.denyPaths?.includes(file));
   assert.ok(config.codex.denyPaths?.includes(join(root, 'data')));
-  save({ codex: { ...base.codex, defaultProject: 'missing' } }); assert.throws(() => loadConfig(file));
-  save({ codex: { ...base.codex, projects: { app: homedir() } } }); assert.throws(() => loadConfig(file));
-  save({ codex: { ...base.codex, projects: { app: '/' } } }); assert.throws(() => loadConfig(file));
+  save({codex:{...base.codex,directories:['/missing']}});assert.throws(()=>loadConfig(file));
+  save({ codex: { ...base.codex, directories: [homedir()] } }); assert.throws(() => loadConfig(file));
+  save({ codex: { ...base.codex, directories: ['/'] } }); assert.throws(() => loadConfig(file));
   save({ codex: { ...base.codex, networkAccess: 'true' } }); assert.throws(() => loadConfig(file));
   save({ codex: { ...base.codex, allowLocalCommits: 'true' } }); assert.throws(() => loadConfig(file));
   save({ codex: { ...base.codex, allowLocalCommits: true, sandbox: 'read-only' } }); assert.throws(() => loadConfig(file));

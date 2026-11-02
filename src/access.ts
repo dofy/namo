@@ -1,9 +1,8 @@
-import { createHash } from 'node:crypto';
 import type { Config } from './config.js';
 import type { Incoming } from './store.js';
 
 import type { Audience, OrganizationAccess } from './access-contract.js';
-export type { Audience, OrganizationAccess, ProjectAccess } from './access-contract.js';
+export type { Audience, OrganizationAccess } from './access-contract.js';
 const ID = /^[^\s\u0000-\u001f\u007f-\u009f]{1,512}$/u;
 export function identityList(raw: unknown): string[] {
   if (!Array.isArray(raw) || raw.length > 200 || raw.some(x => typeof x !== 'string' || !ID.test(x) || x === '*')) throw new Error('access_invalid_identity');
@@ -31,38 +30,18 @@ export function audienceAllows(a: Audience, m: Incoming): boolean {
   return m.envelope?.chatType === 'group' ? a.organization || a.chatIds.includes(m.chatId)
     : m.envelope?.chatType === 'p2p' && (a.organization || a.userIds.includes(m.senderId));
 }
-export function projectAllowed(c: Config['codex'], f: Config['feishu'], m: Incoming, name: string): boolean {
-  if(c.directories!==undefined)return admitted(f,m.senderId,m.chatId,m.envelope?.tenantKey);
-  return !f.access || !!c.projectAccess?.[name] && audienceAllows(c.projectAccess[name], m);
-}
-export function executionPolicy(c: Config['codex'], f: Config['feishu'], m: Incoming, project?: string, github?: Config['github']): Config['codex'] {
-  if(c.directories!==undefined) {
-    if(!admitted(f,m.senderId,m.chatId,m.envelope?.tenantKey))throw Error('organization_access_denied');
-    return {...c,sandbox:'workspace-write',allowLocalCommits:true,readPaths:[]};
-  }
-  if (!f.access && github?.mode!=='simple') return c;
-  if (!admitted(f, m.senderId, m.chatId, m.envelope?.tenantKey) || project && !projectAllowed(c,f,m,project)) throw new Error('organization_access_denied');
-  const group = github?.mode==='simple' && m.envelope?.chatType==='group';
-  return { ...c, ...(f.access ? {sandbox:project ? c.projectAccess![project].permission : 'read-only',networkAccess:false,allowLocalCommits:false,readPaths:[]} : {}),
-    ...(group ? {sandbox:'read-only',networkAccess:false,allowLocalCommits:false,readPaths:[]} : {}),
-    accessScope: createHash('sha256').update(JSON.stringify({feishu:{appId:f.appId,access:f.access,chats:f.allowedChatIds},projects:c.projectAccess,github})).digest('hex') };
+export function executionPolicy(c: Config['codex'], f: Config['feishu'], m: Incoming): Config['codex'] {
+  if (!admitted(f,m.senderId,m.chatId,m.envelope?.tenantKey)) throw Error('organization_access_denied');
+  return {...c,sandbox:'workspace-write',allowLocalCommits:true,readPaths:[]};
 }
 
-/** Recheck the authority relevant to one running task, not unrelated grants. */
-export function taskAuthorizationValid(applied:Config, current:Config, message:Incoming, project:string|null|undefined, cwd:string):boolean {
+/** A task keeps its original grant; revocations apply immediately. */
+export function taskAuthorizationValid(applied:Config,current:Config,message:Incoming):boolean {
   try {
-    if(applied.feishu.appId!==current.feishu.appId || applied.feishu.domain!==current.feishu.domain
-      || !admitted(current.feishu,message.senderId,message.chatId,message.envelope?.tenantKey)
-      || project && current.codex.directories===undefined && current.feishu.access && (current.codex.projects?.[project]!==cwd || !projectAllowed(current.codex,current.feishu,message,project))) return false;
-    const before=executionPolicy(applied.codex,applied.feishu,message,project??undefined,applied.github);
-    const after=executionPolicy(current.codex,current.feishu,message,project??undefined,current.github);
-    // The task keeps its original sandbox; a later broadening cannot grant it
-    // additional authority. Narrowing any capability must stop it.
-    return !(before.sandbox==='workspace-write' && after.sandbox!=='workspace-write')
-      && (!before.networkAccess || !!after.networkAccess)
-      && (!before.allowLocalCommits || !!after.allowLocalCommits)
-      && (before.readPaths??[]).every(path=>(after.readPaths??[]).includes(path))
+    if(applied.feishu.appId!==current.feishu.appId||applied.feishu.domain!==current.feishu.domain)return false;
+    const before=executionPolicy(applied.codex,applied.feishu,message),after=executionPolicy(current.codex,current.feishu,message);
+    return (!before.networkAccess||!!after.networkAccess)
       && (before.directories??[]).every(path=>(after.directories??[]).includes(path))
       && JSON.stringify(before.denyPaths??[])===JSON.stringify(after.denyPaths??[]);
-  } catch { return false; }
+  } catch {return false;}
 }

@@ -3,7 +3,7 @@ import { Tasks, type Task } from './tasks.js';
 import { taskStateLabel } from './presentation.js';
 
 interface SessionRow {
-  id: string; project: string | null; taskCount: number; lastActiveAt: number;
+  id: string; cwd: string; taskCount: number; lastActiveAt: number;
   firstTask: string | null; latestTask: string | null;
 }
 
@@ -31,7 +31,7 @@ export function sessionList(store: Store, message: Incoming, options: {
     SELECT t.workstreamId,COUNT(*) AS taskCount,MIN(t.seq) AS firstSeq,MAX(t.seq) AS latestSeq,
       MAX(MAX(t.createdAt,COALESCE(t.startedAt,0),COALESCE(t.finishedAt,0),COALESCE(m.updatedAt,0))) AS lastActiveAt
     FROM scoped_tasks t LEFT JOIN message_activity m ON m.taskId=t.id GROUP BY t.workstreamId
-  ) SELECT w.id,w.project,COALESCE(a.taskCount,0) AS taskCount,COALESCE(a.lastActiveAt,w.createdAt) AS lastActiveAt,
+  ) SELECT w.id,w.cwd,COALESCE(a.taskCount,0) AS taskCount,COALESCE(a.lastActiveAt,w.createdAt) AS lastActiveAt,
     f.id AS firstTask,l.id AS latestTask
     FROM workstreams w LEFT JOIN activity a ON a.workstreamId=w.id
     LEFT JOIN scoped_tasks f ON f.seq=a.firstSeq LEFT JOIN scoped_tasks l ON l.seq=a.latestSeq
@@ -49,7 +49,7 @@ export function sessionList(store: Store, message: Incoming, options: {
     const recent = excerpt(options.redact(latest ? store.get(latest.inboxKey)?.text ?? '' : ''), 88);
     entries.push([
       `**${entries.length + 1}. ${literal(title)}${row.id === current ? ' · 当前会话' : ''}**`,
-      `${literal(excerpt(options.redact(row.project ?? '隔离目录'), 40))} · ${row.taskCount} 项任务${latest ? ` · 最近任务${taskStateLabel(latest.state)}` : ''}`,
+      `${literal(excerpt(options.redact(row.cwd ?? '隔离目录'), 40))} · ${row.taskCount} 项任务${latest ? ` · 最近任务${taskStateLabel(latest.state)}` : ''}`,
       `最近活动：${date.format(row.lastActiveAt)}`,
       ...(latest && latest.id !== first?.id && recent && recent !== title ? [`最近：${literal(recent)}`] : []),
       `继续此会话：\`/session ${row.id}\``,

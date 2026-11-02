@@ -18,7 +18,7 @@ function fixture(t: { after(fn: () => void): void }) {
     const m = incoming(`m${++seq}`, text, sender, chat); store.enqueue(m);
     store.db.prepare('UPDATE inbox SET createdAt=? WHERE key=?').run(at + seq * 60_000, m.key);
     if (fresh) tasks.reset(m);
-    const task = tasks.create(store.get(m.key)!, { cwd: dir, project: 'bot', policyHash: 'policy' });
+    const task = tasks.create(store.get(m.key)!, { cwd: dir, policyHash: 'policy' });
     store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(task.id);
     return task;
   };
@@ -31,7 +31,7 @@ test('session list explains first and latest requests, current binding, time, co
   const f = fixture(t), first = f.add('/run 检查支付取消流程'), last = f.add('补齐重复提交的回归测试', false);
   const text = f.list();
   assert.match(text, /\*\*1\. 检查支付取消流程 · 当前会话\*\*/);
-  assert.match(text, /bot · 2 项任务 · 最近任务已完成/);
+  assert.match(text, / · 2 项任务 · 最近任务已完成/);
   assert.match(text, /最近：补齐重复提交的回归测试/);
   assert.match(text, /最近活动：2026\/10\/28 16:02/);
   assert.ok(text.includes(`/session ${first.workstreamId}`));

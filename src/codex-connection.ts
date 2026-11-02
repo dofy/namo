@@ -210,7 +210,7 @@ export async function connectCodex(config: Config['codex'], cwd: string): Promis
 }
 
 export async function probeRuntime(config: Config['codex']): Promise<{ initialized: true; authenticated: boolean; permissions: true }> {
-  const cwd = config.projects?.[config.defaultProject ?? ''] ?? config.home;
+  const cwd = config.home;
   const rpc = await connectCodex(config, cwd);
   try {
     const result = await rpc.request('account/read', { refreshToken: false });

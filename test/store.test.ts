@@ -7,18 +7,20 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Store, type Incoming, SCHEMA_VERSION } from '../src/store.js';
 import { BackgroundWork } from '../src/background-work.js';
-import { storeFixture } from './helpers.js';
+import { storeFixture, legacyDatabase } from './helpers.js';
 import { databaseFingerprint } from '../src/upgrade-backup.js';
-import { Tasks } from '../src/tasks.js';
 
-test('schema 14 migration snapshots historical task directories without changing messages or task identity',t=>{
-  const {store}=storeFixture(t,'namo-directory-schema-'),tasks=new Tasks(store);
-  store.enqueue(message('historical'));const task=tasks.create(store.get('historical')!,{cwd:'/old/workspace',project:'legacy',policyHash:'old'});
-  store.db.exec('DROP TABLE task_directories; PRAGMA user_version=14');
-  migrateSchema(store.db);
-  assert.equal(store.db.prepare('PRAGMA user_version').get()?.user_version,SCHEMA_VERSION);
-  assert.deepEqual(tasks.get(task.id),task);assert.equal(store.get('historical')?.text,'hi');assert.deepEqual(tasks.directories(task),['/old/workspace']);
-  migrateSchema(store.db);assert.equal(store.db.prepare('SELECT count(*) AS n FROM task_directories').get()?.n,1);
+test('schema 14 migration snapshots task directories and preserves conversation identity',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-schema14-')),file=join(dir,'db');t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const db=await legacyDatabase(file,14);
+ db.exec(`INSERT INTO inbox(key,messageId,chatKey,chatId,senderId,text,createdAt) VALUES('i','m','c','c','u','historical text',1);
+ INSERT INTO workstreams VALUES('w','c','c','u','old','/old/workspace','policy',1);
+ INSERT INTO tasks(id,inboxKey,workstreamId,ownerId,chatKey,scopeKey,project,cwd,policyHash) VALUES('t','i','w','u','c','c','old','/old/workspace','policy');
+ INSERT INTO sessions VALUES('workstream:w','native-thread');`);
+ migrateSchema(db);assert.equal(db.prepare('pragma user_version').get()?.user_version,SCHEMA_VERSION);
+ assert.equal(db.prepare('select text from inbox').get()?.text,'historical text');assert.equal(db.prepare('select threadId from sessions').get()?.threadId,'native-thread');
+ assert.equal(db.prepare('select path from task_directories').get()?.path,'/old/workspace');
+ assert.deepEqual(db.prepare('pragma foreign_key_check').all(),[]);migrateSchema(db);db.close();
 });
 
 const message = (key: string, chatKey = 'chat'): Incoming => ({ key, chatKey, chatId: chatKey, messageId: key, senderId: 'user', text: 'hi' });
@@ -183,4 +185,74 @@ test('native queue indexes exclude terminal history and enforce leases, states a
   assert.equal(store.db.prepare("SELECT 1 FROM sqlite_schema WHERE name='background_work' OR type='trigger'").get(),undefined);
   assert.equal(store.db.prepare('SELECT count(*) AS n FROM settings').get()?.n,0);
   assert.deepEqual(store.db.prepare('PRAGMA foreign_key_check').all(),[]);
+});
+
+test('schema 16 preserves memory bodies, privacy, versions, lineage and imports while removing named resources',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'namo-schema16-')),file=join(dir,'db');t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const db=await legacyDatabase(file);
+  db.exec(`INSERT INTO inbox(key,messageId,chatKey,chatId,senderId,text,createdAt,state) VALUES('i','m','c','c','alice','keep original conversation',1,'replied');
+    INSERT INTO workstreams VALUES('w','c','c','alice','source','/shared/source','policy',1);
+    INSERT INTO tasks(id,inboxKey,workstreamId,ownerId,chatKey,scopeKey,project,cwd,policyHash,state) VALUES('t','i','w','alice','c','c','source','/shared/source','policy','succeeded');
+    INSERT INTO task_directories VALUES('t','/shared/source');
+    INSERT INTO task_runs(id,taskId,inputVersion,state,startedAt) VALUES('run','t',1,'succeeded',1);
+    INSERT INTO sessions VALUES('workstream:w','native-thread');
+    INSERT INTO outbox(inboxKey,chatId,kind,part,content,uuid,state,createdAt) VALUES('i','c','result',0,'keep original reply','uuid','sent',1);`);
+  const {Memories}=await import('../src/memory.js');
+  const ids=['M-AAAAAAAAAAAAAAAA','M-BBBBBBBBBBBBBBBB','M-CCCCCCCCCCCCCCCC','M-DDDDDDDDDDDDDDDD'];
+  for(const [index,id] of ids.entries()) {
+    const scope=index===0?'project':index===1||index===2?'local':'chat',name=index===2?'missing':'source';
+    const privacy=index===1?'shared':index===2?'private':'chat';
+    db.prepare(`INSERT INTO memories(id,version,kind,status,scopeKind,ownerId,project,chatKey,sourceKind,sourceRef,dependsOn,resourceProjects,visibility,contentChars,createdAt,updatedAt)
+      VALUES(?,3,'project_knowledge','active',?,'alice',?,?,'message','source',?,?,?,5,1,2)`).run(id,scope,name,scope==='chat'?'c':null,JSON.stringify(index===3?[{id:ids[0],version:3}]:[]),JSON.stringify([name]),scope==='local'?JSON.stringify({privacy,chatKey:null}):null);
+    db.prepare('INSERT INTO memory_contents VALUES(?,3,?)').run(id,'body'+index);
+    db.prepare("INSERT INTO memory_changes VALUES(?,3,'corrected','message','source',2)").run(id);
+  }
+  db.prepare("UPDATE memories SET kind='handoff' WHERE id=?").run(ids[3]);
+  db.prepare('INSERT INTO memory_snapshots VALUES(?,1,0,?)').run('run',JSON.stringify(ids.map(id=>({id,version:3}))));
+  db.prepare('INSERT INTO settings VALUES(?,?)').run('memory:migration-import:v1:old',JSON.stringify({schema:1,fingerprint:'f'.repeat(64),scope:{kind:'project',ownerId:'alice',project:'source',chatKey:null},memoryId:ids[0],sourceRef:'legacy-import',importedAt:1}));
+  db.prepare('INSERT INTO settings VALUES(?,?)').run('material-project:i',JSON.stringify({project:'source',cwd:'/shared/source',policyHash:'policy'}));
+  db.prepare('INSERT INTO settings VALUES(?,?)').run('mcp-read-scope:w',JSON.stringify([{taskId:'t',id:'linear',scope:'saved-scope',version:2}]));
+  const before={inbox:db.prepare('SELECT * FROM inbox').all(),outbox:db.prepare('SELECT * FROM outbox').all(),contents:db.prepare('SELECT * FROM memory_contents ORDER BY memoryId').all(),changes:db.prepare('SELECT * FROM memory_changes ORDER BY memoryId').all(),snapshots:db.prepare('SELECT * FROM memory_snapshots').all()};
+  // A corrupt foreign-key graph must roll back the entire schema, never leave a partial migration.
+  db.exec('PRAGMA foreign_keys=OFF');
+  db.prepare("INSERT INTO memory_changes VALUES('missing',1,'saved','message','source',1)").run();
+  assert.throws(()=>migrateSchema(db),/migration_foreign_key_violation/);
+  assert.equal(db.prepare('pragma user_version').get()?.user_version,15);
+  assert.ok(db.prepare('pragma table_info(tasks)').all().some(row=>row.name==='project'));
+  db.prepare("DELETE FROM memory_changes WHERE memoryId='missing'").run();
+  migrateSchema(db);
+  assert.deepEqual({inbox:db.prepare('SELECT * FROM inbox').all(),outbox:db.prepare('SELECT * FROM outbox').all(),contents:db.prepare('SELECT * FROM memory_contents ORDER BY memoryId').all(),changes:db.prepare('SELECT * FROM memory_changes ORDER BY memoryId').all(),snapshots:db.prepare('SELECT * FROM memory_snapshots').all()},before);
+  for(const row of db.prepare("SELECT name FROM sqlite_schema WHERE type='table'").all())assert.equal(db.prepare(`PRAGMA table_info(${row.name})`).all().some(column=>/project/i.test(String(column.name))),false);
+  assert.deepEqual(db.prepare('pragma foreign_key_check').all(),[]);assert.equal(db.prepare('pragma integrity_check').get()?.integrity_check,'ok');
+  const importRow=db.prepare("SELECT key,value FROM settings WHERE key LIKE 'memory:migration-import:v1:%'").get()!;
+  assert.notEqual(importRow.key,'memory:migration-import:v1:old');assert.equal(JSON.parse(String(importRow.value)).scope.directory,'/shared/source');
+  assert.equal(JSON.parse(String(db.prepare("SELECT value FROM settings WHERE key='mcp-read-scope:w'").get()!.value))[0].legacyContext,'source');
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key='material-project:i'").get(),undefined);
+  const stable=databaseFingerprint(db);migrateSchema(db);assert.deepEqual(databaseFingerprint(db),stable);db.close();
+  const store=new Store(file);t.after(()=>store.close());const memories=new Memories(store);
+  const access={kind:'verified-user' as const,authenticated:true,ownerId:'bob',chatType:'group' as const,chatKey:'other',allowedDirectories:['/shared/source']};
+  assert.deepEqual(memories.search(access).map(row=>row.id),[ids[1]]);
+  const owner=memories.manage({kind:'local-owner',authenticated:true,ownerId:'alice'});
+  assert.equal(owner.length,4);assert.ok(owner.every(row=>row.version===3)&&owner.filter(row=>row.kind==='knowledge').length===3);
+  assert.equal(owner.find(row=>row.id===ids[2])?.visibility?.privacy,'private');
+  assert.equal(owner.find(row=>row.id===ids[2])?.scope.kind,'global');
+});
+
+test('directory migration preserves imports when multiple old scopes converge',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'namo-schema16-imports-')),file=join(dir,'db');t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const db=await legacyDatabase(file);t.after(()=>db.close());
+  for(const [index,name] of ['one','two'].entries()) {
+    db.prepare('INSERT INTO workstreams VALUES(?,?,?,?,?,?,?,1)').run('w'+index,'c','c','alice',name,'/shared/source','policy');
+    const id='M-'+(index?'B':'A').repeat(16);
+    db.prepare(`INSERT INTO memories(id,version,kind,status,scopeKind,ownerId,project,sourceKind,sourceRef,dependsOn,resourceProjects,contentChars,createdAt,updatedAt)
+      VALUES(?,1,'project_knowledge','active','project','alice',?,'migration','ref','[]','[]',4,1,1)`).run(id,name);
+    db.prepare('INSERT INTO memory_contents VALUES(?,1,?)').run(id,'keep');
+    db.prepare('INSERT INTO settings VALUES(?,?)').run('memory:migration-import:v1:'+name,JSON.stringify({schema:1,fingerprint:'f'.repeat(64),scope:{kind:'project',ownerId:'alice',project:name,chatKey:null},memoryId:id,sourceRef:'ref',importedAt:1}));
+  }
+  migrateSchema(db);
+  const imports=db.prepare("SELECT key,value FROM settings WHERE key LIKE 'memory:migration-import:v1:%' ORDER BY key").all();
+  assert.equal(imports.length,2);assert.equal(new Set(imports.map(row=>JSON.parse(String(row.value)).memoryId)).size,2);
+  assert.ok(imports.every(row=>JSON.parse(String(row.value)).scope.directory==='/shared/source'));
+  assert.equal(db.prepare('SELECT count(*) n FROM memory_contents').get()?.n,2);
+  const stable=databaseFingerprint(db);migrateSchema(db);assert.deepEqual(databaseFingerprint(db),stable);
 });

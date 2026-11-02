@@ -23,7 +23,7 @@ function input(key = 'input'): Incoming {
 function fixture(t: any) {
   const dir = mkdtempSync(join(tmpdir(), 'namo-external-wait-')), file = join(dir, 'bot.sqlite');
   const store = new Store(file), tasks = new Tasks(store); store.enqueue(input());
-  const task = tasks.create(store.get('input')!, { cwd: dir, policyHash: 'policy', project: 'app' });
+  const task = tasks.create(store.get('input')!, { cwd: dir, policyHash: 'policy' });
   const runId = tasks.start(task); tasks.saveRun(runId, 'thread-one', 'turn-one');
   const context: ExternalWaitContext = { taskId: task.id, runId, threadId: 'thread-one', turnId: 'turn-one',
     callId: 'call-one', ownerId: 'alice', chatId: 'chat-id' };
@@ -115,7 +115,7 @@ test('pollOpen refreshes time between sequential waits and does not poll later e
   const f = fixture(t), waits = new ExternalWaits(f.store);
   const first = waits.request(f.context, { target, requiredChecks: checks, timeoutMs: 60_000 }, 1_000);
   const item = input('deadline-second'); f.store.enqueue(item);
-  const secondTask = f.tasks.create(f.store.get(item.key)!, { cwd: f.dir, policyHash: 'policy', project: 'app' });
+  const secondTask = f.tasks.create(f.store.get(item.key)!, { cwd: f.dir, policyHash: 'policy' });
   const secondRun = f.tasks.start(secondTask); f.tasks.saveRun(secondRun, 'deadline-thread', 'deadline-turn');
   const second = waits.request({ taskId: secondTask.id, runId: secondRun, threadId: 'deadline-thread', turnId: 'deadline-turn',
     callId: 'deadline-call', ownerId: 'alice', chatId: 'chat-id' }, { target: { ...target, pullNumber: 43 },
@@ -162,7 +162,7 @@ test('pollOpen fairly rotates more than one batch of pending waits across restar
     if (index === 0) context = { ...f.context, callId: `fair-call-${index}` };
     else {
       const item = input(`fair-input-${index}`); f.store.enqueue(item);
-      const task = f.tasks.create(f.store.get(item.key)!, { cwd: f.dir, policyHash: 'policy', project: 'app' });
+      const task = f.tasks.create(f.store.get(item.key)!, { cwd: f.dir, policyHash: 'policy' });
       const runId = f.tasks.start(task); f.tasks.saveRun(runId, `fair-thread-${index}`, `fair-turn-${index}`);
       context = { taskId: task.id, runId, threadId: `fair-thread-${index}`, turnId: `fair-turn-${index}`,
         callId: `fair-call-${index}`, ownerId: 'alice', chatId: 'chat-id' };

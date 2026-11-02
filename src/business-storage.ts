@@ -9,14 +9,14 @@ import type { ExternalWait } from './external-waits.js';
 
 export const memoryTable = (db: DatabaseSync) => new RecordTable<MemoryMetadata>(db, 'memories', 'id', {
   ...fields('id version kind status contentChars createdAt updatedAt'), expiresAt: {nullable:true},
-  scopeKind:{path:'scope.kind'}, ownerId:{path:'scope.ownerId'}, project:{path:'scope.project',nullable:true}, chatKey:{path:'scope.chatKey',nullable:true},
+  scopeKind:{path:'scope.kind'}, ownerId:{path:'scope.ownerId'}, directory:{path:'scope.directory',nullable:true}, chatKey:{path:'scope.chatKey',nullable:true},
   sourceKind:{path:'source.kind'}, sourceRef:{path:'source.ref'},
-  ...json('dependsOn resourceProjects automatic visibility'),
+  ...json('dependsOn resourceDirectories automatic visibility'),
 }, {schema:1});
 export function memoryJobs(db: DatabaseSync) {
   const rows = new RecordTable<Omit<Job,'inboxKeys'>>(db, 'memory_jobs', 'id', {
     ...fields('id ownerId chatKey chatType sourceKey state attempts createdAt dueAt leaseUntil accepted rejected error'),
-    project:{nullable:true}, lease:{nullable:true},
+    directory:{nullable:true}, lease:{nullable:true},
   }, {version:1});
   const hydrate = (job: Omit<Job,'inboxKeys'>): Job => ({...job,inboxKeys:db.prepare(`SELECT m.inboxKey FROM memory_job_messages m
     JOIN inbox i ON i.key=m.inboxKey WHERE m.jobId=? ORDER BY i.seq`).all(job.id).map(row=>String(row.inboxKey))});
@@ -38,7 +38,7 @@ export function memoryJobs(db: DatabaseSync) {
   };
 }
 export const deliveries = (db: DatabaseSync) => new RecordTable<Delivery>(db, 'artifact_deliveries', 'id', {
-  ...fields('id inboxKey taskId ownerId chatId projectRoot path state uuid createdAt sha256 size fileKey platformId error'),
+  ...fields('id inboxKey taskId ownerId chatId rootDirectory path state uuid createdAt sha256 size fileKey platformId error'),
 });
 export const approvalJobs = (db: DatabaseSync) => new RecordTable<ApprovalJob>(db, 'approval_jobs', 'inboxKey', {
   ...fields('inboxKey action state createdAt updatedAt'), ...json('args'),
@@ -46,7 +46,7 @@ export const approvalJobs = (db: DatabaseSync) => new RecordTable<ApprovalJob>(d
 export const approvals = (db: DatabaseSync) => new RecordTable<GitApprovalRecord>(db, 'git_approvals', 'id', {
   ...fields('id state revision configRevision commitSummary createdAt expiresAt updatedAt attemptId reason'),
   taskId:{path:'task.taskId'}, ownerId:{path:'task.ownerId'}, chatKey:{path:'task.chatKey'},
-  project:{path:'task.project',nullable:true}, cwd:{path:'task.cwd'}, policyHash:{path:'task.policyHash'},
+  cwd:{path:'task.cwd'}, policyHash:{path:'task.policyHash'},
   ...json('target events'),
 }, {schemaVersion:1,operation:'git-push',limitedProtection:true});
 export const externalWaits = (db: DatabaseSync) => new RecordTable<ExternalWait>(db, 'external_waits', 'id', {

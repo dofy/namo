@@ -22,7 +22,7 @@ function JobStatus({job,maxAttempts}:{job:MemoryExtractionJob;maxAttempts:number
   return <div className="memory-extraction-job">
     <Flex gap="2" align="center" wrap="wrap">
       <Badge color={job.state==='failed'?'red':job.state==='running'?'blue':job.state==='pending'?'orange':'gray'}>{status(job)}</Badge>
-      {job.project&&<Text size="2">{job.project}</Text>}
+      {job.directory&&<Text size="2">{job.directory}</Text>}
       <Text size="1" color="gray">{tr('memory.extraction.attempts',job.attempts,maxAttempts)}</Text>
       <Text size="1" color="gray">{stamp(job.createdAt)}</Text>
     </Flex>

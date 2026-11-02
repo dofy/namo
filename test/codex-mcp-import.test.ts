@@ -19,15 +19,15 @@ test('Codex discovery exposes only metadata and selectively imports a URL withou
 });
 
 
-test('management imports selected servers disabled without secrets and rejects stale selections and duplicates',async t=>{
+test('management imports selected servers awaiting authorization without secrets and rejects stale selections and duplicates',async t=>{
  const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js'),{loadConfig}=await import('../src/config.js');
  const {dir}=storeFixture(t,'namo-codex-import-'),file=join(dir,'config.json'),source=join(dir,'codex.toml');
  writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'test',appSecret:'dummy-secret',allowedUserIds:['alice']},codex:{home:join(dir,'home')}}));
  writeFileSync(source,`[mcp_servers.MyDocs]\nurl = "https://docs.example/mcp"\nhttp_headers = { Authorization = "VERY_SECRET" }\n[mcp_servers.other]\nurl = "https://other.example/mcp"\n`);
  const manager=new Management(file,{codexMcpConfig:source}),catalog=manager.codexMcpCatalog(),revision=manager.config().revision;
  const saved=manager.importCodexMcp(revision,catalog.revision,['MyDocs']);
- assert.equal(saved.mcpConnections.length,1);assert.equal(saved.mcpConnections[0].id,'mydocs');assert.equal(saved.mcpConnections[0].enabled,false);
- assert.deepEqual(saved.mcpConnections[0].audience,{organization:false,userIds:[],chatIds:[]});assert.equal(loadConfig(file).mcpConnections![0].token,'');assert.doesNotMatch(readFileSync(file,'utf8'),/VERY_SECRET/);
+ assert.equal(saved.mcpConnections.length,1);assert.equal(saved.mcpConnections[0].id,'mydocs');assert.equal(saved.mcpConnections[0].credentialConfigured,false);
+ assert.equal(loadConfig(file).mcpConnections![0].token,'');assert.doesNotMatch(readFileSync(file,'utf8'),/VERY_SECRET/);
  assert.throws(()=>manager.importCodexMcp(saved.revision,catalog.revision,['MyDocs']),/codex_mcp_duplicate/);
  writeFileSync(source,readFileSync(source,'utf8')+'\n# changed');assert.throws(()=>manager.importCodexMcp(saved.revision,catalog.revision,['other']),/codex_mcp_config_changed/);
 });
@@ -35,7 +35,7 @@ test('management imports selected servers disabled without secrets and rejects s
 test('import catalog disables existing and source-alias endpoints and import rejects duplicate batches atomically',async t=>{
  const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js');
  const {dir}=storeFixture(t,'namo-mcp-import-dedup-'),file=join(dir,'config.json'),source=join(dir,'codex.toml');
- writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'test',appSecret:'dummy-secret',allowedUserIds:['alice']},codex:{home:join(dir,'home')},mcpConnections:[{id:'existing',type:'remote',url:'https://docs.example/mcp',enabled:false,audience:{organization:false,userIds:[],chatIds:[]},projects:[],token:''}]}));
+ writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'test',appSecret:'dummy-secret',allowedUserIds:['alice']},codex:{home:join(dir,'home')},mcpConnections:[{id:'existing',type:'remote',url:'https://docs.example/mcp',token:''}]}));
  writeFileSync(source,'[mcp_servers.alias]\nurl = "https://DOCS.EXAMPLE:443/mcp"\n[mcp_servers.a]\nurl = "https://other.example/mcp"\n[mcp_servers.b]\nurl = "https://OTHER.EXAMPLE:443/./mcp"\n');
  const manager=new Management(file,{codexMcpConfig:source}),catalog=manager.codexMcpCatalog(),revision=manager.config().revision,before=readFileSync(file,'utf8');
  const alias=catalog.entries.find(v=>v.id==='alias')!,b=catalog.entries.find(v=>v.id==='b')!;
