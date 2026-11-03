@@ -141,18 +141,18 @@ test('terminal configuration saves only selected settings and preserves secrets 
  const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');
  const dir=mkdtempSync(join(tmpdir(),'namo-terminal-config-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const file=join(dir,'config.json'),raw=initialConfig(file,dir);raw.feishu.appSecret='private-secret';raw.feishu.appId='cli_aaaaaaaaaaaaaaaa';raw.codex.directories=[dir];raw.custom={untouched:true};atomicJson(file,raw);
- const answers=['1','example-model','12','600000','y','y','0'],messages:string[]=[];
- const ui={select:async()=>answers.shift()!,text:async()=>answers.shift()!,confirm:async()=>answers.shift()==='y',info:(s:string)=>messages.push(s),close:()=>{}};
+ const answers=['1','model','concurrency','$save','0'],textAnswers=['example-model','12'],messages:string[]=[];
+ const ui={select:async()=>answers.shift()!,text:async()=>textAnswers.shift()!,confirm:async()=>true,info:(s:string)=>messages.push(s),close:()=>{}};
  await terminalConfig(new Management(file),ui);
  const saved=readJson(file);assert.equal(saved.codex.model,'example-model');assert.equal(saved.concurrency,12);assert.equal(saved.feishu.appSecret,'private-secret');assert.deepEqual(saved.custom,{untouched:true});assert.ok(messages.every(s=>!s.includes('private-secret')));
 });
 
 test('terminal configuration Escape discards a partially entered draft',async t=>{
- const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');const {Back}=await import('../src/config-prompts.js');
+ const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');
  const dir=mkdtempSync(join(tmpdir(),'namo-terminal-cancel-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const file=join(dir,'config.json'),raw=initialConfig(file,dir);raw.feishu.appSecret='private-secret';raw.codex.directories=[dir];atomicJson(file,raw);const original=readFileSync(file,'utf8');
- let selected=0,texts=0;const messages:string[]=[];
- const ui={select:async()=>selected++===0?'1':'0',text:async()=>{if(texts++===0)return 'unsaved-model';throw new Back();},confirm:async()=>true,info:(message:string)=>messages.push(message),close:()=>{}};
+ const answers=['1','model','$back','0'],messages:string[]=[];
+ const ui={select:async()=>answers.shift()!,text:async()=> 'unsaved-model',confirm:async()=>true,info:(message:string)=>messages.push(message),close:()=>{}};
  await terminalConfig(new Management(file),ui);assert.equal(readFileSync(file,'utf8'),original);assert.ok(messages.some(s=>s.includes('取消')||s.includes('Cancelled')));assert.ok(messages.every(s=>!s.includes('private-secret')));
 });
 
@@ -174,6 +174,15 @@ test('terminal refresh keeps cancellation notice on the next screen',async t=>{
  const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');const {Back}=await import('../src/config-prompts.js');
  const dir=mkdtempSync(join(tmpdir(),'namo-screen-refresh-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const file=join(dir,'config.json');atomicJson(file,initialConfig(file,dir));
  let screens=0,step=0;let lines:string[]=[];
- const ui={screen:()=>{screens++;lines=[];},select:async()=>step++===0?'1':'0',text:async()=>{throw new Back();},confirm:async()=>false,info:(line:string)=>lines.push(line),close:()=>{}};
- await terminalConfig(new Management(file),ui);assert.equal(screens,3);assert.ok(lines.some(line=>line.includes('取消')||line.includes('Cancelled')));
+ const ui={screen:()=>{screens++;lines=[];},select:async()=>{step++;if(step===1)return '1';if(step===2)throw new Back();return '0';},text:async()=>'',confirm:async()=>false,info:(line:string)=>lines.push(line),close:()=>{}};
+ await terminalConfig(new Management(file),ui);assert.equal(screens,4);assert.ok(lines.some(line=>line.includes('取消')||line.includes('Cancelled')));
+});
+
+test('terminal form exposes save and back as distinct keyboard actions',async()=>{
+ const {editForm}=await import('../src/terminal-forms.js');
+ let choices:import('../src/config-prompts.js').Option[]=[];
+ const ui={select:async(_label:string,options:import('../src/config-prompts.js').Option[])=>{choices=options;return '$back';},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
+ assert.equal(await editForm(ui,'test',{model:''},[{key:'model',label:'Model',kind:'text'}],()=>{}),false);
+ assert.deepEqual(choices.filter(option=>option.action).map(option=>[option.value,option.shortcut]),[['$save','S'],['$back','Esc']]);
+ assert.deepEqual(choices.filter(option=>!option.action).map(option=>option.value),['model']);
 });

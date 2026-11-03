@@ -477,3 +477,84 @@ test('MCP authorization result pages are localized, nonce-styled and do not refl
   const prototype=await (await fetch(ui.url+'/oauth-complete?reason=constructor',{headers})).text();assert.doesNotMatch(prototype,/function Object/);
  }
 });
+
+function terminalScript(selections:string[],texts:string[]=[],confirmations:boolean[]=[true]) {
+ const messages:string[]=[];
+ return {messages,select:async()=>{const v=selections.shift();assert.notEqual(v,undefined,'missing selection');return v!;},text:async(_label:string,_initial?:string,secret?:boolean)=>{const v=texts.shift();assert.notEqual(v,undefined,'missing text');if(secret)assert.ok(!messages.includes(v!));return v!;},confirm:async()=>confirmations.shift()??true,info:(value:string)=>messages.push(value),close:()=>{}};
+}
+test('terminal execution form updates only edited fields and preserves legacy concurrency and secrets',async t=>{
+ const {editExecution}=await import('../src/terminal-settings.js');const f=fixture(t);
+ const ui=terminalScript(['bin','$save'],['custom-codex']);assert.equal(await editExecution(f.manager,ui,f.manager.config()),true);
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));assert.equal(raw.codex.bin,'custom-codex');assert.equal(raw.concurrency,1);assert.equal(raw.feishu.appSecret,f.raw.feishu.appSecret);assert.deepEqual(raw.custom,f.raw.custom);
+});
+test('terminal drafts survive validation errors and discard without writing',async t=>{
+ const {editExecution}=await import('../src/terminal-settings.js');const f=fixture(t);const before=readFileSync(f.file,'utf8');
+ const ui=terminalScript(['concurrency','$save','concurrency','$back'],['70','9']);
+ assert.equal(await editExecution(f.manager,ui,f.manager.config()),false);assert.equal(readFileSync(f.file,'utf8'),before);assert.ok(ui.messages.some(s=>s.includes('64')));
+});
+test('terminal assistant and profile settings use existing versioned management APIs',async t=>{
+ const {editAssistant,editProfiles}=await import('../src/terminal-settings.js');const f=fixture(t);
+ const assistant=terminalScript(['name','$save'],['Compass']);assert.equal(await editAssistant(f.manager,assistant),true);assert.equal(f.manager.state().assistant.values.name,'Compass');
+ const profile=terminalScript(['alice','profile','name','$save'],['Sailor']);assert.equal(await editProfiles(f.manager,profile),true);assert.equal(f.manager.profiles().entries[0].name,'Sailor');
+ const model=terminalScript(['alice','model','model','$save'],['sample-model']);assert.equal(await editProfiles(f.manager,model),true);assert.equal(f.manager.profiles().entries[0].defaultModel,'sample-model');
+});
+test('terminal Feishu form keeps existing secret when editing message settings',async t=>{
+ const {editFeishu}=await import('../src/terminal-settings.js');const f=fixture(t);
+ const ui=terminalScript(['progressIntervalMs','$save'],['10000']);assert.equal(await editFeishu(f.manager,ui,f.manager.config()),true);
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));assert.equal(raw.feishu.progressIntervalMs,10000);assert.equal(raw.feishu.appSecret,f.raw.feishu.appSecret);assert.ok(ui.messages.every(s=>!s.includes(f.raw.feishu.appSecret)));
+});
+test('terminal MCP edit retains credentials and rejects moving them to a different endpoint',async t=>{
+ const {manageMcp}=await import('../src/terminal-mcp.js');const f=fixture(t);const revision=f.manager.config().revision;
+ f.manager.save(revision,{mcpConnections:[{id:'demo',type:'remote',url:'https://mcp.example/mcp',newToken:'synthetic-private-token'}]});const before=readFileSync(f.file,'utf8');
+ const ui=terminalScript(['demo','edit','url','$save','$back'],['https://other.example/mcp']);
+ await manageMcp(f.manager,ui);assert.equal(readFileSync(f.file,'utf8'),before);assert.ok(ui.messages.some(s=>s.includes('mcp_credential_target_changed')));assert.ok(ui.messages.every(s=>!s.includes('synthetic-private-token')));
+});
+
+test('terminal organization access changes preserve existing members and chat restrictions',async t=>{
+ const {editAccess}=await import('../src/terminal-settings.js');const f=fixture(t);
+ const ui=terminalScript(['edit','mode','organization','tenantKey','$save'],['tenant-example']);
+ assert.equal(await editAccess(f.manager,ui,f.manager.config()),true);const value=JSON.parse(readFileSync(f.file,'utf8')).feishu;
+ assert.deepEqual(value.access,{mode:'organization',tenantKey:'tenant-example'});assert.deepEqual(value.allowedUserIds,['alice']);assert.deepEqual(value.allowedChatIds,[]);
+});
+test('terminal MCP add and remove preserve other connections and never display token',async t=>{
+ const {manageMcp}=await import('../src/terminal-mcp.js');const f=fixture(t);
+ f.manager.save(f.manager.config().revision,{mcpConnections:[{id:'old',type:'remote',url:'https://old.example/mcp',newToken:'old-private'}]});
+ const add=terminalScript(['$add','id','url','method','token','token','$save'],['new','https://new.example/mcp','new-private']);
+ await manageMcp(f.manager,add);let config=JSON.parse(readFileSync(f.file,'utf8'));assert.equal(config.mcpConnections.length,2);assert.equal(config.mcpConnections.find((v:{id:string})=>v.id==='old').token,'old-private');assert.ok(add.messages.every(s=>!s.includes('new-private')));
+ const remove=terminalScript(['new','remove']);await manageMcp(f.manager,remove);config=JSON.parse(readFileSync(f.file,'utf8'));assert.deepEqual(config.mcpConnections.map((v:{id:string})=>v.id),['old']);assert.equal(config.mcpConnections[0].token,'old-private');
+});
+
+test('terminal stale configuration rejects save and leaves both draft and external change intact',async t=>{
+ const {editExecution}=await import('../src/terminal-settings.js');const f=fixture(t);const rev=f.manager.config().revision;
+ const ui=terminalScript(['model','$save','$back'],['terminal-draft']);const originalText=ui.text;
+ ui.text=async(label,initial,secret)=>{const answer=await originalText(label,initial,secret);f.manager.save(rev,{concurrency:12});return answer;};
+ assert.equal(await editExecution(f.manager,ui,{...f.manager.config(),revision:rev}),false);
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));assert.equal(raw.concurrency,12);assert.equal(raw.codex.model,undefined);assert.ok(ui.messages.length>0);
+});
+test('terminal assistant personality supports escaped newlines',async t=>{
+ const {editAssistant}=await import('../src/terminal-settings.js');const f=fixture(t);
+ const ui=terminalScript(['personality','$save'],['Line one\\nLine two']);assert.equal(await editAssistant(f.manager,ui),true);assert.equal(f.manager.state().assistant.values.personality,'Line one\nLine two');
+});
+
+test('terminal form keeps draft when save confirmation or authorization is cancelled',async()=>{
+ const {editForm}=await import('../src/terminal-forms.js');const {Back}=await import('../src/config-prompts.js');
+ const prompts=['value','$save','$save','$save'],notices:string[]=[];let confirmations=0,saves=0;
+ const ui={select:async()=>prompts.shift()!,text:async()=> 'draft',confirm:async()=>{if(confirmations++===0)throw new Back();return true;},info:(message:string)=>notices.push(message),close:()=>{}};
+ const result=await editForm(ui,'test',{value:'before'},[{key:'value',label:'Value',kind:'text'}],draft=>{saves++;if(saves===1)throw new Back();assert.equal(draft.value,'draft');});
+ assert.equal(result,true);assert.equal(saves,2);assert.equal(confirmations,3);
+});
+
+test('terminal Codex update settings preserve revision and explicit choice',async()=>{
+ const {manageUpdates}=await import('../src/terminal-settings.js');let request:unknown;
+ const status={supported:true,currentVersion:'1.0',latestVersion:'1.1',checkedAt:null,automatic:false,state:'idle' as const,updateAvailable:true,managed:false,previousVersion:null,error:null};
+ const manager={codexUpdate:async(input?:unknown)=>{request=input;return {...status,automatic:!!input};}} as unknown as Management;
+ const ui=terminalScript(['automatic'],[],[true,true]);await manageUpdates(manager,ui,{revision:'fixture-revision'} as any);
+ assert.deepEqual(request,{action:'automatic',configRevision:'fixture-revision',enabled:true});
+});
+
+test('terminal GitHub settings explicitly clear a token without exposing it',async t=>{
+ const {editGitHub}=await import('../src/terminal-settings.js');const f=fixture(t);
+ f.manager.save(f.manager.config().revision,{github:{source:'token',mode:'shared',repositories:[],allowedUserIds:[]},newGithubToken:'synthetic-github-secret'});
+ const ui=terminalScript(['clear','$save'],[],[true,true]);assert.equal(await editGitHub(f.manager,ui,f.manager.config()),true);
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));assert.equal(raw.github.token,undefined);assert.ok(ui.messages.every(s=>!s.includes('synthetic-github-secret')));
+});

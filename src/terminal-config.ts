@@ -4,10 +4,9 @@ import { McpOAuthFlow } from './mcp-oauth-flow.js';
 import { beginMcpOAuth } from './mcp-oauth.js';
 import type { Prompter } from './prompts.js';
 import type { ConfigView, McpConnectionPatch } from './ui-contract.js';
+import { editExecution, editDirectories, editFeishu, editGitHub, editAccess, editAssistantMenu, editProfiles, manageUpdates } from './terminal-settings.js';
 import { t } from './locale.js';
 import { Back, type ConfigPrompter } from './config-prompts.js';
-
-const safeConnections = (view: ConfigView): McpConnectionPatch[] => view.mcpConnections.map(({id,type,url,oauthScope,ownerUserId}) => ({id,type,url,...(oauthScope?{oauthScope}:{}),...(ownerUserId?{ownerUserId}:{})}));
 
 /** The callback URL contains a one-time code: read it as a secret and never print it. */
 export async function terminalOAuth(manager: Management, ui: Prompter, revision: string, id: string, draft: McpConnectionPatch, begin = beginMcpOAuth, notify: (message: string) => void = message => ui.info(message)): Promise<boolean> {
@@ -44,61 +43,33 @@ export async function terminalConfig(manager: Management, ui: ConfigPrompter): P
         {value:'1',label:t('terminal.menuModel')}, {value:'2',label:t('terminal.menuDirectories')},
         {value:'3',label:t('terminal.menuFeishu')}, {value:'4',label:t('terminal.menuGithub')},
         {value:'5',label:t('terminal.menuMcp')}, {value:'6',label:t('terminal.menuLogin')},
+        {value:'7',label:t('terminal.menuAccess')}, {value:'8',label:t('terminal.menuAssistant')},
+        {value:'9',label:t('terminal.menuProfiles')}, {value:'10',label:t('terminal.menuUpdate')},
         {value:'0',label:t('terminal.exit')}
       ]);
       if (choice === '0') return;
       inMenu = false;
       ui.screen?.();
       if (choice === '1') {
-        const model = await ui.text(t('terminal.model'), view.values.model);
-        const concurrency = Number(await ui.text(t('terminal.concurrency'), String(view.values.concurrency)));
-        const timeoutMs = Number(await ui.text(t('terminal.timeout'), String(view.values.timeoutMs)));
-        const networkAccess = await ui.confirm(t('terminal.network'), view.values.networkAccess);
-        if (await ui.confirm(t('terminal.confirm'))) { manager.save(view.revision,{model,concurrency,timeoutMs,networkAccess}); notice = t('terminal.saved'); }
+        notice=t(await editExecution(manager,ui,view)?'terminal.saved':'terminal.cancelled');
       } else if (choice === '2') {
-        const paths = await ui.text(t('terminal.directories'), (view.values.directories ?? []).join(';'));
-        const directories = paths.split(';').map(x=>x.trim()).filter(Boolean);
-        if (await ui.confirm(t('terminal.confirm'))) { manager.save(view.revision,{directories}); notice = t('terminal.saved'); }
+        notice=t(await editDirectories(manager,ui,view)?'terminal.saved':'terminal.cancelled');
       } else if (choice === '3') {
-        ui.info(t('terminal.feishuInfo', view.feishu.appId, view.feishu.domain, view.feishu.pairedUsers));
-        const newSecret = await ui.text(t('terminal.secret'), '', true);
-        const cards = await ui.confirm(t('terminal.cards'), view.values.cards);
-        const requireMention = await ui.confirm(t('terminal.mention'), view.values.requireMention);
-        if (await ui.confirm(t('terminal.confirm'))) { manager.save(view.revision,{...(newSecret?{newSecret}:{}),cards,requireMention}); notice = t('terminal.saved'); }
+        notice=t(await editFeishu(manager,ui,view)?'terminal.saved':'terminal.cancelled');
       } else if (choice === '4') {
-        ui.info(t('terminal.githubInfo', view.github?.credentialSource ?? 'anonymous'));
-        const source = await ui.select(t('terminal.githubSource'),[{value:'anonymous',label:t('terminal.anonymous')},{value:'gh',label:t('terminal.gh')},{value:'token',label:t('terminal.token')}]);
-        if (!['anonymous','gh','token'].includes(source)) { notice = t('terminal.invalidChoice'); continue; }
-        const token = source === 'token' ? await ui.text(t('terminal.githubToken'),'',true) : '';
-        if (source === 'token' && !token && (!view.github?.credentialConfigured || view.github.credentialSource === 'gh')) { notice = t('terminal.tokenRequired'); continue; }
-        if (source !== 'anonymous') ui.info(t('terminal.githubSharing'));
-        if (await ui.confirm(t('terminal.confirm'))) {
-          await manager.saveGitHub(view.revision,{github:{source,repositories:[],allowedUserIds:[],...(source==='anonymous'?{}:{mode:'shared'})},...(token?{newGithubToken:token}:{})}); notice = t('terminal.saved');
-        }
+        notice=t(await editGitHub(manager,ui,view)?'terminal.saved':'terminal.cancelled');
       } else if (choice === '5') {
-        for (const c of view.mcpConnections) ui.info(`${c.id}: ${c.url} (${c.credentialSource ?? (c.credentialConfigured?'token':'anonymous')})`);
-        const id = await ui.text(t('terminal.mcpId')); if (!id) continue;
-        const previous = view.mcpConnections.find(c=>c.id===id);
-        const url = await ui.text(t('terminal.mcpUrl'),previous?.url ?? '');
-        const oauthScope = await ui.text(t('terminal.scope'),previous?.oauthScope ?? '');
-        const draft: McpConnectionPatch = {id,type:'remote',url,...(oauthScope?{oauthScope}:{})};
-        const method = await ui.select(t('terminal.mcpMethod'),[{value:'oauth',label:t('terminal.oauth')},{value:'token',label:t('terminal.token')},{value:'anonymous',label:t('terminal.anonymous')}]);
-        if (method === 'oauth') {
-          let resultNotice = '';
-          await terminalOAuth(manager,ui,view.revision,previous?.id ?? '',draft,beginMcpOAuth,message => { resultNotice = message; });
-          notice = resultNotice || t('terminal.oauthIncomplete');
-        }
-        else if (method === 'token' || method === 'anonymous') {
-          const token = method === 'token' ? await ui.text(t('terminal.mcpToken'),'',true) : '';
-          if (method === 'token' && !token) { notice = t('terminal.tokenRequired'); continue; }
-          if (await ui.confirm(t('terminal.confirm'))) {
-            const connections = safeConnections(view).filter(c=>c.id!==id);
-            connections.push({...draft,...(token?{newToken:token}:{clearToken:true})});
-            manager.save(view.revision,{mcpConnections:connections}); notice = t('terminal.saved');
-          }
-        } else notice = t('terminal.invalidChoice');
+        notice=await (await import('./terminal-mcp.js')).manageMcp(manager,ui);
       } else if (choice === '6') {
         notice = t('terminal.loginHelp');
+      } else if (choice === '7') {
+        if(await editAccess(manager,ui,view))notice=t('terminal.saved');
+      } else if (choice === '8') {
+        notice=await editAssistantMenu(manager,ui);
+      } else if (choice === '9') {
+        if(await editProfiles(manager,ui))notice=t('terminal.saved');
+      } else if (choice === '10') {
+        notice=await manageUpdates(manager,ui,view);
       } else notice = t('terminal.invalidChoice');
     } catch (error) {
       if (error instanceof Back) { if (inMenu) return; notice = t('terminal.cancelled'); continue; }

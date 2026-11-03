@@ -73,7 +73,7 @@ namo config           # Interactive terminal configuration
 namo login --device-auth # Official Codex device login for headless hosts
 ```
 
-The terminal menu supports arrow keys and Esc to discard an edit. See [headless operation](docs/operations.md#无桌面环境) for Docker, persistent storage and MCP OAuth setup.
+The terminal menu supports arrow keys, field-by-field drafts and Esc to discard an edit. It covers execution, Feishu and organization access, GitHub, MCP, assistant, user profiles and Codex updates. See [headless operation](docs/operations.md#无桌面环境) for Docker, persistent storage and MCP OAuth setup.
 
 ### Language
 

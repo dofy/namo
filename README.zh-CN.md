@@ -71,7 +71,7 @@ namo config           # 交互式终端配置
 namo login --device-auth # 无桌面环境使用官方 Codex 设备登录
 ```
 
-终端菜单支持方向键和 Esc 放弃编辑。Docker、持久存储与 MCP OAuth 操作见[无桌面环境](docs/operations.md#无桌面环境)。
+终端菜单支持方向键、逐项编辑草稿及 Esc 放弃编辑，涵盖执行、飞书及组织准入、GitHub、MCP、助手、用户档案和 Codex 更新。Docker、持久存储与 MCP OAuth 操作见[无桌面环境](docs/operations.md#无桌面环境)。
 
 ### 语言
 
