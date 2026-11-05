@@ -83,6 +83,8 @@ test('queued amendment is part of the same task and duplicate events never appen
   const task = tasks.list(msg('x'))[0]; const amendment = msg('change', `/amend ${task.id} 只修改前端`);
   engine.accept(amendment); assert.equal(engine.accept(amendment), false);
   assert.equal(tasks.get(task.id)?.inputVersion, 2); assert.equal(tasks.list(msg('x')).length, 1);
+  assert.equal(store.get('change')?.state, 'linked');
+  assert.equal(store.db.prepare("SELECT COUNT(*) n FROM outbox WHERE inboxKey='change'").get()?.n, 0);
   engine.start(); await wait(() => tasks.get(task.id)?.state === 'succeeded');
   assert.equal(prompts.length, 1); assert.match(prompts[0], /只修改前端/);
   assert.equal(store.db.prepare("SELECT dispatch FROM task_messages WHERE inboxKey='change'").get()?.dispatch, 'applied');
@@ -100,6 +102,8 @@ for (const outcome of ['accepted', 'not_active', 'rejected', 'unknown'] as const
     complete!(result); await wait(() => f.tasks.get(task.id)?.state !== 'running');
     assert.equal(calls, 1); assert.equal(steered.length, 1); assert.match(steered[0], /禁止修改后端/);
     assert.equal(f.tasks.get(task.id)?.state, outcome === 'accepted' ? 'succeeded' : 'needs_attention');
+    const outputs=f.store.db.prepare("SELECT kind FROM outbox WHERE inboxKey='change'").all();
+    assert.deepEqual(outputs.map(row=>row.kind),outcome==='accepted'?[]:['notice']);
   });
 }
 

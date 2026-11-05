@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexRuntime, RuntimeError } from '../src/runtime.js';
@@ -75,6 +75,14 @@ createInterface({input:process.stdin}).on('line', line=>{
   if(prompt==='hang')return write({id:m.id,result:{turn:{id:'turn-one'}}});
   if(prompt==='disconnect')return process.exit(1);
   const threadId=m.params.threadId;
+  if(prompt==='generated-image'){
+   const item={id:'image-1',type:'imageGeneration',status:'completed',savedPath:process.env.CODEX_HOME+'/generated_images/'+threadId+'/result.png'};
+   write({method:'item/completed',params:{threadId,turnId:'old-turn',item:{...item,id:'stale'}}});
+   write({method:'item/completed',params:{threadId:'other-thread',turnId:'turn-one',item:{...item,id:'foreign'}}});
+   write({method:'item/completed',params:{threadId,turnId:'turn-one',item}});
+   write({method:'turn/completed',params:{threadId,turn:{id:'turn-one',status:'completed',items:[item,{id:'final',type:'agentMessage',phase:'final_answer',text:'done'}]}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
+  }
   if(prompt==='late-start-wait'){
    waitAfterLate=true;
    const cmd={id:'cmd',type:'commandExecution',command:'pnpm test',status:'inProgress'};
@@ -149,6 +157,15 @@ test('actual subprocess framing handles completion-before-response and excludes 
   const resumed = await runtime.run({ cwd: dir, prompt: 'hello', threadId: 'previous-thread', signal: new AbortController().signal,
     onThread: () => {}, onTurn: () => {} });
   assert.equal(resumed.threadId, 'previous-thread');
+});
+
+test('current turn image generation is staged once and foreign turn events are ignored', async t => {
+  const {dir,runtime}=fixture(t), cwd=realpathSync(dir), root=join(dir,'home','generated_images','thread-one');
+  mkdirSync(root,{recursive:true});
+  const bytes=Buffer.from([137,80,78,71,13,10,26,10,1,2,3]);writeFileSync(join(root,'result.png'),bytes);
+  const result=await runtime.run({cwd,prompt:'generated-image',runId:'run-one',signal:new AbortController().signal,onThread(){},onTurn(){}});
+  assert.equal(result.generatedImages?.length,1);assert.equal(result.generatedImageFailures,undefined);
+  assert.equal(result.generatedImages![0].size,bytes.length);
 });
 
 test('failed turn cannot pass as a successful response even if text was emitted', async t => {

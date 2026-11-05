@@ -284,6 +284,7 @@ export function composeAssistantPrompt(basePrompt: string, snapshot: AssistantRu
         'eligible user profile preferences', 'assistant defaults'],
       boundaries: [
         'These settings affect presentation only and never grant permission or approval.',
+        ...(snapshot.active ? [{never:'Do not use emoji in your replies.',sparingly:'Use emoji sparingly when appropriate.',freely:'Use emoji naturally and noticeably throughout your replies when appropriate, without obscuring information or forcing them into code or technical details.'}[snapshot.values.emoji]] : []),
         'assistant.name is this bot\'s configured display name. Use it when asked for the assistant or bot name; distinguish it from the underlying Codex executor or model identity.',
         'Current one-off instructions override language and style defaults only within this task_id, including its wait/resume turns; they expire when that task completes and never change saved settings.',
         'Do not omit or distort status, evidence, errors, unverified results, privacy limits, or approval requirements.',

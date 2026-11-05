@@ -5,13 +5,14 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ArtifactDelivery } from '../src/artifact-delivery.js';
+import { ArtifactDelivery, asksForPreviousImage } from '../src/artifact-delivery.js';
 import { ArtifactError, type PreparedArtifact } from '../src/artifacts.js';
 import { Engine, SendError, type DeliveryRoute, type Sender } from '../src/engine.js';
 import type { Runtime } from '../src/runtime.js';
 import { Store, type Incoming } from '../src/store.js';
 import { Tasks, type Task } from '../src/tasks.js';
 import { normalizeEvent } from '../src/feishu.js';
+import { FeishuTransport } from '../src/feishu.js';
 
 
 
@@ -271,6 +272,111 @@ test('/run delivery intent freezes the completed file and uploads and sends it e
   assert.equal(intent.state, 'processed');
   assert.equal(delivery.state, 'sent');
   assert.equal(delivery.sha256, createHash('sha256').update(original).digest('hex'));
+});
+
+test('generated images are queued once and sent as images to the original topic', async t => {
+  const dir=mkdtempSync(join(tmpdir(),'namo-generated-delivery-')),store=new Store(join(dir,'db'));
+  const bytes=Buffer.from([137,80,78,71,13,10,26,10,1,2]), uploads:string[]=[],sends:string[]=[];
+  const runtime:Runtime={async run(request){
+    const images=['one','two'].map(value=>{
+      const id=createHash('sha256').update(value).digest('hex'),path=`namo-generated-${request.runId}-${id.slice(0,20)}.png`;
+      writeFileSync(join(request.cwd,path),bytes);
+      return {id,path,sha256:createHash('sha256').update(bytes).digest('hex'),size:bytes.length};
+    });
+    return {text:'generated',threadId:'thread',turnId:'turn',generatedImages:images};
+  }};
+  const sender:Sender={async send(_c,_t,uuid){return uuid;},async uploadArtifact(){throw Error('expected image upload');},async sendArtifact(){throw Error('expected image message');},
+    async uploadImage(artifact){assert.deepEqual(artifact.readPayload(),bytes);uploads.push(artifact.name);return `image-${uploads.length}`;},
+    async sendImage(chat,key,_uuid,route){assert.equal(chat,'chat');assert.deepEqual(route,{messageId:'om-generated',thread:true});sends.push(key);return `receipt-${key}`;}};
+  const engine=new Engine(store,runtime,sender,{dataDir:dir,concurrency:1,feishu:{reactions:false,progressUpdates:false}});
+  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+  engine.start();engine.accept(message('generated',{text:'画两张图片'}));
+  await waitFor(()=>sends.length===2);for(let i=0;i<4;i++)await engine.pump();
+  assert.equal(uploads.length,2);assert.equal(sends.length,2);
+  assert.equal(store.db.prepare("SELECT COUNT(*) n FROM artifact_deliveries WHERE state='sent'").get()!.n,2);
+  assert.equal(store.db.prepare("SELECT COUNT(*) n FROM outbox WHERE kind LIKE 'artifact-receipt:%'").get()!.n,2);
+});
+
+test('natural image replay only accepts a direct request, not generation or analysis',()=>{
+  for(const text of ['我要图片','给我图片','把之前生成的图片发给我','再发刚刚生成的图片','请把那张图发给我','send me the previous image'])assert.equal(asksForPreviousImage(text),true,text);
+  for(const text of ['生成一张图片','给我生成图片','把图片改成蓝色','分析这张图片','把图片发给我然后删除它','图片是什么','让我看看这张图'])assert.equal(asksForPreviousImage(text),false,text);
+});
+
+test('follow-up resends only the owned image in the current workstream without another model call',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'namo-image-replay-')),store=new Store(join(dir,'db'));
+  const bytes=Buffer.from([137,80,78,71,13,10,26,10,4]);let calls=0,uploads=0,sends=0;
+  const runtime:Runtime={async run(request){calls++;const id=createHash('sha256').update('original').digest('hex'),path=`namo-generated-${request.runId}-${id.slice(0,20)}.png`;
+    writeFileSync(join(request.cwd,path),bytes);return {text:'done',threadId:'thread',turnId:'turn',generatedImages:[{id,path,sha256:createHash('sha256').update(bytes).digest('hex'),size:bytes.length}]};}};
+  const sender:Sender={async send(_c,_t,uuid){return uuid;},async uploadArtifact(){return 'file';},async sendArtifact(){return 'file-message';},
+    async uploadImage(a){assert.deepEqual(a.readPayload(),bytes);uploads++;return 'image';},async sendImage(){sends++;return `image-message-${sends}`;}};
+  const engine=new Engine(store,runtime,sender,{dataDir:dir,concurrency:1,feishu:{reactions:false,progressUpdates:false}});
+  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+  engine.start();engine.accept(message('make-image'));await waitFor(()=>sends===1);
+  engine.accept(message('ask-image',{text:'把之前生成的图片发给我'}));await waitFor(()=>sends===2);
+  assert.equal(calls,1);assert.equal(uploads,2);
+  engine.accept(message('quoted-image',{text:'给我图片',envelope:{...message('quoted-image').envelope!,parentId:'image-message-2'}}));await waitFor(()=>sends===3);
+  assert.equal(calls,1);
+  engine.accept(message('other-owner',{senderId:'bob',text:'我要图片'}));await waitFor(()=>store.get('other-owner')?.state==='replied');
+  assert.equal(sends,3);assert.equal(calls,1);
+  engine.accept(message('ambiguous',{text:'把之前那张游泳图片发给我'}));await waitFor(()=>store.get('ambiguous')?.state==='replied');
+  assert.equal(sends,3);assert.equal(calls,1);assert.match(String(store.db.prepare("SELECT content FROM outbox WHERE inboxKey='ambiguous' AND kind='result'").get()?.content),/引用/);
+});
+
+test('confirmed legacy image history remains scoped to its owner and can be selected by image receipt',t=>{
+  const dir=mkdtempSync(join(tmpdir(),'namo-image-legacy-')),store=new Store(join(dir,'db'));t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true});});
+  const tasks=new Tasks(store),input=message('legacy');store.enqueue(input);
+  const task=tasks.create(store.get('legacy')!,{cwd:realpathSync(dir),policyHash:'policy'});
+  store.db.prepare("UPDATE tasks SET state='succeeded',finishedAt=? WHERE id=?").run(Date.now(),task.id);
+  const bytes=Buffer.from([137,80,78,71,13,10,26,10,5]),sha256=createHash('sha256').update(bytes).digest('hex'),path=`namo-recovered-${sha256}.png`;
+  writeFileSync(join(dir,path),bytes);store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(`generated-image-history:${task.id}:${sha256}`,
+    JSON.stringify({path,sha256,size:bytes.length,platformId:'legacy-image-message'}));
+  const service=new ArtifactDelivery(store,{async send(){return 'ok';}});
+  const own=message('followup',{text:'我要图片',envelope:{...input.envelope!,parentId:'legacy-image-message'}});
+  const source=service.previousImages(own,task.workstreamId)[0];assert.equal(source.sha256,sha256);
+  store.enqueue(own);service.enqueuePrevious(own,tasks.get(task.id)!,source);
+  assert.equal(store.db.prepare("SELECT state FROM artifact_deliveries WHERE inboxKey='followup'").get()?.state,'pending');
+  assert.equal(service.previousImages({...own,senderId:'bob'},task.workstreamId).length,0);
+  assert.equal(service.previousImages({...own,envelope:{...own.envelope!,scopeKey:'another-topic'}},task.workstreamId).length,0);
+  writeFileSync(join(dir,path),Buffer.from([137,80,78,71,13,10,26,10,6]));
+  assert.throws(()=>service.enqueuePrevious({...own,key:'changed'},tasks.get(task.id)!,source),/artifact_changed_since_authorization/);
+});
+
+test('Feishu image adapter uses image upload and replies with an image message', async () => {
+  const transport=new FeishuTransport({appId:'app',appSecret:'fixture',allowedUserIds:['alice'],allowedChatIds:['chat'],requireMention:true,domain:'feishu'},()=>{});
+  const requests:unknown[]=[];
+  (transport as unknown as {client:unknown}).client={im:{image:{async create(args:unknown){requests.push(args);return {image_key:'img-key'};}},
+    message:{async reply(args:unknown){requests.push(args);return {code:0,data:{message_id:'receipt'}};}}}};
+  const bytes=Buffer.from('image bytes');
+  assert.equal(await transport.uploadImage({readPayload:()=>bytes} as PreparedArtifact),'img-key');
+  assert.equal(await transport.sendImage('chat','img-key','uuid',{messageId:'original',thread:true}),'receipt');
+  assert.deepEqual(requests,[{data:{image_type:'message',image:bytes}},{path:{message_id:'original'},data:{msg_type:'image',content:'{"image_key":"img-key"}',uuid:'uuid',reply_in_thread:true}}]);
+});
+
+test('generated image with uncertain send remains unknown and is never resent', async t => {
+  const dir=mkdtempSync(join(tmpdir(),'namo-image-unknown-')),store=new Store(join(dir,'db'));
+  const bytes=Buffer.from([137,80,78,71,13,10,26,10,1]);let uploads=0,sends=0;
+  const runtime:Runtime={async run(request){const id=createHash('sha256').update('one').digest('hex'),path=`namo-generated-${request.runId}-${id.slice(0,20)}.png`;
+    writeFileSync(join(request.cwd,path),bytes);return {text:'done',threadId:'thread',turnId:'turn',generatedImages:[{id,path,sha256:createHash('sha256').update(bytes).digest('hex'),size:bytes.length}]};}};
+  const sender:Sender={async send(_c,_t,uuid){return uuid;},async uploadArtifact(){return 'unused';},async sendArtifact(){return 'unused';},
+    async uploadImage(){uploads++;return 'img';},async sendImage(){sends++;throw new SendError(true,'timeout');}};
+  const engine=new Engine(store,runtime,sender,{dataDir:dir,concurrency:1,feishu:{reactions:false,progressUpdates:false}});
+  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+  engine.start();engine.accept(message('unknown-image'));await waitFor(()=>store.db.prepare("SELECT state FROM artifact_deliveries").get()?.state==='unknown');
+  for(let i=0;i<6;i++)await engine.pump();assert.equal(uploads,1);assert.equal(sends,1);
+});
+
+test('explicit delivery of the same generated image is not sent twice', async t => {
+  const dir=mkdtempSync(join(tmpdir(),'namo-image-intent-')),store=new Store(join(dir,'db'));
+  const bytes=Buffer.from([137,80,78,71,13,10,26,10,3]);let images=0,files=0;
+  const runtime:Runtime={async run(request){const id=createHash('sha256').update('one').digest('hex'),path=`namo-generated-${request.runId}-${id.slice(0,20)}.png`;
+    writeFileSync(join(request.cwd,path),bytes);writeFileSync(join(request.cwd,'answer.png'),bytes);
+    return {text:'done',threadId:'thread',turnId:'turn',generatedImages:[{id,path,sha256:createHash('sha256').update(bytes).digest('hex'),size:bytes.length}]};}};
+  const sender:Sender={async send(_c,_t,uuid){return uuid;},async uploadArtifact(){return 'file';},async sendArtifact(){files++;return 'receipt';},
+    async uploadImage(){images++;return 'img';},async sendImage(){images++;return 'receipt';}};
+  const engine=new Engine(store,runtime,sender,{dataDir:dir,concurrency:1,feishu:{reactions:false,progressUpdates:false}});
+  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+  engine.start();engine.accept(message('explicit-image',{text:'/run --deliver answer.png -- 生成图片'}));
+  await waitFor(()=>files===1);for(let i=0;i<4;i++)await engine.pump();assert.equal(files,1);assert.equal(images,0);
 });
 
 test('expanded material reaches the runtime prompt and remains explicitly untrusted', async t => {

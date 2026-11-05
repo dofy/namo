@@ -13,6 +13,7 @@ import { chatWorkspace } from '../src/safety.js';
 import { parseConfig } from '../src/config.js';
 import { Engine, type Sender } from '../src/engine.js';
 import { type Runtime } from '../src/runtime.js';
+import { stageGeneratedImage } from '../src/generated-images.js';
 
 function fixture(t: any) {
   const dir = mkdtempSync(join(tmpdir(), 'namo-artifact-')), project = join(dir, 'project');
@@ -26,6 +27,19 @@ function fixture(t: any) {
 function code(fn: () => unknown): string {
   try { fn(); return 'none'; } catch (error) { assert.ok(error instanceof ArtifactError); return error.code; }
 }
+
+test('generated image staging rejects foreign paths and symlinks, and preserves frozen identity', t => {
+  const f=fixture(t),home=join(f.dir,'home'),root=join(home,'generated_images','thread');mkdirSync(root,{recursive:true});
+  const bytes=Buffer.from([137,80,78,71,13,10,26,10,1]);const source=join(root,'image.png');writeFileSync(source,bytes);
+  const cwd=realpathSync(f.project),image=stageGeneratedImage(home,cwd,'thread','run',{id:'image',savedPath:source});
+  assert.equal(image.sha256,createHash('sha256').update(bytes).digest('hex'));
+  assert.deepEqual(stageGeneratedImage(home,cwd,'thread','run',{id:'image',savedPath:source}),image);
+  assert.throws(()=>stageGeneratedImage(home,cwd,'thread','run',{id:'foreign',savedPath:join(f.dir,'other.png')}));
+  symlinkSync(source,join(root,'link.png'));
+  assert.throws(()=>stageGeneratedImage(home,cwd,'thread','run',{id:'link',savedPath:join(root,'link.png')}));
+  writeFileSync(join(cwd,image.path),'changed');
+  assert.throws(()=>stageGeneratedImage(home,cwd,'thread','run',{id:'image',savedPath:source}),/generated_image_conflict/);
+});
 
 test('preparation binds task ownership and freezes verified payload and hash', t => {
   const f = fixture(t); writeFileSync(join(f.project, 'output/report.md'), '# result\n');

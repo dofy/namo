@@ -125,6 +125,16 @@ test('prompt composition states precedence, safety boundaries, versions, and res
   assert.equal(prompt.task.messages[0].text, 'Use English this time');
 });
 
+test('emoji preferences give the model explicit guidance for each setting', t => {
+  const f=fixture(t);
+  for (const [index,emoji,expected] of [[0,'never',/Do not use emoji/],[1,'sparingly',/Use emoji sparingly/],[2,'freely',/Use emoji naturally and noticeably/]] as const) {
+    f.assistant.save(index,{...DEFAULT_ASSISTANT_VALUES,emoji},owner);
+    const prompt=JSON.parse(composeAssistantPrompt('{}',f.assistant.adopt(`emoji-${index}`)));
+    assert.equal(prompt.assistant_context.assistant.emoji,emoji);
+    assert.match(prompt.assistant_context.boundaries.join(' '),expected);
+  }
+});
+
 function uiContextFixture(t:any){
   const root=mkdtempSync(join(tmpdir(),'namo-context-')),data=join(root,'data'),directory=join(root,'directory');mkdirSync(data);mkdirSync(directory);
   const config:Config={file:join(root,'config.json'),dataDir:data,concurrency:1,agent:'codex',feishu:{appId:'app',appSecret:'KNOWN_SECRET_123456',allowedUserIds:['alice'],allowedChatIds:[],requireMention:false,domain:'feishu'},

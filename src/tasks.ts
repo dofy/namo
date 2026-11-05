@@ -190,7 +190,7 @@ export class Tasks {
       if (version > 100) throw new TaskInputError('本任务已达到 100 个输入版本，请明确发起后续任务。');
       this.store.db.prepare('UPDATE tasks SET inputVersion=? WHERE id=?').run(version, task.id);
       this.store.db.prepare("INSERT INTO task_messages(taskId,inboxKey,role,version) VALUES(?,?,'revision',?)").run(task.id, m.key, version);
-      this.store.db.prepare('UPDATE inbox SET taskId=? WHERE key=?').run(task.id, m.key);
+      this.store.db.prepare("UPDATE inbox SET state='linked',taskId=? WHERE key=?").run(task.id, m.key);
       if (task.state === 'queued' && this.prompt(this.get(task.id)!).length > 80_000) throw new TaskInputError('补充后超过 80000 字符，本条未加入任务，请缩短或另开任务。');
       return { inboxKey: m.key, text: m.text, version, dispatch: 'pending' };
     });

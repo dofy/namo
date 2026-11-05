@@ -24,7 +24,7 @@ import { setUserModel } from '../src/model-preferences.js';
 const wait = (condition: () => boolean, timeoutMs = 7000) => waitFor(condition, timeoutMs);
 const fake = `#!/usr/bin/env node
 import {createInterface} from 'node:readline';
-import {appendFileSync,existsSync} from 'node:fs';
+import {appendFileSync,existsSync,mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 let cwd,thread='thread',turn='turn',timer;
 process.on('SIGTERM',()=>{if(!cwd||!existsSync(join(cwd,'hold-close')))process.exit(0);appendFileSync(join(cwd,'closing'),'ready');setInterval(()=>{if(existsSync(join(cwd,'exit-now'))){appendFileSync(join(cwd,'exiting'),'ready');process.exit(0);}},5);});
@@ -45,6 +45,11 @@ createInterface({input:process.stdin}).on('line',line=>{
   const prompt=JSON.parse(m.params.input[0].text);
   appendFileSync(join(cwd,'task-prompts'),JSON.stringify(prompt)+'\\n');
   const actual=prompt.task?.messages?prompt.task:prompt;
+  if(actual.messages[0].text==='image-hold'){
+   const root=join(process.env.CODEX_HOME,'generated_images',thread);mkdirSync(root,{recursive:true});
+   const savedPath=join(root,'image.png');writeFileSync(savedPath,Buffer.from([137,80,78,71,13,10,26,10,1]));
+   send({method:'item/completed',params:{threadId:thread,turnId:turn,item:{id:'image',type:'imageGeneration',status:'completed',savedPath}}});
+  }
   if(actual.messages[0].text==='mcp-check'){send({id:99,method:'item/tool/call',params:{namespace:null,tool:'mcp_read',threadId:thread,turnId:turn,callId:'mcp',arguments:{operation:'connections'}}});return;}
   if(actual.messages[0].text==='instant')return done('saved answer');
   timer=setInterval(()=>{if(existsSync(join(cwd,'release')))done('saved answer');},30);return;
@@ -109,6 +114,18 @@ test('new workstreams register MCP discovery even before a connection exists', a
   receiver.start(); receiver.accept(message('no-mcp','instant'));
   await wait(()=>f.store.get('no-mcp')?.state==='replied');
   assert.ok(JSON.parse(readFileSync(join(f.project,'thread-tools'),'utf8').trim()).includes('mcp_read'));
+});
+
+test('generated image survives receiver detachment and is delivered once after reattachment', async t => {
+  const f=fixture(t),first=f.receiver();first.start();first.accept(message('offline-image','image-hold'));
+  await wait(()=>f.calls()===1);await first.stop();writeFileSync(join(f.project,'release'),'yes');
+  await wait(()=>f.job()?.state==='completed');let uploads=0,sends=0;
+  const receiver=new Engine(f.store,new RunnerRuntime(f.store,f.config),{
+    async send(_chat,_text,uuid){return uuid;},async uploadArtifact(){return 'file';},async sendArtifact(){return 'file-receipt';},
+    async uploadImage(artifact){uploads++;assert.equal(artifact.size,9);return 'image';},async sendImage(){sends++;return 'image-receipt';},
+  },f.config);
+  t.after(async()=>{await receiver.stop();});receiver.start();await wait(()=>sends===1);
+  for(let i=0;i<4;i++)await receiver.pump();assert.equal(uploads,1);assert.equal(sends,1);assert.equal(f.calls(),1);
 });
 
 test('refresh keeps the workstream and supplies bounded history to a fresh thread', async t => {

@@ -30,7 +30,8 @@ export interface WaitRequest {
   external?: ExternalWaitRequest;
 }
 export interface WaitResult extends WaitRequest { id: string; }
-export interface RunResult { text: string; threadId: string; turnId: string; waiting?: WaitResult; }
+export interface GeneratedImage { id: string; path: string; sha256: string; size: number; }
+export interface RunResult { text: string; threadId: string; turnId: string; waiting?: WaitResult; generatedImages?: GeneratedImage[]; generatedImageFailures?: number; }
 export interface Runtime {
   /** Durable runtimes own their evidence and survive receiver detachment. */
   persistent?: boolean;

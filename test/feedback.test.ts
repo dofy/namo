@@ -32,8 +32,19 @@ test('one progress card is updated from real activity and terminal state fences 
   const cards:object[]=[];const feedback=new Feedback(f.store,{async send(){throw new Error('never create');},async updateCard(id,card){assert.equal(id,'card-id');cards.push(card);}});
   await feedback.tick({cadenceMs:0,heartbeatMs:0});assert.match(JSON.stringify(cards[0]),/正在运行命令/);
   const before=progressState(f.store,f.tasks.get(f.task.id)!);assert.equal(before.phase,'command');
+  assert.match(before.content,/\*\*当前\*\*：/);assert.match(before.content,/\*\*最近活动\*\*：/);assert.match(before.content,/\*\*状态核对\*\*：/);
   f.store.db.prepare("UPDATE tasks SET state='succeeded',finishedAt=? WHERE id=?").run(Date.now(),f.task.id);await feedback.tick({cadenceMs:0});await feedback.tick({cadenceMs:0});assert.equal(cards.length,2);assert.match(JSON.stringify(cards[1]),/处理结束/);
   assert.equal(f.store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE kind='progress'").get()?.n,1);
+});
+test('amendment dispatch changes update the original progress card without exposing its text',async t=>{
+  const f=fixture(t);f.tasks.start(f.task);sentProgress(f);
+  const cards:object[]=[];const feedback=new Feedback(f.store,{async send(){return 'unused';},async updateCard(_id,card){cards.push(card);}});
+  f.store.enqueue({key:'amend',messageId:'amend',chatId:'chat',chatKey:'app:chat',senderId:'owner',text:'private amendment'});
+  f.tasks.amend(f.tasks.get(f.task.id)!,f.store.get('amend')!);
+  await feedback.tick({cadenceMs:0});assert.match(JSON.stringify(cards.at(-1)),/已保存，等待提交/);
+  f.tasks.dispatch('amend','submitting');await feedback.tick({cadenceMs:0});assert.match(JSON.stringify(cards.at(-1)),/正在提交给执行器/);
+  f.tasks.dispatch('amend','accepted');await feedback.tick({cadenceMs:0});assert.match(JSON.stringify(cards.at(-1)),/执行器已接受/);
+  assert.doesNotMatch(JSON.stringify(cards),/private amendment/);assert.equal(cards.length,3);
 });
 test('reply routing and original answer survive chunking; Markdown cannot produce mentions or images',t=>{
   const f=fixture(t),answer='**bold** [safe](https://example.com) <at user_id="all">all</at> ![remote](https://example.com/p.png) [unsafe](javascript:alert)\n```ts\n'+ 'x'.repeat(4500)+'\n```';

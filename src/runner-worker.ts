@@ -82,9 +82,8 @@ async function main(): Promise<void> {
             catch { state = 'unknown'; }
             write(() => {
               tasks.dispatch(revision.inboxKey, state); runnerEvent(store, runId, `revision_${state}`);
-              store.addOutput(revision.inboxKey, 'notice', state === 'accepted'
-                ? `任务 ${task.id} 的补充已被执行器接受，请核对最终结果；不代表此前操作已撤销。`
-                : `任务 ${task.id} 的补充${state === 'unknown' ? '提交结果不明' : '未被当前轮接受'}，未自动重送。请用 /task 核对。`);
+              if (state !== 'accepted') store.addOutput(revision.inboxKey, 'notice',
+                `任务 ${task.id} 的补充${state === 'unknown' ? '提交结果不明' : '未被当前轮接受'}，未自动重送。请用 /task 核对。`);
             });
           }
         })().catch(() => { storageFailed = true; abort.abort('storage_failed'); }).finally(() => { steering = undefined; });

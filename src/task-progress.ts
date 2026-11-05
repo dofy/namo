@@ -23,7 +23,8 @@ export function progressState(store: Store, task: Task, now = Date.now(), timeZo
     hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(time);
   const elapsed = taskElapsed(task,now);
   const progress = run ? readProgress(store,String(run.id)) : undefined;
-  const revision=`${task.inputVersion}:${run?.id??''}:${phase}:${progress?.revision??0}`;
+  const amendments=store.db.prepare("SELECT version,dispatch FROM task_messages WHERE taskId=? AND role='revision' ORDER BY version").all(task.id);
+  const revision=`${task.inputVersion}:${run?.id??''}:${phase}:${progress?.revision??0}:${amendments.map(a=>`${a.version}:${a.dispatch}`).join(',')}`;
   const times=[`**开始时间**：${task.startedAt?stamp(task.startedAt):'尚未开始'}`,
     ...(terminal&&task.finishedAt?[`**结束时间**：${stamp(task.finishedAt)}`]:[]),`本地时间 · ${timeZone}`];
   if(terminal){
@@ -47,11 +48,14 @@ export function progressState(store: Store, task: Task, now = Date.now(), timeZo
   const files = run ? readEvidence(store,task.id).find(e=>e.runId===run.id)?.items
     .filter(i=>i.kind==='files'&&i.status==='completed').flatMap(i=>(i.files??[]).map(f=>f.path))??[] : [];
   const stale=executing&&run?.heartbeat&&now-Number(run.heartbeat)>30_000;
-  return {phase,terminal,revision,content:[`**当前：${labels[phase]??'状态待核对'}** · ⏱ **${elapsed}**`,times.join('\n'),
+  const latest=amendments.at(-1);
+  const amendmentStatus=latest ? ({pending:task.state==='queued'?'已保存，开工时一并处理':'已保存，等待提交',submitting:'正在提交给执行器',accepted:'执行器已接受',applied:'已加入任务',unknown:'提交结果不明，请用 /task 核对',rejected:'未被执行器接受，请用 /task 核对',not_active:'未被当前轮接受，请用 /task 核对'} as Record<string,string>)[String(latest.dispatch)]??'状态待核对' : null;
+  return {phase,terminal,revision,content:[`**当前**：${labels[phase]??'状态待核对'} · ⏱ **${elapsed}**`,times.join('\n'),
+    amendmentStatus?`**最新补充**：${amendmentStatus}`:null,
     grouped.length?'**最近进展**\n'+grouped.map(e=>`- ${e.line}${e.count>1?` × ${e.count}`:''}`).join('\n'):null,
     files.length?'**已应用文件补丁**\n'+[...new Set(files)].slice(-3).map(f=>`- ${literal(Array.from(f).slice(0,60).join(''))}`).join('\n'):null,
     stale?'⚠️ 执行器心跳已过期，执行状态待核对。':null,
     executing&&now-Number(progress?.updatedAt??run?.updatedAt??now)>=30_000
       ?stale?'执行状态待核对，暂无新的公开进展。':'仍在运行，暂无新的公开进展。':null,
-    `最近活动：${run?.updatedAt?stamp(Number(run.updatedAt)):'尚无执行事件'}\n状态核对：${stamp(now)}`].filter(Boolean).join('\n\n')};
+    `**最近活动**：${run?.updatedAt?stamp(Number(run.updatedAt)):'尚无执行事件'}\n**状态核对**：${stamp(now)}`].filter(Boolean).join('\n\n')};
 }

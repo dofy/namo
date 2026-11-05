@@ -374,7 +374,7 @@ export const chinese = {
   "assistant.styleTitle": "回答方式",
   "assistant.styleHelp": "这些是默认偏好；你仍可在任务中要求“简短一点”或“详细解释”。",
   "assistant.languageHelp": "选择“跟随当前任务”时，根据任务内容和你的要求决定语言。",
-  "assistant.emojiHelp": "控制回答中表情符号的使用频率。",
+  "assistant.emojiHelp": "影响模型生成的回答；进度卡和系统通知使用固定样式。",
   "assistant.conciseHelp": "快速给出要点，减少展开。",
   "assistant.balancedLengthHelp": "说明要点，补充必要的解释。",
   "assistant.detailedHelp": "展开说明步骤、背景和示例。",

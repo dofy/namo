@@ -203,6 +203,15 @@ export class FeishuTransport implements Sender {
       if(!result?.file_key)throw new SendError(true,'artifact_upload_missing_receipt');return result.file_key;
     }catch(e){if(e instanceof SendError)throw e;throw new SendError(true,'artifact_upload_unknown');}
   }
+  async uploadImage(artifact: PreparedArtifact): Promise<string> {
+    try {
+      const result=await this.client.im.image.create({data:{image_type:'message',image:artifact.readPayload()}});
+      if(!result?.image_key)throw new SendError(true,'image_upload_missing_receipt');return result.image_key;
+    }catch(e){if(e instanceof SendError)throw e;throw new SendError(true,'image_upload_unknown');}
+  }
+  async sendImage(chatId:string,imageKey:string,uuid:string,route:DeliveryRoute):Promise<string>{
+    return this.createMessage(chatId,'image',JSON.stringify({image_key:imageKey}),uuid,route);
+  }
   async sendArtifact(chatId:string,fileKey:string,uuid:string,route:DeliveryRoute):Promise<string>{
     return this.createMessage(chatId,'file',JSON.stringify({file_key:fileKey}),uuid,route);
   }

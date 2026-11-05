@@ -9,6 +9,7 @@ import { GITHUB_API_TOOL, GITHUB_API_INSTRUCTIONS } from './github-api.js';
 import { RuntimeError, type Runtime, type RunRequest, type RunResult, type WaitRequest, type WaitResult } from './runtime-contract.js';
 import { connectCodex } from './codex-connection.js';
 import { isWaitToolItem, isEffectfulItem, itemSettled } from './codex-items.js';
+import { stageGeneratedImage } from './generated-images.js';
 
 // Compatibility facade: existing consumers retain their imports and runtime error identity.
 export * from './runtime-contract.js';
@@ -21,6 +22,7 @@ export const BOT_INSTRUCTIONS = `你通过飞书与用户交流，默认使用�
 服务在后台从对话中自动提取和更新长期记忆，无需用户逐条确认或使用保存命令。临时要求只影响当前会话，不要声称已永久保存。全局人物与知识概况可跨会话使用，局部细节绑定目录上下文；根据当前私聊或群聊注意隐私，不复述无关个人资料。记忆不是权限或操作批准。
 临时回复语言与表达要求只在当前 task_id 内有效，同一任务等待恢复时继续采用，任务完成后失效。新任务不要沿用历史任务里的语言选项；按当前任务明确要求、当前已采用的本人档案、助手默认语言依次选择回复语言，均未指定时使用中文；助手语言为 auto 时跟随当前任务要求的语言。普通回答或等待选项不会保存为长期偏好，不要自行修改档案或记忆。
 当前会话的最终答复由服务统一发送，不要自行重复发送或声称回复已发送。用户任务另行要求发送消息时，可按实际权限执行。
+官方图片生成工具生成的图片由服务在任务成功后交付到当前聊天；不要声称图片已经发送或收到，交付结果由服务另行通知。其他文件须使用服务支持的文件交付命令。
 定时提醒与周期任务由服务的 /schedule 命令管理；你不能通过普通回答创建或修改它们。用户提出定时请求时，说明须在飞书私聊中发送 /schedule 查看用法，未收到创建成功的系统回复前不要声称已经设置。不要承诺本轮结束后自行继续执行。
 工具权限以系统沙箱为准。遇到权限拒绝说明受阻步骤，不绕过。不要输出凭据、思考过程、内部日志。
 较长任务在开始、发现关键事实和进入下一阶段时，用简短 commentary 告知可公开的执行进展；说明已做什么、下一步做什么，不输出内部思考或工具原文，不用无依据的百分比或成功结论。工具调用由服务摘要展示，无需逐次复述。
@@ -118,6 +120,8 @@ export class CodexRuntime implements Runtime {
       r.onThread(threadId);
       if (r.signal.aborted) throw new RuntimeError('cancelled');
       const messages = new Map<string, Obj>();
+      const generatedImages = new Map<string, import('./runtime-contract.js').GeneratedImage | null>();
+      let overflowImages = 0;
       const itemStates = new Map<string, Obj>();
       const itemCompletion = new Map<string, boolean>();
       type Notice = { method: string; turnId: string; status?: string; done: boolean; raw: Obj[]; plan?: unknown };
@@ -178,6 +182,16 @@ export class CodexRuntime implements Runtime {
             }
             for (const item of notice.raw) {
               if (!observeItem(item, notice.method)) continue;
+              if (notice.method !== 'item/started' && item.type === 'imageGeneration' && item.status === 'completed'
+                && typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 256) {
+                if (!generatedImages.has(item.id) && generatedImages.size >= 20) overflowImages=1;
+                else if (!generatedImages.get(item.id)) {
+                  try {
+                    if (typeof item.savedPath !== 'string' || !r.runId) throw Error('generated_image_path_missing');
+                    generatedImages.set(item.id,stageGeneratedImage(this.config.home,r.cwd,threadId,r.runId,{id:item.id,savedPath:item.savedPath}));
+                  } catch { generatedImages.set(item.id,null); }
+                }
+              }
               const running = item.status === 'inProgress' || item.status === undefined && notice.method === 'item/started';
               if (['agentMessage','commandExecution','fileChange','mcpToolCall','dynamicToolCall'].includes(item.type)) r.onActivity?.(item.type==='agentMessage'?(item.phase==='commentary'?'working':'answering'):running?item.type==='commandExecution'?'command':item.type==='fileChange'?'file':'tool':'working');
               // The durable wait ledger owns this control event. It is not a
@@ -222,6 +236,9 @@ export class CodexRuntime implements Runtime {
           }
           if (!notice.done) return;
           if (activeHostTools) { fail('github_review_protocol_error'); return; }
+          const staged=[...generatedImages.values()].filter((image): image is import('./runtime-contract.js').GeneratedImage => image !== null);
+          const failures=generatedImages.size-staged.length+overflowImages;
+          const images={...(staged.length?{generatedImages:staged}:{}),...(failures?{generatedImageFailures:failures}:{})};
           if (pendingWait) {
             for (const [id, item] of itemStates) {
               if (isEffectfulItem(item) && itemCompletion.get(id) !== true) {
@@ -232,17 +249,17 @@ export class CodexRuntime implements Runtime {
               fail('turn_failed'); return;
             }
             completed = true;
-            resolve({ text: '', threadId, turnId: notice.turnId, waiting: pendingWait });
+            resolve({ text: '', threadId, turnId: notice.turnId, waiting: pendingWait, ...images });
             return;
           }
           completed = true;
           if (notice.status !== 'completed') { reject(new RuntimeError(notice.status === 'interrupted' ? 'cancelled' : 'turn_failed')); return; }
           const items = [...messages.values()];
           const finals = items.filter(m => m.phase === 'final_answer');
-          const text = (finals.length ? finals : items.slice(-1)).map(m => m.text).join('\n\n').trim();
+          const text = (finals.length ? finals : items.slice(-1)).map(m => m.text).join('\n\n').trim() || (staged.length || failures ? '图片生成步骤已结束，交付状态将另行通知。' : '');
           if (!text) { reject(new RuntimeError('empty_reply')); return; }
           if (text.length > 60_000) { reject(new RuntimeError('reply_too_large')); return; }
-          resolve({ text, threadId, turnId: notice.turnId });
+          resolve({ text, threadId, turnId: notice.turnId, ...images });
         };
         const consumeWait = ({ id, params }: WaitCall) => {
           if (params.tool === MCP_TOOL.name && r.onMcp) {

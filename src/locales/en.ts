@@ -373,7 +373,7 @@ export const english = {
   "assistant.styleTitle": "How replies are written",
   "assistant.styleHelp": "These are defaults. You can still ask for a shorter answer or a detailed explanation in any task.",
   "assistant.languageHelp": "Follow the current task uses the task context and your instructions to choose a language.",
-  "assistant.emojiHelp": "Choose how often replies use emoji.",
+  "assistant.emojiHelp": "Affects model-generated replies; progress cards and system notices use a fixed style.",
   "assistant.conciseHelp": "Get the key points with less elaboration.",
   "assistant.balancedLengthHelp": "Cover the key points with useful explanation.",
   "assistant.detailedHelp": "Expand on steps, background and examples.",
