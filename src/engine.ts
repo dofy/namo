@@ -617,8 +617,10 @@ export class Engine {
   private route(m: Inbox): void {
     try {
       const waits = new Waits(this.store);
+      // Topic replies point at the root even without an explicit quotation.
+      const topicRoot = !!m.envelope?.threadId && !!m.envelope.rootId && m.envelope.parentId === m.envelope.rootId;
       const resume = /^\/resume\s+(WAIT-[A-Fa-f0-9]{12})\s+([\s\S]+)$/.exec(m.text.trim());
-      const quotedWait = waits.referenced(m);
+      const quotedWait = topicRoot ? undefined : waits.referenced(m);
       if (/^\/resume(?:\s|$)/.test(m.text.trim()) || quotedWait) {
         const w = resume ? waits.get(resume[1].toUpperCase()) : quotedWait;
         if (!w || m.envelope?.kind === 'material') { this.reply(m, '请引用当前等待问题回复，或使用 /resume WAIT-等待编号 你的回答。'); return; }
@@ -627,15 +629,17 @@ export class Engine {
       }
       if(this.configurationDraining) {
         const amendment=/^\/amend\s+(N-[A-Fa-f0-9]{12})\s+\S/.exec(m.text);
-        const target=amendment?this.tasks.owned(amendment[1],m):this.tasks.referenced(m);
+        const target=amendment?this.tasks.owned(amendment[1],m):topicRoot?undefined:this.tasks.referenced(m);
         if(m.envelope?.kind==='material'||!target||!['queued','running'].includes(target.state))return;
       }
       if (/^\/(?:material|run)\s*$/.test(m.text)) { this.reply(m, '请在 /material 后填写材料，或在 /run 后填写处理要求。尚未开工。'); return; }
       const explicit = /^\/amend\s+(N-[A-Fa-f0-9]{12})\s+\S/.exec(m.text);
       if (m.text.startsWith('/amend') && !explicit) { this.reply(m, '用法：/amend N-任务编号 补充要求'); return; }
-      const ref = explicit ? this.tasks.owned(explicit[1], m) : this.tasks.referenced(m);
-      const materialRef = !explicit ? this.tasks.referenceMaterial(m) : undefined;
-      if ((explicit || m.envelope?.parentId) && !ref && !materialRef) { this.reply(m, '未找到本人在本聊天中的引用任务或待处理材料。请用 /tasks 选择任务，或将引用材料和要求一并贴出。'); return; }
+      // In a Feishu topic every post reply points at the topic root, even when
+      // the user did not quote a task. Do not interpret that link as a quote.
+      const ref = explicit ? this.tasks.owned(explicit[1], m) : topicRoot ? undefined : this.tasks.referenced(m);
+      const materialRef = !explicit && !topicRoot ? this.tasks.referenceMaterial(m) : undefined;
+      if ((explicit || m.envelope?.parentId && !topicRoot) && !ref && !materialRef) { this.reply(m, '未找到本人在本聊天中的引用任务或待处理材料。请用 /tasks 选择任务，或将引用材料和要求一并贴出。'); return; }
       const workspace = this.workspace(m, ref);
       if (materialRef && this.tasks.materialBinding(materialRef.key) !== JSON.stringify(workspace)) {
         this.reply(m, '引用材料属于另一目录或权限版本，尚未开工。请先选择对应目录，或重新提交材料和要求。'); return;

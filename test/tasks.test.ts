@@ -78,6 +78,24 @@ test('replying to a pending material opens a task with that material rather than
   assert.match(f.prompts[0], /需求原文/); assert.equal(f.store.get('material')?.taskId, f.store.get('instruction')?.taskId);
 });
 
+test('topic root links open separate tasks while real references still require ownership', async t => {
+  const f = setup(t);
+  const root = msg('root', '原任务', 'topic');
+  f.engine.accept(root);
+  const reply = msg('topic-reply', '审查这个链接', 'topic');
+  Object.assign(reply.envelope!, { threadId: 'thread', rootId: 'root', parentId: 'root' });
+  f.engine.accept(reply);
+  assert.notEqual(f.store.get('root')?.taskId, f.store.get('topic-reply')?.taskId);
+  const unknown = msg('unknown-quote', '补充', 'topic');
+  Object.assign(unknown.envelope!, { threadId: 'thread', rootId: 'root', parentId: 'unknown' });
+  f.engine.accept(unknown);
+  assert.equal(f.store.get('unknown-quote')?.taskId, null);
+  assert.match(String(f.store.db.prepare("SELECT content FROM outbox WHERE inboxKey=? AND kind='result'").get('unknown-quote')?.content), /未找到本人/);
+  f.engine.start();
+  await wait(() => f.store.get('topic-reply')?.state === 'replied');
+  assert.equal(f.prompts.length, 2);
+});
+
 test('queued amendment is part of the same task and duplicate events never append it twice', async t => {
   const { store, tasks, engine, prompts } = setup(t); engine.accept(msg('first'));
   const task = tasks.list(msg('x'))[0]; const amendment = msg('change', `/amend ${task.id} 只修改前端`);
