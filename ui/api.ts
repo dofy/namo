@@ -41,6 +41,7 @@ export const api = {
     request<CodexUpdateStatus>('/api/codex-update', { action, configRevision, ...(enabled === undefined ? {} : { enabled }) }),
   tasks: (query: string, signal?: AbortSignal) => request<TaskList>(`/api/tasks?${query}`, undefined, signal),
   schedules: (query: string, signal?: AbortSignal) => request<PageResult<ScheduleListItem>>(`/api/schedules?${query}`, undefined, signal),
+  scheduleAction: (item:ScheduleListItem,action:'pause'|'resume'|'delete') => request<{ok:true}>('/api/schedules/action',{id:item.id,action,state:item.state,nextAt:item.nextAt}),
   sessions: (query: string, signal?: AbortSignal) => request<PageResult<SessionSummary>>(`/api/sessions?${query}`, undefined, signal),
   dashboard: (signal?: AbortSignal) => request<Dashboard>('/api/dashboard', undefined, signal),
   browseOptions: (signal?: AbortSignal) => request<BrowseOptions>('/api/browse-options', undefined, signal),

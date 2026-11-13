@@ -20,7 +20,8 @@ const HOST_FILES = ['cli', 'service-bootstrap', 'runtime-host', 'live-upgrade', 
   'memory','memory-access','auto-memory','schedules','feedback','cards','mcp-connections','mcp-write-approval',
   'github-api','github-access','github-review','approval-service','approvals','recovery','artifact-delivery','inbox-retention',
   'assistant','profiles','model-preferences','task-progress','public-progress','evidence','artifacts','model-catalog',
-  'task-context','image-inputs','memory-commands','memory-extractor','materials','task-materials','mcp-oauth'];
+  'task-context','image-inputs','memory-commands','memory-extractor','materials','task-materials','mcp-oauth',
+  'conversation-control','control-classifier','directory-approval'];
 
 /** The receiver and storage implementation remain pinned until a deliberate
  * restart. This ABI supports execution-code changes, never schema migration. */

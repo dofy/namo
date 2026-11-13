@@ -39,6 +39,13 @@ export class Tasks {
       .run(`session-refresh:${key}`,JSON.stringify({before:Date.now(),previousThread:thread}));
     this.store.clearThread(key); return true;
   }
+  upgradeToolSession(t:Task):void {
+    const key=this.sessionKey(t), thread=this.store.thread(key);
+    if(!thread || new Waits(this.store).resume(t) || this.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`control-tools-v3-thread:${thread}`)) return;
+    this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+      .run(`session-refresh:${key}`,JSON.stringify({before:Date.now(),previousThread:thread}));
+    this.store.clearThread(key);
+  }
   refreshContext(t: Task): unknown[] {
     const marker=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(this.refreshKey(t));
     if(!marker)return [];
@@ -50,7 +57,11 @@ export class Tasks {
       ORDER BY t.finishedAt DESC LIMIT 8`).all(t.workstreamId,t.ownerId,t.chatKey,t.scopeKey,before);
     return rows.reverse().map(row=>({request:String(row.text).slice(0,1000),result:String(row.result??'').slice(0,1000)}));
   }
-  finishRefresh(t: Task): void { this.store.db.prepare('DELETE FROM settings WHERE key=?').run(this.refreshKey(t)); }
+  finishRefresh(t: Task): void {
+    const key=this.refreshKey(t), row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key);
+    if(row) { try {if(JSON.parse(String(row.value)).deferUntilTaskId===t.id)return;} catch { /* Invalid markers are cleared below. */ } }
+    this.store.db.prepare('DELETE FROM settings WHERE key=?').run(key);
+  }
   get(id: string): Task | undefined { return this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(id) as unknown as Task | undefined; }
   owned(id: string, m: Incoming): Task | undefined {
     const t = this.get(id.toUpperCase());
@@ -184,7 +195,7 @@ export class Tasks {
   }
   amend(task: Task, m: Incoming): Revision {
     return this.store.transaction(() => {
-      if (new Waits(this.store).current(task.id)) throw new TaskInputError('任务正在进入等待。请收到问题后引用回复，或用 /task 查看恢复方式。');
+      if (new Waits(this.store).current(task.id)) throw new TaskInputError('任务正在进入等待。请收到问题后引用回复，或询问任务状态。');
       if(task.state==='running'&&(m.envelope?.materials?.length??0)>0)throw new TaskInputError('运行中的任务暂不支持追加附件。请等任务完成后重新发送图片和要求，或先停止任务再新建任务；这条附件未加入执行。');
       const version = task.inputVersion + 1;
       if (version > 100) throw new TaskInputError('本任务已达到 100 个输入版本，请明确发起后续任务。');
@@ -231,7 +242,7 @@ export class Tasks {
       const revisions = this.store.db.prepare(`SELECT i.text,tm.version FROM task_messages tm JOIN inbox i ON i.key=tm.inboxKey
         WHERE tm.taskId=? AND tm.role='revision' AND tm.version>? AND tm.version<=? ORDER BY tm.version`).all(t.id, resume.replyVersion!, t.inputVersion);
       return JSON.stringify({ type: 'task_resume', task_id: t.id, wait_id: resume.id, prior_run_id: resume.runId,
-        prior_turn_id: resume.turnId, question: resume.question, reply: reply.text.replace(/^\/resume\s+WAIT-[A-F0-9]{12}\s+/i, '').trim(), revisions,
+        prior_turn_id: resume.turnId, question: resume.question, reply: reply.text.replace(/^\/resume\s+WAIT-[A-F0-9]{12}\s+/i, '').replace(/^(?:请|帮我)?(?:回答|回复)(?:等待事项|任务)\s*(?:WAIT-[A-F0-9]{12}|N-[A-F0-9]{12})\s*[:：]\s*/iu,'').trim(), revisions,
         note: '继续同一 task_id，保留本任务的临时语言与表达要求；等待选择只对本任务有效，不会保存为长期偏好。不要重做已完成的操作；目录可能已被其他任务修改，先核对当前状态。本次等待只收集事实或选择，不能作为推送、部署、删除、发送消息或权限变更的批准。' });
     }
     const rows = this.store.db.prepare(`SELECT i.*,tm.role,tm.version FROM task_messages tm JOIN inbox i ON i.key=tm.inboxKey WHERE tm.taskId=? AND tm.version<=?
@@ -252,7 +263,7 @@ export class Tasks {
       const unresolved = this.store.db.prepare("SELECT 1 FROM task_messages WHERE taskId=? AND role='revision' AND dispatch NOT IN ('accepted','applied') LIMIT 1").get(t.id);
       const state = error === 'cancelled' ? 'cancelled' : ['interrupted','runner_lost'].includes(error ?? '') ? 'interrupted' : error ? 'failed' : unresolved ? 'needs_attention' : 'succeeded';
       const progressSent=this.store.db.prepare("SELECT 1 FROM outbox WHERE inboxKey=? AND kind='progress' AND (state IN ('unknown','sending') OR EXISTS(SELECT 1 FROM progress_updates u WHERE u.outboxId=outbox.id AND u.state IN ('unknown','failed','sending')))").get(t.inboxKey);
-      this.store.finish(t.inboxKey, text + (progressSent?'\n\n本条是最终结果；进度卡若未同步，请以本条为准。':'') + (unresolved ? '\n\n注意：有补充要求尚未确认送入执行器，未自动重送。请用 /task 查看后明确发起后续任务。' : ''), error);
+      this.store.finish(t.inboxKey, text + (progressSent?'\n\n本条是最终结果；进度卡若未同步，请以本条为准。':'') + (unresolved ? '\n\n注意：有补充要求尚未确认送入执行器，未自动重送。请询问任务状态后明确发起后续任务。' : ''), error);
       this.store.db.prepare('UPDATE tasks SET state=?,error=?,finishedAt=? WHERE id=?').run(state, error ?? null, Date.now(), t.id);
       this.store.db.prepare('UPDATE task_runs SET state=?,error=?,finishedAt=? WHERE id=?').run(error ? state : 'succeeded', error ?? null, Date.now(), run);
       this.progress();

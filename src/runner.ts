@@ -9,12 +9,14 @@ import { Store } from './store.js';
 import { extractConversationMemory, RuntimeError, type Runtime, type RunRequest, type RunResult } from './runtime.js';
 import type { AutoMemoryInput } from './auto-memory.js';
 import { runnerJob, runnerEvent, reconcileRunner } from './runner-store.js';
+import { classifyControl } from './control-classifier.js';
 import { saveRunImages } from './image-inputs.js';
 
 /** The receiver only observes. The detached worker owns the model and durable result. */
 export class RunnerRuntime implements Runtime {
   readonly persistent = true;
   constructor(private store: Store, private config: Config) {}
+  classifyControl(input: Parameters<typeof classifyControl>[1], signal:AbortSignal) {return classifyControl(this.config.codex,input,signal);}
   extractMemory(input: AutoMemoryInput, signal: AbortSignal): Promise<unknown> { return extractConversationMemory(this.config.codex,input,signal); }
   reservations(): { runId: string; chatKey: string; cwd: string; slotKey: string;paths:string[] }[] {
     const rows=this.store.db.prepare(`SELECT j.runId,t.id taskId,t.chatKey,t.cwd,t.scopeKey,t.ownerId,i.envelope FROM runner_jobs j JOIN task_runs r ON r.id=j.runId

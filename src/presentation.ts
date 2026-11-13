@@ -41,7 +41,7 @@ export function taskStatus(store: Store, task: Task): string {
   const lines = [`**${state}**`];
   if (task.state === 'waiting') {
     const waiting = new Waits(store).current(task.id);
-    if (waiting) lines.push(literal(waiting.question), ...(waiting.questions?.map((q,i)=>`${literal(q.question)}：${waiting.answers?.[i] === null ? '待回答' : '已回答'}`) ?? []), linkedExternalWait(store,waiting.id)?'外部检查由系统核对，条件满足后继续；不能用人工回复代替检查结果。':`恢复：\`/resume ${waiting.id} 你的回答\``, `停止：\`/cancel ${task.id}\``);
+    if (waiting) lines.push(literal(waiting.question), ...(waiting.questions?.map((q,i)=>`${literal(q.question)}：${waiting.answers?.[i] === null ? '待回答' : '已回答'}`) ?? []), linkedExternalWait(store,waiting.id)?'外部检查由系统核对，条件满足后继续；不能用人工回复代替检查结果。':`请引用等待问题回复，或说明等待事项 ${waiting.id} 和答案。`, '可以让我停止此任务。');
   }
   if (task.cwd) lines.push(`目录：${task.cwd}`);
   if (store.get(task.inboxKey)?.cancelRequested && ['queued','running'].includes(task.state) && !['completed','failed','lost','reviewed'].includes(String(job?.state)))
@@ -63,6 +63,6 @@ export function taskStatus(store: Store, task: Task): string {
   if (!['queued','running','waiting'].includes(task.state)) lines.push('',progressState(store,task).content);
   lines.push('', `任务编号：${task.id}`);
   if (['queued','running'].includes(task.state) && (!job || ['starting','running'].includes(String(job.state))))
-    lines.push(`补充：\`/amend ${task.id} 新要求\``, `停止：\`/cancel ${task.id}\``);
+    lines.push('可以告诉我补充要求，或让我停止此任务。');
   return lines.join('\n');
 }

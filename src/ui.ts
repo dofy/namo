@@ -188,6 +188,7 @@ export async function startUi(manager:Management,options:{chooseDirectory?:()=>P
         if(path==='/api/user-model')return send(200,{model:manager.saveUserModel(input.configRevision,input.userId,input.expected,input.model)});
         if(path==='/api/codex-update')return send(200,await manager.codexUpdate(input));
         if(path==='/api/resolve')return send(200,manager.reconcile(input));
+        if(path==='/api/schedules/action')return send(200,manager.scheduleAction(input));
         if(path==='/api/cancel')return send(200,manager.cancel(input.id,input.inputVersion,input.requestId));
         return send(404,{error:tr("common.actionNotFound")});
       } finally{busy=false;}

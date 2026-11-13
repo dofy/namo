@@ -133,7 +133,7 @@ export class ArtifactDelivery {
     for(const intent of intents){const task=this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(intent.taskId) as unknown as Task|undefined;
       if(!task||['queued','running','waiting'].includes(task.state))continue;
       this.store.transaction(()=>{try{if(task.state!=='succeeded')throw new ArtifactError('artifact_task_not_succeeded');this.enqueue(this.store.get(intent.inboxKey)!,task,intent.path);}
-        catch(error){this.store.addOutput(intent.inboxKey,'artifact-intent-result',`指定文件未交付：${error instanceof ArtifactError?error.code:'artifact_failed'}。可核对任务后用 /deliver 明确发起交付。`);}
+        catch(error){this.store.addOutput(intent.inboxKey,'artifact-intent-result',`指定文件未交付：${error instanceof ArtifactError?error.code:'artifact_failed'}。可核对任务后再次明确要求交付。`);}
         this.store.db.prepare("UPDATE artifact_intents SET state='processed' WHERE taskId=?").run(intent.taskId);
       });
     }

@@ -1,7 +1,7 @@
 import {
   AtSign, PanelsTopLeft, Smile, Activity, BookUser, Bot, CalendarClock, ChevronLeft, ChevronRight, CircleCheck, Info,
   ClipboardCheck, ExternalLink, Funnel, LayoutDashboard, MessageSquare, NotebookText,
-  Play, Plug, Plus, RotateCcw, RotateCw, Save, SlidersHorizontal, Square,
+  Pause, Play, Plug, Plus, RotateCcw, RotateCw, Save, SlidersHorizontal, Square,
   Trash2, UserRound, X, Search, Menu, type LucideIcon,
 } from 'lucide-react';
 
@@ -34,6 +34,7 @@ const icons = {
   check: CircleCheck,
   close: X,
   stop: Square,
+  pause: Pause,
   play: Play,
   activity: Activity,
   trash: Trash2,

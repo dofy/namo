@@ -17,7 +17,7 @@ export function queuedConfiguration(saved:Config):{config:Config;revision:string
   const health=JSON.parse(readFileSync(healthFile,'utf8'));
   if(!health.automaticConfiguration||health.configRevision===revision)return normal;
   const db=new DatabaseSync(database,{readOnly:true});let pending=false;
-  try {pending=!!db.prepare("SELECT 1 FROM tasks WHERE state IN ('queued','running','waiting') LIMIT 1").get();} finally {db.close();}
+  try {pending=!!db.prepare("SELECT 1 FROM tasks WHERE state IN ('queued','running','waiting') LIMIT 1").get() || !!db.prepare("SELECT 1 FROM settings WHERE key>=? AND key<? LIMIT 1").get('control-classify:','control-classify;');} finally {db.close();}
   if(!pending)return normal;
   const directory=join(saved.dataDir,'config-backups');
   if(/^[a-f0-9]{64}$/.test(health.configRevision)&&existsSync(directory))for(const name of readdirSync(directory).sort().reverse()) {
@@ -59,7 +59,8 @@ export function watchConfiguration(store:Store, host:RuntimeHost, initial:Config
   };
   const tick=async()=>{
     observe(); if(!pending||closed)return;
-    if(store.db.prepare("SELECT 1 FROM tasks WHERE state IN ('queued','running','waiting') LIMIT 1").get()
+    if(store.db.prepare("SELECT 1 FROM settings WHERE key>=? AND key<? LIMIT 1").get('control-classify:','control-classify;')
+      ||store.db.prepare("SELECT 1 FROM tasks WHERE state IN ('queued','running','waiting') LIMIT 1").get()
       ||store.db.prepare("SELECT 1 FROM runner_jobs WHERE state IN ('starting','running','lost') LIMIT 1").get()
       ||store.db.prepare("SELECT 1 FROM outbox WHERE state IN ('pending','sending') LIMIT 1").get()
       ||store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;

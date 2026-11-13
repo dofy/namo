@@ -7,7 +7,7 @@ import { memoryDirectories } from './memory-access.js';
 import { admitted } from './access.js';
 import { makeRedactor } from './safety.js';
 
-const DATE_TIME_TASK = /(?:日期|时间|时区|今天|明天|昨天|后天|星期|周[一二三四五六日天]|几点|日程|截止|到期)|\b(?:date|time|timezone|today|tomorrow|yesterday|calendar|schedule|deadline|expiry|expiration)\b/iu;
+const DATE_TIME_TASK = /(?:日期|时间|时区|今天|明天|昨天|后天|星期|周[一二三四五六日天]|每天|每周|定时|提醒|几点|日程|截止|到期)|\b(?:date|time|timezone|today|tomorrow|yesterday|calendar|schedule|deadline|expiry|expiration)\b/iu;
 
 /** Conservative classifier: English terms use word boundaries, so "runtime" is not a date/time task. */
 export function isDateTimeTask(text: string): boolean {

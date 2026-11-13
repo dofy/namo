@@ -49,7 +49,7 @@ export function progressState(store: Store, task: Task, now = Date.now(), timeZo
     .filter(i=>i.kind==='files'&&i.status==='completed').flatMap(i=>(i.files??[]).map(f=>f.path))??[] : [];
   const stale=executing&&run?.heartbeat&&now-Number(run.heartbeat)>30_000;
   const latest=amendments.at(-1);
-  const amendmentStatus=latest ? ({pending:task.state==='queued'?'已保存，开工时一并处理':'已保存，等待提交',submitting:'正在提交给执行器',accepted:'执行器已接受',applied:'已加入任务',unknown:'提交结果不明，请用 /task 核对',rejected:'未被执行器接受，请用 /task 核对',not_active:'未被当前轮接受，请用 /task 核对'} as Record<string,string>)[String(latest.dispatch)]??'状态待核对' : null;
+  const amendmentStatus=latest ? ({pending:task.state==='queued'?'已保存，开工时一并处理':'已保存，等待提交',submitting:'正在提交给执行器',accepted:'执行器已接受',applied:'已加入任务',unknown:'提交结果不明，请询问任务状态',rejected:'未被执行器接受，请询问任务状态',not_active:'未被当前轮接受，请询问任务状态'} as Record<string,string>)[String(latest.dispatch)]??'状态待核对' : null;
   return {phase,terminal,revision,content:[`**当前**：${labels[phase]??'状态待核对'} · ⏱ **${elapsed}**`,times.join('\n'),
     amendmentStatus?`**最新补充**：${amendmentStatus}`:null,
     grouped.length?'**最近进展**\n'+grouped.map(e=>`- ${e.line}${e.count>1?` × ${e.count}`:''}`).join('\n'):null,

@@ -9,6 +9,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config.js';
 import { Store, type Incoming } from '../src/store.js';
+import { RuntimeError, type Runtime } from '../src/runtime.js';
+import { requestDirectory, decideDirectory, applyDirectoryRequests, getDirectoryRequest } from '../src/directory-approval.js';
 import { Engine } from '../src/engine.js';
 import { RunnerRuntime } from '../src/runner.js';
 import { Tasks } from '../src/tasks.js';
@@ -50,6 +52,8 @@ createInterface({input:process.stdin}).on('line',line=>{
    const savedPath=join(root,'image.png');writeFileSync(savedPath,Buffer.from([137,80,78,71,13,10,26,10,1]));
    send({method:'item/completed',params:{threadId:thread,turnId:turn,item:{id:'image',type:'imageGeneration',status:'completed',savedPath}}});
   }
+  if(actual.messages[0].text==='control-check'){send({id:99,method:'item/tool/call',params:{namespace:null,tool:'manage_namo',threadId:thread,turnId:turn,callId:'control-check',arguments:{operation:'tasks'}}});return;}
+  if(actual.messages[0].text==='schedule-check'){send({id:99,method:'item/tool/call',params:{namespace:null,tool:'manage_schedule',threadId:thread,turnId:turn,callId:'schedule-check',arguments:{operation:'create',kind:'task',frequency:'daily',time:'2099-01-01T09:00+08:00',content:'搜索项目并汇报'}}});return;}
   if(actual.messages[0].text==='mcp-check'){send({id:99,method:'item/tool/call',params:{namespace:null,tool:'mcp_read',threadId:thread,turnId:turn,callId:'mcp',arguments:{operation:'connections'}}});return;}
   if(actual.messages[0].text==='instant')return done('saved answer');
   timer=setInterval(()=>{if(existsSync(join(cwd,'release')))done('saved answer');},30);return;
@@ -114,6 +118,16 @@ test('new workstreams register MCP discovery even before a connection exists', a
   receiver.start(); receiver.accept(message('no-mcp','instant'));
   await wait(()=>f.store.get('no-mcp')?.state==='replied');
   assert.ok(JSON.parse(readFileSync(join(f.project,'thread-tools'),'utf8').trim()).includes('mcp_read'));
+});
+
+test('detached worker executes natural management and schedule calls through the host',async t=>{
+ const f=fixture(t),receiver=f.receiver();receiver.start();
+ receiver.accept(message('control-natural','control-check'));await wait(()=>f.store.get('control-natural')?.state==='replied');
+ const control=JSON.parse(readFileSync(join(f.project,'mcp-discovery'),'utf8'));
+ assert.deepEqual(control.result,[]);
+ receiver.accept(message('schedule-natural','schedule-check'));await wait(()=>f.store.get('schedule-natural')?.state==='replied');
+ const row=f.store.db.prepare('SELECT ownerId,kind,content,intervalMs FROM schedules').get();
+ assert.equal(row?.ownerId,'alice');assert.equal(row?.kind,'task');assert.equal(row?.content,'搜索项目并汇报');assert.equal(row?.intervalMs,86400000);
 });
 
 test('generated image survives receiver detachment and is delivered once after reattachment', async t => {
@@ -511,4 +525,94 @@ test('worker factory uses the pinned profile binary and isolated home, never the
   assert.equal(f.tasks.get(task.id)?.state,'succeeded');
   assert.equal(readFileSync(join(f.project,'selected-home'),'utf8'),join(f.data,'agents','review'));
   assert.equal(f.calls(),1);
+});
+
+test('out-of-band natural intent is classified while the original task is running',async t=>{
+ const f=fixture(t);let starts=0,classifications=0;
+ const runtime:Runtime={run(r){starts++;return new Promise((_resolve,reject)=>r.signal.addEventListener('abort',()=>reject(new RuntimeError('cancelled')),{once:true}));},
+  async classifyControl(input){classifications++;assert.equal(input.text,'别继续刚才那件事了');return {kind:'control',operation:'cancel'};}};
+ const receiver=new Engine(f.store,runtime,{async send(_chat,_text,uuid){return uuid;}},f.config);
+ t.after(()=>receiver.stop());receiver.start();receiver.accept(message('work-natural','long work'));
+ await wait(()=>starts===1);receiver.accept(message('cancel-natural','别继续刚才那件事了'));
+ await wait(()=>f.tasks.get(f.store.get('work-natural')!.taskId!)?.state==='cancelled');
+ assert.equal(classifications,1);assert.equal(starts,1);assert.equal(f.store.get('cancel-natural')?.text,'别继续刚才那件事了');
+});
+
+
+test('directory approval is owner scoped, durable, and applies once after config reload',t=>{
+ const f=fixture(t),m=message('directory-source','需要访问新目录'),newDir=join(f.dir,'new-project');mkdirSync(newDir);
+ f.store.enqueue(m);const task=f.tasks.create(f.store.get(m.key)!,{cwd:f.project,policyHash:'p'});f.store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(task.id);
+ const result=requestDirectory(f.store,f.config,m,task,newDir,'完成尚未开始的文件检查');const id=/DIR-[A-F0-9]{12}/.exec(result)![0];
+ assert.equal(loadConfig(f.file).codex.directories?.includes(newDir),false);
+ assert.match(decideDirectory(f.store,f.config,id,{...m,senderId:'other'},true),/未找到/);
+ const row=f.store.db.prepare('SELECT * FROM outbox WHERE kind=?').get(`directory-approval:${id}`) as any;
+ const cards=new Cards(f.store,()=>true,(target,input,yes)=>decideDirectory(f.store,loadConfig(f.file),target,input,yes));
+ const payload=cards.prepare(row) as any;const token=payload.elements[1].actions[0].value.namo;
+ f.store.db.prepare("UPDATE outbox SET state='sent',platformId='approval-message' WHERE id=?").run(row.id);
+ const event={operator:{open_id:'alice'},context:{open_chat_id:'chat',open_message_id:'approval-message'},action:{value:{namo:token}}};
+ assert.match(cards.accept({...event,operator:{open_id:'other'}}).toast.content,/无权/);
+ assert.match(cards.accept(event).toast.content,/已确认/);assert.match(cards.accept(event).toast.content,/已经处理/);
+ let dispatched=0;applyDirectoryRequests(f.store,f.config,()=>{dispatched++;});
+ assert.equal(loadConfig(f.file).codex.directories?.includes(newDir),true);assert.equal(getDirectoryRequest(f.store,id)?.state,'saved');assert.equal(dispatched,0);
+ applyDirectoryRequests(f.store,loadConfig(f.file),()=>{dispatched++;});applyDirectoryRequests(f.store,loadConfig(f.file),()=>{dispatched++;});
+ assert.equal(getDirectoryRequest(f.store,id)?.state,'applied');assert.equal(dispatched,1);
+});
+
+test('approved directory is safely reloaded and unfinished work continues once',async t=>{
+ const f=fixture(t),newDir=join(f.dir,'approved-folder');mkdirSync(newDir);let watcher:ReturnType<typeof watchConfiguration>|undefined;
+ let runs=0;const runtime:Runtime={async run(r){runs++;r.onThread(`test-thread-${runs}`);r.onTurn(`test-turn-${runs}`);
+  if(runs===1){const response=r.onControl!({operation:'request_directory',path:newDir,value:'检查该目录中尚未处理的文件'},'request-1') as {result:string};assert.match(response.result,/确认请求/);return {text:response.result,threadId:'test-thread-1',turnId:'test-turn-1'};}
+  assert.match(r.prompt,/尚未完成/);return {text:'continued',threadId:`test-thread-${runs}`,turnId:`test-turn-${runs}`};}};
+ const host=new RuntimeHost(()=>new Engine(f.store,runtime,{async send(_c,_t,id){return id;}},f.config));
+ t.after(async()=>{await watcher?.stop();await host.stop();});host.start();
+ watcher=watchConfiguration(f.store,host,f.config,digest(readFileSync(f.file,'utf8')),async next=>()=>new Engine(f.store,runtime,{async send(_c,_t,id){return id;}},next),()=>{},()=>{});
+ host.accept(message('directory-integration','请检查目标文件夹'));await wait(()=>f.tasks.get(f.store.get('directory-integration')!.taskId!)?.state==='succeeded');
+ const setting=f.store.db.prepare("SELECT key FROM settings WHERE key LIKE 'directory-approval:%'").get();assert.ok(setting);
+ const id=String(setting.key).slice('directory-approval:'.length);
+ assert.equal(loadConfig(f.file).codex.directories?.includes(newDir),false);
+ await wait(()=>!!f.store.db.prepare("SELECT 1 FROM outbox WHERE inboxKey='directory-integration' AND state='sent' AND (kind=? OR kind='result')").get(`directory-approval:${id}`));
+ host.accept(message('directory-confirm','可以'));
+ await wait(()=>getDirectoryRequest(f.store,id)?.state==='applied',8000);
+ await wait(()=>runs===2,8000);assert.equal(loadConfig(f.file).codex.directories?.includes(newDir),true);
+ assert.equal(f.store.db.prepare("SELECT COUNT(*) n FROM inbox WHERE key=?").get(`directory-continuation:${id}`)?.n,1);
+});
+
+test('directory grant rejects unsafe, unauthorized, and stale requests without changing config',t=>{
+ const f=fixture(t),m=message('directory-stale','请求访问'),dir=join(f.dir,'project-two');mkdirSync(dir);f.store.enqueue(m);
+ const task=f.tasks.create(f.store.get(m.key)!,{cwd:f.project,policyHash:'p'});f.store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(task.id);
+ assert.throws(()=>requestDirectory(f.store,f.config,{...m,senderId:'outsider'},task,dir,'finish'),/所有者/);
+ assert.throws(()=>requestDirectory(f.store,f.config,m,task,'/','finish'));
+ const id=/DIR-[A-F0-9]{12}/.exec(requestDirectory(f.store,f.config,m,task,dir,'finish'))![0];
+ assert.match(decideDirectory(f.store,f.config,id,m,true),/已确认/);
+ const raw=JSON.parse(readFileSync(f.file,'utf8'));raw.codex.model='changed-model';writeFileSync(f.file,JSON.stringify(raw));
+ applyDirectoryRequests(f.store,f.config,()=>assert.fail('must not continue'));
+ assert.equal(getDirectoryRequest(f.store,id)?.state,'failed');assert.equal(loadConfig(f.file).codex.directories?.includes(dir),false);
+});
+
+test('ambiguous natural cancellation never picks between multiple pending tasks',async t=>{
+ const f=fixture(t);let starts=0;
+ const runtime:Runtime={run(r){starts++;return new Promise((_resolve,reject)=>r.signal.addEventListener('abort',()=>reject(new RuntimeError('cancelled')),{once:true}));},
+  async classifyControl(input){return input.text==='another work'?{kind:'task'}:{kind:'control',operation:'cancel',id:input.pending[0].id};}};
+ const receiver=new Engine(f.store,runtime,{async send(_c,_text,uuid){return uuid;}},f.config);t.after(()=>receiver.stop());receiver.start();
+ receiver.accept(message('work-a','long work'));await wait(()=>starts===1);
+ receiver.accept(message('work-b','another work'));await wait(()=>!!f.store.get('work-b')?.taskId);
+ receiver.accept(message('ambiguous-cancel','把那个停了'));await wait(()=>!!f.store.db.prepare("SELECT 1 FROM output_sources WHERE inboxKey='ambiguous-cancel' AND kind='result'").get());
+ assert.match(String(f.store.db.prepare("SELECT content FROM output_sources WHERE inboxKey='ambiguous-cancel' AND kind='result'").get()?.content),/多个未完成任务/);
+ assert.equal(f.tasks.get(f.store.get('work-a')!.taskId!)?.state,'running');assert.equal(f.store.get('work-a')?.cancelRequested,0);
+});
+
+test('a generic yes cannot approve an unseen directory request',t=>{
+ const f=fixture(t),m=message('unseen-directory','访问目录'),dir=join(f.dir,'unseen');mkdirSync(dir);f.store.enqueue(m);
+ const task=f.tasks.create(f.store.get(m.key)!,{cwd:f.project,policyHash:'p'});f.store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(task.id);
+ const id=/DIR-[A-F0-9]{12}/.exec(requestDirectory(f.store,f.config,m,task,dir,'继续'))![0];
+ const receiver=f.receiver();receiver.accept(message('unrelated-yes','可以'));
+ assert.equal(getDirectoryRequest(f.store,id)?.state,'pending');assert.equal(loadConfig(f.file).codex.directories?.includes(dir),false);
+});
+
+test('approved directory cannot be swapped before configuration is saved',t=>{
+ const f=fixture(t),m=message('directory-swapped','请求访问'),dir=join(f.dir,'original');mkdirSync(dir);f.store.enqueue(m);
+ const task=f.tasks.create(f.store.get(m.key)!,{cwd:f.project,policyHash:'p'});f.store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(task.id);
+ const id=/DIR-[A-F0-9]{12}/.exec(requestDirectory(f.store,f.config,m,task,dir,'finish'))![0];decideDirectory(f.store,f.config,id,m,true);
+ renameSync(dir,`${dir}-old`);mkdirSync(dir);applyDirectoryRequests(f.store,f.config,()=>assert.fail('must not continue'));
+ assert.equal(getDirectoryRequest(f.store,id)?.state,'failed');assert.equal(loadConfig(f.file).codex.directories?.includes(dir),false);
 });

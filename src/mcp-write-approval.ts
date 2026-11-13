@@ -52,7 +52,7 @@ export async function awaitMcpApproval(store:Store,task:Task,connection:string,u
  const approval:Approval={id,taskId:task.id,inboxKey:task.inboxKey,ownerId:task.ownerId,chatKey:task.chatKey,scopeKey:task.scopeKey,...(route?{approverId:route.ownerId,approvalChatKey:route.message.chatKey,approvalScopeKey:scopeOf(route.message)}:{}),connection,url,tool,arguments:args,scope,state:'pending',expiresAt:Date.now()+600000};
  store.transaction(()=>{save(store,approval);let outputKey=task.inboxKey;
    if(route){outputKey=`mcp-owner-approval:${id}`;if(!store.enqueue({...route.message,key:outputKey,text:'',createdAt:Date.now()}))throw Error('mcp_approval_route_conflict');store.db.prepare("UPDATE inbox SET state='replied' WHERE key=?").run(outputKey);}
-   store.addOutput(outputKey,`mcp-approval:${id}`,`**${connection==='github'&&tool==='github_api'?'GitHub':'MCP'} 操作需要确认**\n连接：${connection}\n地址：${url}\n工具：${tool}\n任务：${task.id}${route?'（凭据主人审批）':''}${route?`\n发起人：\`${requester}\``:''}${previousUnknown?'\n此前相同操作的结果不明，请先核对外部服务，避免重复执行。':''}\n参数：\n\`\`\`json\n${display}\n\`\`\`\n\n确认执行：\`/mcp-approve ${id} --confirm\`\n拒绝：\`/mcp-reject ${id}\`\n最长有效期 10 分钟，且受任务时限约束；每次调用都需要单独确认。`);
+   store.addOutput(outputKey,`mcp-approval:${id}`,`**${connection==='github'&&tool==='github_api'?'GitHub':'MCP'} 操作需要确认**\n连接：${connection}\n地址：${url}\n工具：${tool}\n任务：${task.id}${route?'（凭据主人审批）':''}${route?`\n发起人：\`${requester}\``:''}${previousUnknown?'\n此前相同操作的结果不明，请先核对外部服务，避免重复执行。':''}\n参数：\n\`\`\`json\n${display}\n\`\`\`\n\n回复“确认操作 ${id}”以执行，或回复“拒绝操作 ${id}”。\n最长有效期 10 分钟，且受任务时限约束；每次调用都需要单独确认。`);
    if(route)store.db.prepare('UPDATE outbox SET route=NULL WHERE inboxKey=? AND kind=?').run(outputKey,`mcp-approval:${id}`);
  });
  try {

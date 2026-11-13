@@ -34,14 +34,14 @@ test('session list explains first and latest requests, current binding, time, co
   assert.match(text, / · 2 项任务 · 最近任务已完成/);
   assert.match(text, /最近：补齐重复提交的回归测试/);
   assert.match(text, /最近活动：2026\/10\/28 16:02/);
-  assert.ok(text.includes(`/session ${first.workstreamId}`));
+  assert.ok(text.includes(`会话编号：${first.workstreamId}`));
   assert.equal(first.workstreamId, last.workstreamId);
   assert.match(text, /不会重跑旧任务/);
-  assert.match(text, /正在等待补充.*\/tasks/);
-  assert.equal((text.match(/继续此会话：/g) ?? []).length, 1);
+  assert.match(text, /正在等待补充.*查看/);
+  assert.equal((text.match(/会话编号：/g) ?? []).length, 1);
   const post = JSON.stringify(richPost(text));
   assert.ok(post.includes('检查支付取消流程'));
-  assert.ok(post.includes(`/session ${first.workstreamId}`));
+  assert.ok(post.includes(`会话编号：${first.workstreamId}`));
 });
 
 test('recent activity includes amended input and current session stays visible beyond ten newer sessions', t => {
@@ -55,7 +55,7 @@ test('recent activity includes amended input and current session stays visible b
   assert.match(text, /\*\*1\. 旧会话主题 · 当前会话\*\*/);
   assert.match(text, /\*\*2\. 新增补充的会话\*\*/);
   assert.match(text, /2026\/10\/28 17:00/);
-  assert.equal((text.match(/继续此会话：/g) ?? []).length, 10);
+  assert.equal((text.match(/会话编号：/g) ?? []).length, 10);
   assert.equal(f.tasks.binding(incoming('list','/session'))?.id, old.workstreamId);
 });
 

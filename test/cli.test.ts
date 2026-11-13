@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, writeFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -138,29 +138,37 @@ test('partial legacy config is completed with defaults while preserving its fiel
 });
 
 test('terminal configuration saves only selected settings and preserves secrets and other fields', async t=>{
- const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');
+ const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');const {Back}=await import('../src/config-prompts.js');
  const dir=mkdtempSync(join(tmpdir(),'namo-terminal-config-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const file=join(dir,'config.json'),raw=initialConfig(file,dir);raw.feishu.appSecret='private-secret';raw.feishu.appId='cli_aaaaaaaaaaaaaaaa';raw.codex.directories=[dir];raw.custom={untouched:true};atomicJson(file,raw);
  const answers=['1','model','concurrency','$save','0'],textAnswers=['example-model','12'],messages:string[]=[];
- const ui={select:async()=>answers.shift()!,text:async()=>textAnswers.shift()!,confirm:async()=>true,info:(s:string)=>messages.push(s),close:()=>{}};
+ const ui={select:async()=>{const answer=answers.shift()!;if(answer==='0')throw new Back();return answer;},text:async()=>textAnswers.shift()!,confirm:async()=>true,info:(s:string)=>messages.push(s),close:()=>{}};
  await terminalConfig(new Management(file),ui);
  const saved=readJson(file);assert.equal(saved.codex.model,'example-model');assert.equal(saved.concurrency,12);assert.equal(saved.feishu.appSecret,'private-secret');assert.deepEqual(saved.custom,{untouched:true});assert.ok(messages.every(s=>!s.includes('private-secret')));
 });
 
 test('terminal configuration Escape discards a partially entered draft',async t=>{
- const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');
+ const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');const {Back}=await import('../src/config-prompts.js');
  const dir=mkdtempSync(join(tmpdir(),'namo-terminal-cancel-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const file=join(dir,'config.json'),raw=initialConfig(file,dir);raw.feishu.appSecret='private-secret';raw.codex.directories=[dir];atomicJson(file,raw);const original=readFileSync(file,'utf8');
  const answers=['1','model','$back','0'],messages:string[]=[];
- const ui={select:async()=>answers.shift()!,text:async()=> 'unsaved-model',confirm:async()=>true,info:(message:string)=>messages.push(message),close:()=>{}};
+ const ui={select:async()=>{const answer=answers.shift()!;if(answer==='0')throw new Back();return answer;},text:async()=> 'unsaved-model',confirm:async()=>true,info:(message:string)=>messages.push(message),close:()=>{}};
  await terminalConfig(new Management(file),ui);assert.equal(readFileSync(file,'utf8'),original);assert.ok(messages.some(s=>s.includes('取消')||s.includes('Cancelled')));assert.ok(messages.every(s=>!s.includes('private-secret')));
 });
 
 test('terminal configuration Escape at the top menu exits without changes',async t=>{
  const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');const {Back}=await import('../src/config-prompts.js');
  const dir=mkdtempSync(join(tmpdir(),'namo-terminal-exit-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const file=join(dir,'config.json');atomicJson(file,initialConfig(file,dir));const original=readFileSync(file,'utf8');
- const ui={select:async()=>{throw new Back();},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
+ const ui={select:async(_label:string,options:import('../src/config-prompts.js').Option[],_initial?:string,mode?:'root')=>{assert.equal(mode,'root');assert.ok(!options.some(option=>option.value==='0'));throw new Back();},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
  await terminalConfig(new Management(file),ui);assert.equal(readFileSync(file,'utf8'),original);
+});
+
+test('terminal main menu restores the selected entry after returning from its page',async t=>{
+ const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');const {Back}=await import('../src/config-prompts.js');
+ const dir=mkdtempSync(join(tmpdir(),'namo-terminal-focus-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const file=join(dir,'config.json');atomicJson(file,initialConfig(file,dir));let step=0;const rootSelections:(string|undefined)[]=[];
+ const ui={select:async(_label:string,_options:import('../src/config-prompts.js').Option[],initial?:string,mode?:'root')=>{if(mode==='root')rootSelections.push(initial);if(step++===0)return '2';throw new Back();},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
+ await terminalConfig(new Management(file),ui);assert.deepEqual(rootSelections,[undefined,'2']);
 });
 
 test('terminal menu bounds Unicode labels to prevent wrapping in narrow windows',async()=>{
@@ -170,11 +178,42 @@ test('terminal menu bounds Unicode labels to prevent wrapping in narrow windows'
  assert.equal(fitTerminalLine('👨‍👩‍👧‍👦ab',3),'👨‍👩‍👧‍👦a');
 });
 
+test('terminal summary aligns columns by display width and falls back to one column',async()=>{
+ const {formatTerminalSummary,terminalCellWidth}=await import('../src/config-prompts.js');
+ const rows:[string,string][][]=[[['服务','已生效'],['配置','有效']],[['模型','默认'],['并发','8']],[['目录','3'],['MCP','3']]];
+ const lines=formatTerminalSummary(rows,80);
+ assert.deepEqual(lines.map((line,index)=>terminalCellWidth(line.slice(0,line.indexOf(['配置','并发','MCP'][index])))),[18,18,18]);
+ assert.ok(lines.every(line=>line.includes(': ')));
+ assert.equal(formatTerminalSummary(rows,20).length,6);
+ const styles:string[]=[];formatTerminalSummary(rows,80,(code,text)=>{styles.push(code);return text;});assert.ok(styles.includes('2'));assert.ok(styles.includes('1'));
+});
+
+test('terminal menu supports Vim navigation without consuming modified keys',async()=>{
+ const {menuNavigation}=await import('../src/config-prompts.js');
+ assert.equal(menuNavigation({name:'j'},false),'down');
+ assert.equal(menuNavigation({name:'k'},false),'up');
+ assert.equal(menuNavigation({name:'h'},false),'home');
+ assert.equal(menuNavigation({name:'left'},false),'back');
+ assert.equal(menuNavigation({name:'l'},false),'accept');
+ assert.equal(menuNavigation({name:'g'},false),'prefix');
+ assert.equal(menuNavigation({name:'g'},true),'first');
+ assert.equal(menuNavigation({name:'g',shift:true},false),'last');
+ assert.equal(menuNavigation({name:'j',ctrl:true},false),undefined);
+ assert.equal(menuNavigation({name:'h',meta:true},false),undefined);
+ assert.equal(menuNavigation({name:'j',shift:true},false),undefined);
+ assert.equal(menuNavigation({name:'escape'},false),'back');
+ assert.equal(menuNavigation({name:'escape',meta:true},false),'back');
+ assert.equal(menuNavigation({name:'escape',meta:true},false,'root'),'back');
+ assert.equal(menuNavigation({name:'h'},false,'root'),undefined);
+ assert.equal(menuNavigation({name:'left'},false,'root'),undefined);
+ assert.equal(menuNavigation({name:'return'},false),'accept');
+});
+
 test('terminal refresh keeps cancellation notice on the next screen',async t=>{
  const {terminalConfig}=await import('../src/terminal-config.js');const {Management}=await import('../src/management.js');const {Back}=await import('../src/config-prompts.js');
  const dir=mkdtempSync(join(tmpdir(),'namo-screen-refresh-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const file=join(dir,'config.json');atomicJson(file,initialConfig(file,dir));
  let screens=0,step=0;let lines:string[]=[];
- const ui={screen:()=>{screens++;lines=[];},select:async()=>{step++;if(step===1)return '1';if(step===2)throw new Back();return '0';},text:async()=>'',confirm:async()=>false,info:(line:string)=>lines.push(line),close:()=>{}};
+ const ui={screen:()=>{screens++;lines=[];},select:async()=>{step++;if(step===1)return '1';throw new Back();},text:async()=>'',confirm:async()=>false,info:(line:string)=>lines.push(line),close:()=>{}};
  await terminalConfig(new Management(file),ui);assert.equal(screens,4);assert.ok(lines.some(line=>line.includes('取消')||line.includes('Cancelled')));
 });
 
@@ -183,6 +222,139 @@ test('terminal form exposes save and back as distinct keyboard actions',async()=
  let choices:import('../src/config-prompts.js').Option[]=[];
  const ui={select:async(_label:string,options:import('../src/config-prompts.js').Option[])=>{choices=options;return '$back';},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
  assert.equal(await editForm(ui,'test',{model:''},[{key:'model',label:'Model',kind:'text'}],()=>{}),false);
- assert.deepEqual(choices.filter(option=>option.action).map(option=>[option.value,option.shortcut]),[['$save','S'],['$back','Esc']]);
+ assert.deepEqual(choices.filter(option=>option.action).map(option=>[option.value,option.shortcut]),[['$edit','E'],['$save','S'],['$back','Esc']]);
  assert.deepEqual(choices.filter(option=>!option.action).map(option=>option.value),['model']);
+});
+
+test('restoring a form field to its initial value clears unsaved state',async()=>{
+ const {editForm}=await import('../src/terminal-forms.js');const {Back}=await import('../src/config-prompts.js');
+ const answers=['model','model'];const values=['new','original'];let confirmations=0;
+ const ui={select:async()=>{const next=answers.shift();if(!next)throw new Back();return next;},text:async()=>values.shift()!,confirm:async()=>{confirmations++;return true;},info:(_message:string)=>{},close:()=>{}};
+ assert.equal(await editForm(ui,'Model',{model:'original'},[{key:'model',label:'Model',kind:'text',clearable:true}],()=>{}),false);
+ assert.equal(confirmations,0);
+});
+
+test('MCP actions use the selected connection directly',async()=>{
+ const {manageMcp}=await import('../src/terminal-mcp.js');const {selectedAction}=await import('../src/config-prompts.js');
+ let optionsSeen:import('../src/config-prompts.js').Option[]=[];let tested='';
+ const ui={select:async(_label:string,options:import('../src/config-prompts.js').Option[])=>{optionsSeen=options;return selectedAction('test','connection');},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
+ const manager={config:()=>({revision:'r',mcpConnections:[{id:'connection',type:'remote',url:'https://example.test'}]}),testMcp:async(_revision:string,id:string)=>{tested=id;return {toolCount:1};}} as unknown as import('../src/management.js').Management;
+ await manageMcp(manager,ui);assert.equal(tested,'connection');assert.ok(optionsSeen.some(o=>o.value==='test'&&o.targeted&&o.shortcut==='T'));
+ assert.deepEqual(optionsSeen.filter(o=>!o.action).map(o=>o.value),['connection']);
+ assert.ok(optionsSeen.some(o=>o.value==='$add'&&o.action&&o.shortcut==='A'));
+ assert.ok(optionsSeen.some(o=>o.value==='$import'&&o.action&&o.shortcut==='I'));
+});
+
+test('empty MCP list exposes add and import without selected-item actions',async()=>{
+ const {manageMcp}=await import('../src/terminal-mcp.js');const {Back}=await import('../src/config-prompts.js');let options:import('../src/config-prompts.js').Option[]=[];
+ const ui={select:async(_label:string,items:import('../src/config-prompts.js').Option[])=>{options=items;throw new Back();},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
+ const manager={config:()=>({revision:'r',mcpConnections:[]})} as unknown as import('../src/management.js').Management;
+ await assert.rejects(manageMcp(manager,ui),Back);
+ assert.equal(options.filter(o=>!o.action).length,1);assert.equal(options.find(o=>!o.action)?.disabled,true);
+ assert.deepEqual(options.filter(o=>o.action).map(o=>o.shortcut),['A','I']);
+});
+
+test('MCP removal confirmation names the selected connection',async()=>{
+ const {manageMcp}=await import('../src/terminal-mcp.js');const {Back,selectedAction}=await import('../src/config-prompts.js');let prompt='';let step=0,saves=0;
+ const ui={select:async()=>{if(step++===0)return selectedAction('remove','second');throw new Back();},text:async()=>'',confirm:async(label:string)=>{prompt=label;return false;},info:(_message:string)=>{},close:()=>{}};
+ const manager={config:()=>({revision:'r',mcpConnections:[{id:'first',type:'remote',url:'https://first.example'},{id:'second',type:'remote',url:'https://second.example'}]}),save:()=>{saves++;}} as unknown as import('../src/management.js').Management;
+ await assert.rejects(manageMcp(manager,ui),Back);assert.ok(prompt.includes('second'));assert.ok(!prompt.includes('first'));assert.equal(saves,0);
+});
+
+test('profile actions open the chosen editor directly and return to the list',async()=>{
+ const {editProfiles}=await import('../src/terminal-settings.js');const {Back,selectedAction}=await import('../src/config-prompts.js');
+ const optionsSeen:string[][]=[],initials:(string|undefined)[]=[];let step=0;
+ const ui={select:async(_label:string,options:import('../src/config-prompts.js').Option[],initial?:string)=>{optionsSeen.push(options.map(o=>o.value));initials.push(initial);if(step++===0)return selectedAction('model','user');throw new Back();},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
+ const manager={profiles:()=>({available:true,configRevision:'r',entries:[{userId:'user',name:'Name'}]})} as unknown as import('../src/management.js').Management;
+ await assert.rejects(editProfiles(manager,ui),Back);
+ assert.ok(optionsSeen[1].includes('model'));assert.ok(optionsSeen[2].includes('user'));assert.equal(initials[2],'user');
+});
+
+test('form keeps field selection when a save confirmation is declined',async()=>{
+ const {editForm}=await import('../src/terminal-forms.js');const {Back}=await import('../src/config-prompts.js');
+ const actions=['second','$save','exit'],initials:(string|undefined)[]=[];
+ const ui={select:async(_label:string,_options:import('../src/config-prompts.js').Option[],initial?:string)=>{initials.push(initial);const next=actions.shift();if(next==='exit')throw new Back();assert.ok(next);return next;},text:async()=> 'changed',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
+ // Reject saving, then allow the final discard so the form can exit.
+ let calls=0;ui.confirm=async()=>++calls===2;
+ assert.equal(await editForm(ui,'Settings',{first:'a',second:'b'},[{key:'first',label:'First',kind:'text'},{key:'second',label:'Second',kind:'text'}],()=>{}),false);
+ assert.deepEqual(initials,['first','second','second']);
+});
+
+test('terminal list editing preserves spaces and semicolons while adding, editing and removing individual items',async()=>{
+ const {editForm}=await import('../src/terminal-forms.js');const {selectedAction,parseSelectedAction}=await import('../src/config-prompts.js');
+ const selections=['$list:directories:0',selectedAction('$add','$list:directories:0'),selectedAction('$delete','$list:directories:1'),'$save'];
+ const inputs=['/path/with spaces;and semicolon','/new folder/item'];
+ let saved:unknown;let firstLabels:string[]=[];
+ const ui={select:async(_label:string,options:import('../src/config-prompts.js').Option[])=>{
+  if(!firstLabels.length)firstLabels=options.map(o=>o.label);
+  const value=selections.shift();assert.ok(value);const target=parseSelectedAction(value);assert.ok(options.some(o=>o.value===(target?.[1]??value)));return value;
+ },text:async()=>{const value=inputs.shift();assert.ok(value);return value;},confirm:async()=>true,info:(_message:string)=>{},close:()=>{}};
+ const result=await editForm(ui,'Directories',{directories:['/old dir','/remove me']},[{key:'directories',label:'Directories',kind:'list'}],(draft,changed)=>{saved=structuredClone(draft);assert.deepEqual([...changed],['directories']);});
+ assert.equal(result,true);assert.ok(firstLabels.includes('/old dir'));assert.ok(firstLabels.includes('/remove me'));
+ assert.ok(firstLabels.every(label=>!label.includes('+ ')));
+ assert.deepEqual(saved,{directories:['/path/with spaces;and semicolon','/new folder/item']});
+});
+
+test('terminal list changes can be discarded without saving',async()=>{
+ const {editForm}=await import('../src/terminal-forms.js');const {Back,selectedAction}=await import('../src/config-prompts.js');
+ let step=0,saves=0;
+ const ui={select:async()=>{if(step++===0)return selectedAction('$add','$list:directories:empty');throw new Back();},text:async()=>'/new path',confirm:async()=>true,info:(_message:string)=>{},close:()=>{}};
+ const result=await editForm(ui,'Directories',{directories:[]},[{key:'directories',label:'Directories',kind:'list'}],()=>{saves++;});
+ assert.equal(result,false);assert.equal(saves,0);
+});
+
+test('clear shortcut changes only the selected clearable field',async()=>{
+ const {editForm}=await import('../src/terminal-forms.js');const {selectedAction}=await import('../src/config-prompts.js');
+ const selections=[selectedAction('$clear','model'),'$save'];let saved:unknown;
+ const ui={select:async()=>selections.shift()!,text:async()=>{throw Error('unexpected input');},confirm:async()=>true,info:(_message:string)=>{},close:()=>{}};
+ await editForm(ui,'Model',{model:'old',bin:'codex'},[{key:'model',label:'Model',kind:'text',clearable:true},{key:'bin',label:'Command',kind:'text'}],draft=>{saved=structuredClone(draft);});
+ assert.deepEqual(saved,{model:'',bin:'codex'});
+});
+
+test('terminal directory editor saves an existing path containing spaces',async t=>{
+ const {editDirectories}=await import('../src/terminal-settings.js');const {Management}=await import('../src/management.js');
+ const {selectedAction}=await import('../src/config-prompts.js');
+ const dir=mkdtempSync(join(tmpdir(),'namo-directory-list-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const file=join(dir,'config.json'),directory=join(dir,'folder with spaces;extra');mkdirSync(directory);
+ const raw=initialConfig(file,dir);raw.codex.directories=[];atomicJson(file,raw);
+ const selections=[selectedAction('$add','$list:directories:empty'),'$save'];
+ const ui={select:async()=>selections.shift()!,text:async()=>directory,confirm:async()=>true,info:(_message:string)=>{},close:()=>{}};
+ const manager=new Management(file);
+ assert.equal(await editDirectories(manager,ui,manager.config()),true);
+ assert.deepEqual(readJson(file).codex.directories,[directory]);
+});
+
+test('list fields in mixed forms open a nested list and remain a draft until saving',async()=>{
+ const {editForm}=await import('../src/terminal-forms.js');const {Back,selectedAction}=await import('../src/config-prompts.js');
+ const selections=['denyPaths',selectedAction('$delete','$list:denyPaths:0'),'$escape','$save'];let saved:unknown;const seen:import('../src/config-prompts.js').Option[][]=[];
+ const ui={select:async(_label:string,options:import('../src/config-prompts.js').Option[])=>{seen.push(options);const next=selections.shift()!;if(next==='$escape')throw new Back();return next;},text:async()=>'',confirm:async()=>true,info:(_message:string)=>{},close:()=>{}};
+ const fields:import('../src/terminal-forms.js').Field[]=[{key:'model',label:'Model',kind:'text'},{key:'denyPaths',label:'Excluded paths',kind:'list'}];
+ assert.equal(await editForm(ui,'Settings',{model:'codex',denyPaths:['/one','/two']},fields,d=>{saved=structuredClone(d);}),true);
+ assert.deepEqual(seen[0].filter(o=>!o.action).map(o=>o.value),['model','denyPaths']);
+ assert.ok(!seen[0].some(o=>o.value==='$add'||o.value==='$delete'));
+ assert.ok(seen[1].some(o=>o.value==='$list:denyPaths:0'));assert.ok(!seen[1].some(o=>o.label.startsWith('+ ')));
+ assert.deepEqual(saved,{model:'codex',denyPaths:['/two']});
+});
+
+test('home from a changed nested list asks once and keeps the draft when declined',async()=>{
+ const {editForm}=await import('../src/terminal-forms.js');const {Home,Back,selectedAction}=await import('../src/config-prompts.js');
+ const actions=['deny',selectedAction('$delete','$list:deny:0'),'home','back','$save'];let confirmations=0,saved:unknown;
+ const ui={select:async()=>{const next=actions.shift();if(next==='home')throw new Home();if(next==='back')throw new Back();assert.ok(next);return next;},text:async()=>'',confirm:async()=>++confirmations!==1,info:(_message:string)=>{},close:()=>{}};
+ const result=await editForm(ui,'Settings',{model:'x',deny:['one','two']},[{key:'model',label:'Model',kind:'text'},{key:'deny',label:'Excluded',kind:'list'}],d=>{saved=structuredClone(d);});
+ assert.equal(result,true);assert.equal(confirmations,2);assert.deepEqual(saved,{model:'x',deny:['two']});
+});
+
+test('home discards parent and nested drafts only after one confirmation',async()=>{
+ const {editForm}=await import('../src/terminal-forms.js');const {Home,selectedAction}=await import('../src/config-prompts.js');
+ const actions=['model','deny',selectedAction('$delete','$list:deny:0'),'home'];let confirmations=0,saves=0;
+ const ui={select:async()=>{const next=actions.shift();if(next==='home')throw new Home();assert.ok(next);return next;},text:async()=> 'changed',confirm:async()=>{confirmations++;return true;},info:(_message:string)=>{},close:()=>{}};
+ await assert.rejects(editForm(ui,'Settings',{model:'x',deny:['one','two']},[{key:'model',label:'Model',kind:'text'},{key:'deny',label:'Excluded',kind:'list'}],()=>{saves++;}),Home);
+ assert.equal(confirmations,1);assert.equal(saves,0);
+});
+
+test('an empty list shows an inert placeholder while keeping add available',async()=>{
+ const {editForm}=await import('../src/terminal-forms.js');let seen:import('../src/config-prompts.js').Option[]=[];
+ const ui={select:async(_label:string,options:import('../src/config-prompts.js').Option[])=>{seen=options;return '$back';},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
+ assert.equal(await editForm(ui,'Directories',{directories:[]},[{key:'directories',label:'Directories',kind:'list'}],()=>{}),false);
+ assert.equal(seen[0].disabled,true);assert.deepEqual(seen[0].availableActions,['$add']);assert.ok(seen.some(o=>o.value==='$add'&&o.shortcut==='A'));
 });

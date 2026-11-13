@@ -10,7 +10,7 @@ import { DateTime, duration, Filters, LocalLink, Owner, Pagination, useRemote, t
 
 export type DetailTarget = { type: 'task' | 'issue'; id: string };
 export function TaskTable({ tasks, onOpen, navigate, compact = false }: { tasks: TaskListItem[]; onOpen: (target: DetailTarget) => void; navigate: Navigate; compact?: boolean }) {
-  return <Table.Root variant="surface" className={`task-table browse-table ${compact ? 'compact-table' : ''}`}>
+  return <Table.Root variant="surface" className={`task-table browse-table task-records-table ${compact ? 'compact-table' : ''}`}>
     <Table.Header><Table.Row><Table.ColumnHeaderCell>{tr("nav.tasks")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.user")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.status")}</Table.ColumnHeaderCell><Table.ColumnHeaderCell>{tr("common.startedAt")}</Table.ColumnHeaderCell>{!compact && <Table.ColumnHeaderCell>{tr("tasks.duration")}</Table.ColumnHeaderCell>}</Table.Row></Table.Header>
     <Table.Body>{tasks.map(task => <Table.Row key={task.id}>
       <Table.RowHeaderCell className="summary-cell"><Link asChild color="gray" highContrast underline="hover"><button type="button" className="task-title" title={task.title} onClick={() => onOpen({ type: 'task', id: task.id })}>{task.title}</button></Link><span className="secondary-id">{task.id}</span>

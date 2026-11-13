@@ -91,8 +91,8 @@ export class Waits {
       this.store.db.prepare("UPDATE task_runs SET state='waiting',finishedAt=? WHERE id=? AND state='running'").run(now, runId);
       const external = linkedExternalWait(this.store, w.id);
       this.store.addOutput(task.inboxKey, `wait:${w.id}`, external
-        ? `${w.question}\n\n系统会只读核对固定的 PR HEAD；普通回复、引用、按钮或 /resume 都不会跳过条件。等待期间不会继续执行；/cancel ${task.id} 可停止任务。`
-        : `${w.question}${w.choices ? '\n选项：' + w.choices.join(' / ') : ''}${w.questions ? '\n\n' + w.questions.map((q,i)=>`${i+1}. ${q.question}\n${q.choices.join(' / ')}`).join('\n\n') : ''}\n\n请引用这条消息回复，或发送：\n/resume ${w.id} 你的回答\n等待最长 24 小时，超时后任务结束；/cancel ${task.id} 可停止任务。`);
+        ? `${w.question}\n\n系统会只读核对固定的 PR HEAD；普通回复、引用或按钮不会跳过条件。等待期间不会继续执行；可以让我停止任务 ${task.id}。`
+        : `${w.question}${w.choices ? '\n选项：' + w.choices.join(' / ') : ''}${w.questions ? '\n\n' + w.questions.map((q,i)=>`${i+1}. ${q.question}\n${q.choices.join(' / ')}`).join('\n\n') : ''}\n\n请引用这条消息回复，或说明你要回答等待事项 ${w.id} 并给出答案。\n等待最长 24 小时，超时后任务结束；可以让我停止任务 ${task.id}。`);
     });
   }
   answer(w: TaskWait, m: Incoming, reply: string): void {
@@ -103,9 +103,9 @@ export class Waits {
       if (!t || t.ownerId !== m.senderId || t.chatKey !== m.chatKey || t.scopeKey !== (m.envelope?.scopeKey ?? m.chatKey))
         throw new WaitInputError('未找到本话题中属于你的等待事项。');
       if (linkedExternalWait(this.store, w.id))
-        throw new WaitInputError('这是系统外部条件等待，普通回复、引用、按钮或 /resume 不能恢复。可用 /cancel 停止任务。');
+        throw new WaitInputError('这是系统外部条件等待，普通回复、引用或按钮不能恢复。可以让我停止任务。');
       if (current?.state !== 'open' || t.state !== 'waiting' || t.inputVersion !== current.inputVersion
-        || this.store.get(t.inboxKey)?.cancelRequested) throw new WaitInputError('这次等待已结束或尚未准备好，未恢复任务。请用 /task 查看最新状态。');
+        || this.store.get(t.inboxKey)?.cancelRequested) throw new WaitInputError('这次等待已结束或尚未准备好，未恢复任务。请让我查看最新状态。');
       if (!reply.trim() || reply.length > 16_000) throw new WaitInputError('请提供 1 到 16000 字符的回答。');
       if (t.inputVersion >= 100) throw new WaitInputError('本任务已达到输入版本上限，请先取消，再明确发起后续任务。');
       if (this.store.db.prepare('SELECT state FROM task_runs WHERE id=?').get(w.runId)?.state !== 'waiting') throw new WaitInputError('上一轮执行尚未确认结束，未恢复任务。');

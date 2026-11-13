@@ -3,6 +3,7 @@ import type { PublicProgressEvent } from './public-progress.js';
 import type { EvidenceItem } from './ui-contract.js';
 import type { ImageInput } from './image-inputs.js';
 import type { ExternalWaitRequest } from './external-waits.js';
+import type { ControlClassification } from './control-classifier.js';
 import type { AutoMemoryInput } from './auto-memory.js';
 
 export interface RunRequest {
@@ -14,6 +15,8 @@ export interface RunRequest {
   onThread: (id: string) => void; onTurn: (id: string) => void;
   onReady?: (controls: RunControls) => void;
   onWait?: (request: WaitRequest) => string;
+  onControl?: (arguments_: unknown, callId: string) => unknown;
+  onSchedule?: (arguments_: unknown, callId: string) => unknown;
   onReview?: (arguments_: unknown) => Promise<unknown>;
   onGitHub?: (arguments_: unknown, signal: AbortSignal) => Promise<unknown>;
   onMcp?: (arguments_: unknown, signal: AbortSignal) => Promise<unknown>;
@@ -37,6 +40,7 @@ export interface Runtime {
   persistent?: boolean;
   run(request: RunRequest): Promise<RunResult>;
   reservations?(): { runId: string; chatKey: string; cwd: string; slotKey?: string; paths?:string[] }[];
+  classifyControl?(input: {text:string;now:string;timezone:string;pending:{id:string;state:string;question?:string;waitId?:string}[]}, signal:AbortSignal): Promise<ControlClassification>;
   extractMemory?(input: AutoMemoryInput, signal: AbortSignal): Promise<unknown>;
 }
 export class RuntimeError extends Error {

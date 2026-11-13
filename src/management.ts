@@ -6,7 +6,7 @@ import { ApprovalError } from './approvals.js';
 import { inspectOpenClawSource, MigrationError } from './migration.js';
 import type { McpConnectionPatch, ApprovalAction, ApprovalList, MemoryExtractionError, MemoryExtractionJob, MemoryExtractionView } from './ui-contract.js';
 import { t as tr } from './locale.js';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -18,7 +18,11 @@ import { Tasks } from './tasks.js';
 import { Recovery, RecoveryError, type Resolution } from './recovery.js';
 import { serviceAction, serviceStatus, activeData, waitForService } from './service.js';
 import { doctor } from './doctor.js';
-import { acquireLock, makeRedactor } from './safety.js';
+import { acquireLock, makeRedactor, chatWorkspace } from './safety.js';
+import { Schedules } from './schedules.js';
+import { executionPolicy } from './access.js';
+import { selectAgent, selectedPolicyHash } from './agent-registry.js';
+import { scopeOf } from './tasks.js';
 import { AssistantSettings, AssistantSettingsError } from './assistant.js';
 import { Memories, MemoryError, MEMORY_LIMITS, type MemoryAuthority, type MemoryScope } from './memory.js';
 import { MEMORY_EXTRACTION_MAX_ATTEMPTS } from './auto-memory.js';
@@ -237,6 +241,21 @@ export class Management {
   private projections(s: Store): Browse {
     const {raw}=this.source(),f=raw.feishu??{};
     return new Browse(s,{appId:f.appId??'',channel:f.domain??'feishu'},this.redactor());
+  }
+  scheduleAction(input:unknown):{ok:true} {
+    if(!input || typeof input!=='object' || Array.isArray(input))throw new ManagementError(tr('schedules.invalidAction'),400);
+    const v=input as Record<string,unknown>;
+    if(Object.keys(v).some(k=>!['id','action','state','nextAt'].includes(k)) || typeof v.id!=='string' || !/^S-[A-F0-9]{12}$/.test(v.id)
+      || !['pause','resume','delete'].includes(String(v.action)) || !['active','paused','completed'].includes(String(v.state)) || !Number.isSafeInteger(v.nextAt))throw new ManagementError(tr('schedules.invalidAction'),400);
+    const action=v.action as 'pause'|'resume'|'delete',config=loadConfig(this.file);
+    if(action==='resume' && this.status().running && this.config().application!=='applied')throw new ManagementError(tr('schedules.configurationPending'));
+    try {this.write(s=>new Schedules(s).changeFromWorkbench(v.id as string,v.state as string,v.nextAt as number,action,source=>{
+      const policy=executionPolicy(config.codex,config.feishu,source),tasks=new Tasks(s),bound=tasks.binding(source),saved=bound?tasks.selection(bound.id):undefined;
+      const selection=saved&&saved.profileId!=='codex'?saved:selectAgent(config,bound?'codex':undefined);
+      const workspace=chatWorkspace(config.dataDir,source.envelope?`${scopeOf(source)}:user:${source.senderId}`:source.chatKey);
+      return {cwd:realpathSync(workspace),directories:config.codex.directories??[],policyHash:selectedPolicyHash({...config,codex:policy},selection),...(selection.profileId!=='codex'?{agentSelection:selection}:{})};
+    }));} catch(error) {if(error instanceof ManagementError)throw error;throw new ManagementError(error instanceof Error && [tr('schedules.conflict'),tr('schedules.invalidAction'),tr('schedules.resumeUnavailable')].includes(error.message)?error.message:tr('schedules.resumeUnavailable'));}
+    return {ok:true};
   }
   browse(kind:'tasks'|'schedules'|'sessions'|'dashboard'|'options',params=new URLSearchParams()):unknown {
     const result=this.read(s=>{

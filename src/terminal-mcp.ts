@@ -1,7 +1,7 @@
 import { t } from './locale.js';
 import { editForm, type Draft, type Field } from './terminal-forms.js';
 import { ManagementError, type Management } from './management.js';
-import type { ConfigPrompter } from './config-prompts.js';
+import { Back, parseSelectedAction, type ConfigPrompter } from './config-prompts.js';
 import type { McpConnectionPatch, McpConnectionView } from './ui-contract.js';
 import { terminalOAuth } from './terminal-config.js';
 import { beginMcpOAuth } from './mcp-oauth.js';
@@ -29,20 +29,30 @@ async function editor(manager:Management,ui:ConfigPrompter,previous?:McpConnecti
  });
 }
 export async function manageMcp(manager:Management,ui:ConfigPrompter):Promise<string> {
- const view=manager.config(),connections=view.mcpConnections as McpConnectionView[];
- const selected=await ui.select(t('terminal.mcpManage'),[...connections.map(c=>({value:c.id,label:`${c.id} · ${c.credentialSource??(c.credentialConfigured?'token':'anonymous')}`})),{value:'$add',label:t('terminal.mcpAdd')},{value:'$import',label:t('terminal.mcpImport')}]);
- if(selected==='$add')return await editor(manager,ui)?t('terminal.saved'):'';
- if(selected==='$import') {
-  const catalog=manager.codexMcpCatalog(),entries=catalog.entries.filter(entry=>entry.importable);
-  if(!entries.length)return t('terminal.mcpNoImport');
-  const id=await ui.select(t('terminal.mcpImport'),entries.map(entry=>({value:entry.id,label:`${entry.id} · ${entry.host??entry.transport}`})));
-  if(await ui.confirm(t('terminal.confirm'))){manager.importCodexMcp(view.revision,catalog.revision,[id]);return t('terminal.mcpImported');}return '';
+ let active:string|undefined;
+ for(;;){
+  const view=manager.config(),connections=view.mcpConnections as McpConnectionView[];
+  ui.screen?.();
+  const choice=await ui.select(t('terminal.mcpManage'),[...(connections.length?connections.map(c=>({value:c.id,label:`${c.id} · ${c.credentialSource??(c.credentialConfigured?'token':'anonymous')}`,availableActions:['edit','test','scope','remove']})):[{value:'$empty',label:t('terminal.listEmpty'),disabled:true}]),
+   ...(connections.length?[{value:'edit',label:t('terminal.mcpEditSelected'),action:true,shortcut:'E',targeted:true},{value:'test',label:t('terminal.mcpTestSelected'),action:true,shortcut:'T',targeted:true},{value:'scope',label:t('terminal.mcpScopeSelected'),action:true,shortcut:'O',targeted:true},{value:'remove',label:t('terminal.mcpRemoveSelected'),action:true,shortcut:'D',targeted:true}]:[]),{value:'$add',label:t('terminal.mcpAddAction'),action:true,shortcut:'A'},{value:'$import',label:t('terminal.mcpImport'),action:true,shortcut:'I'}],active);
+  const target=parseSelectedAction(choice),selected=target?.[1]??choice;
+  if(connections.some(c=>c.id===selected))active=selected;
+  try {
+   if(selected==='$add'){if(await editor(manager,ui))return t('terminal.saved');continue;}
+   if(selected==='$import') {
+    const catalog=manager.codexMcpCatalog(),entries=catalog.entries.filter(entry=>entry.importable);
+    if(!entries.length)return t('terminal.mcpNoImport');
+    ui.screen?.();const id=await ui.select(t('terminal.mcpImport'),entries.map(entry=>({value:entry.id,label:`${entry.id} · ${entry.host??entry.transport}`})));
+    ui.screen?.();if(await ui.confirm(t('terminal.mcpImportConfirm',id))){manager.importCodexMcp(view.revision,catalog.revision,[id]);return t('terminal.mcpImported');}continue;
+   }
+   const item=connections.find(c=>c.id===selected);if(!item)continue;
+    const action=target?.[0]??'edit';
+    try {
+     if(action==='edit'){if(await editor(manager,ui,item))return t('terminal.saved');continue;}
+     if(action==='test'){const result=await manager.testMcp(view.revision,item.id);return t('terminal.mcpResult',result.toolCount);}
+     if(action==='scope'){const result=await manager.mcpOAuthScopes(view.revision,item.url);return t('terminal.mcpScopesResult',result.scopes.join(' '));}
+     if(action==='remove'){ui.screen?.();if(await ui.confirm(t('terminal.mcpRemoveConfirm',item.id))){manager.save(view.revision,{mcpConnections:connections.filter(c=>c.id!==item.id).map(safe)});return t('terminal.mcpRemoved');}}
+    }catch(error){if(!(error instanceof Back))throw error;}
+  }catch(error){if(!(error instanceof Back))throw error;}
  }
- const item=connections.find(c=>c.id===selected);if(!item)return '';
- const action=await ui.select(item.id,[{value:'edit',label:t('terminal.mcpEdit')},{value:'test',label:t('terminal.mcpTest')},{value:'scope',label:t('terminal.mcpScope')},{value:'remove',label:t('terminal.mcpRemove')}]);
- if(action==='edit')return await editor(manager,ui,item)?t('terminal.saved'):'';
- if(action==='test'){const result=await manager.testMcp(view.revision,item.id);return t('terminal.mcpResult',result.toolCount);}
- if(action==='scope'){const result=await manager.mcpOAuthScopes(view.revision,item.url);return t('terminal.mcpScopesResult',result.scopes.join(' '));}
- if(action==='remove'&&await ui.confirm(t('terminal.mcpRemove'))){manager.save(view.revision,{mcpConnections:connections.filter(c=>c.id!==item.id).map(safe)});return t('terminal.mcpRemoved');}
- return '';
 }

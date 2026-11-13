@@ -363,7 +363,7 @@ test('/session command renders task context without invoking a model or changing
   f.engine.accept(message('session-list-command', '/session'));
   const output = f.store.db.prepare("SELECT content FROM outbox WHERE inboxKey='session-list-command' AND kind='result'").get();
   assert.match(String(output?.content), /优化手机端设置卡片 · 当前会话/);
-  assert.ok(String(output?.content).includes(`/session ${task.workstreamId}`));
+  assert.ok(String(output?.content).includes(`会话编号：${task.workstreamId}`));
   assert.equal(f.tasks.binding(message('check'))?.id, task.workstreamId);
   assert.equal(f.tasks.list(message('check')).length, 1);
 });

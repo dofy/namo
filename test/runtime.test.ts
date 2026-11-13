@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexRuntime, RuntimeError } from '../src/runtime.js';
+import { classifyControl } from '../src/control-classifier.js';
 import type { EvidenceItem } from '../src/ui-contract.js';
 import type { PublicProgressEvent } from '../src/public-progress.js';
 import { storeFixture } from './helpers.js';
@@ -13,7 +14,7 @@ import { awaitMcpApproval, mcpApprovalCommand } from '../src/mcp-write-approval.
 const FAKE = `#!/usr/bin/env node
 import { createInterface } from 'node:readline';
 const write = m => process.stdout.write(JSON.stringify(m)+'\\n');
-let waitAfterLate=false,apiRegistered=false,mcpRegistered=false,threadModel,parallelMode='',parallelReplies=[];
+let directoryMode=false,waitAfterLate=false,apiRegistered=false,mcpRegistered=false,scheduleRegistered=false,controlRegistered=false,threadModel,parallelMode='',parallelReplies=[];
 createInterface({input:process.stdin}).on('line', line=>{
  const m=JSON.parse(line);
  if([101,102,103].includes(m.id)&&!m.method){
@@ -22,6 +23,7 @@ createInterface({input:process.stdin}).on('line', line=>{
   return;
  }
  if(m.id===99&&!m.method){
+  if(directoryMode)return;
   const output=m.result?.success===true?'review received':JSON.stringify(m.result??m.error);
   return write({method:'turn/completed',params:{threadId:'thread-one',turn:{id:'turn-one',status:'completed',items:[{id:'final',type:'agentMessage',phase:'final_answer',text:output}]}}});
  }
@@ -32,8 +34,9 @@ createInterface({input:process.stdin}).on('line', line=>{
  if(m.method==='skills/list')return write({id:m.id,result:{data:[{cwd:m.params.cwds[0],skills:[],errors:[]}]}});
  if(m.method==='model/list')return write({id:m.id,result:{data:[{model:'default-model',isDefault:true}],nextCursor:null}});
  if(m.method==='thread/start' && new Set((m.params.dynamicTools??[]).map(t=>Object.hasOwn(t,'type')?'canonical':'legacy')).size>1)return write({id:m.id,error:{code:-32600,message:'mixed dynamic tool formats'}});
- if(m.method==='thread/start'){apiRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='github_api');mcpRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='mcp_read');}
+ if(m.method==='thread/start'){apiRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='github_api');mcpRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='mcp_read');scheduleRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='manage_schedule');controlRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='manage_namo');}
  if(m.method==='thread/start'||m.method==='thread/resume'){threadModel=m.params.model;return write({id:m.id,result:{thread:{id:m.params.threadId||'thread-one'}}});}
+ if(m.method==='turn/interrupt'&&directoryMode){write({id:m.id,result:{}});return write({method:'turn/completed',params:{threadId:'thread-one',turn:{id:'turn-one',status:'interrupted',items:[]}}});}
  if(m.method==='turn/interrupt'&&waitAfterLate){
   write({id:m.id,result:{}});
   write({method:'item/started',params:{threadId:m.params.threadId,turnId:'turn-one',item:{id:'cmd',type:'commandExecution',command:'pnpm test',status:'inProgress'}}});
@@ -48,6 +51,15 @@ createInterface({input:process.stdin}).on('line', line=>{
  if(m.method==='turn/start'){
   if(m.params.sandboxPolicy || m.params.permissions!=='feishu-bot')return write({id:m.id,error:{code:-32600,message:'legacy permissions rejected'}});
   const prompt=m.params.input[0].text;
+  if(prompt.startsWith('{') && JSON.parse(prompt).text==='classifier-test'){
+   if(!process.argv.includes('features.shell_tool=false')||!process.argv.includes('web_search="disabled"')||!m.params.outputSchema || Object.keys(m.params.outputSchema.properties).some(k=>!m.params.outputSchema.required.includes(k)))return write({id:m.id,error:{code:-32602,message:'classifier isolation or schema missing'}});
+   write({method:'turn/completed',params:{threadId:'thread-one',turn:{id:'turn-one',status:'completed',items:[{id:'final',type:'agentMessage',phase:'final_answer',text:JSON.stringify({kind:'control',operation:'cancel',id:null,value:null,field:null,scope:null,path:null,action:null,stamp:null,note:null,version:null,confirm_duplicate:null})}]}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
+  }
+  if(prompt.startsWith('{') && JSON.parse(prompt).text==='classifier-fail'){
+   write({method:'turn/completed',params:{threadId:'thread-one',turn:{id:'turn-one',status:'failed',error:{message:'invalid schema PRIVATE_DETAILS'},items:[]}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
+  }
   if(prompt==='check-model' && (threadModel!=='chosen-model'||m.params.model!=='chosen-model'))return write({id:m.id,error:{code:-32602,message:'model mismatch'}});
   if(prompt==='check-default' && (threadModel!=='default-model'||m.params.model!=='default-model'))return write({id:m.id,error:{code:-32602,message:'default mismatch'}});
   if(prompt==='check-configured' && (threadModel!=='configured-model'||m.params.model!=='configured-model'))return write({id:m.id,error:{code:-32602,message:'configured default mismatch'}});
@@ -57,6 +69,20 @@ createInterface({input:process.stdin}).on('line', line=>{
    parallelMode=prompt;write({id:m.id,result:{turn:{id:'turn-one'}}});
    for(const [id,tool] of [[101,'mcp_read'],[102,'github_api'],[103,'read_pull_request']])write({id,method:'item/tool/call',params:{namespace:null,tool,threadId:'thread-one',turnId:'turn-one',callId:'parallel-'+id,arguments:{}}});
    return;
+  }
+  if(prompt==='directory-request'){
+   directoryMode=true;write({id:99,method:'item/tool/call',params:{namespace:null,tool:'manage_namo',threadId:'thread-one',turnId:'turn-one',callId:'directory-call',arguments:{operation:'request_directory',path:'/tmp/project',value:'remaining'}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
+  }
+  if(prompt==='control'){
+   if(!controlRegistered)return write({id:m.id,error:{code:-32602,message:'control not registered'}});
+   write({id:99,method:'item/tool/call',params:{namespace:null,tool:'manage_namo',threadId:'thread-one',turnId:'turn-one',callId:'control-call',arguments:{operation:'tasks'}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
+  }
+  if(prompt==='schedule'){
+   if(!scheduleRegistered)return write({id:m.id,error:{code:-32602,message:'schedule not registered'}});
+   write({id:99,method:'item/tool/call',params:{namespace:null,tool:'manage_schedule',threadId:'thread-one',turnId:'turn-one',callId:'schedule-call',arguments:{operation:'list'}}});
+   return write({id:m.id,result:{turn:{id:'turn-one'}}});
   }
   if(prompt==='mcp'||prompt==='mcp-invalid'){
    if(!mcpRegistered)return write({id:m.id,error:{code:-32602,message:'MCP not registered'}});
@@ -365,4 +391,41 @@ test('a turn cannot complete while any overlapping host tool remains active',asy
  const {dir,runtime}=fixture(t,5000);
  const callback=(delay:number)=>async()=>{await new Promise(resolve=>setTimeout(resolve,delay));return {ok:true};};
  await assert.rejects(runtime.run({cwd:dir,prompt:'parallel-tools-early',signal:new AbortController().signal,onThread:()=>{},onTurn:()=>{},onMcp:callback(30),onGitHub:callback(100),onReview:callback(150)}),/github_review_protocol_error/);
+});
+
+
+test('schedule tool is registered and routed to the host', async t=>{
+ const {dir,runtime}=fixture(t);let calls=0;
+ const result=await runtime.run({cwd:dir,prompt:'schedule',signal:new AbortController().signal,onThread(){},onTurn(){},onSchedule:(args,id)=>{calls++;assert.deepEqual(args,{operation:'list'});assert.equal(id,'schedule-call');return {result:'ok'};}});
+ assert.equal(calls,1);assert.equal(result.text,'review received');
+});
+
+
+test('natural management tool is registered and routed to the host', async t=>{
+ const {dir,runtime}=fixture(t);let calls=0;
+ const result=await runtime.run({cwd:dir,prompt:'control',signal:new AbortController().signal,onThread(){},onTurn(){},onControl:(args,id)=>{calls++;assert.deepEqual(args,{operation:'tasks'});assert.equal(id,'control-call');return {result:[]};}});
+ assert.equal(calls,1);assert.equal(result.text,'review received');
+});
+
+
+test('a directory request stops the model turn after the durable approval request',async t=>{
+ const {dir,runtime}=fixture(t);
+ const result=await runtime.run({cwd:dir,prompt:'directory-request',signal:new AbortController().signal,onThread(){},onTurn(){},onControl:()=>({result:'已发出目录权限确认请求 DIR-AAAAAAAAAAAA；尚未修改白名单。'})});
+ assert.match(result.text,/已发出目录权限确认请求/);
+});
+
+
+test('out-of-band classifier uses the official isolated no-tool protocol',async t=>{
+ const {dir}=fixture(t);
+ const result=await classifyControl({bin:join(dir,'codex.mjs'),home:dir,timeoutMs:1000,sandbox:'read-only'},
+  {text:'classifier-test',now:'2030-01-01T00:00:00Z',timezone:'UTC',pending:[{id:'N-AAAAAAAAAAAA',state:'running'}]},new AbortController().signal);
+ assert.deepEqual(result,{kind:'control',operation:'cancel'});
+});
+
+
+test('classifier failure keeps only a safe category',async t=>{
+ const {dir}=fixture(t);
+ await assert.rejects(classifyControl({bin:join(dir,'codex.mjs'),home:dir,timeoutMs:1000,sandbox:'read-only'},
+  {text:'classifier-fail',now:'2030-01-01T00:00:00Z',timezone:'UTC',pending:[]},new AbortController().signal),
+  (error:unknown)=>error instanceof RuntimeError&&error.code==='control_classification_failed'&&error.detail==='schema');
 });

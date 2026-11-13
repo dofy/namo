@@ -95,13 +95,23 @@ export function renderTaskCard(t: Task, content: string, kind: string, part: num
       ...(controls.length?[buttons(controls)]:[])]};
 }
 export class Cards {
-  constructor(private store: Store, private canAccess: (task:Task)=>boolean = ()=>true) {}
+  constructor(private store: Store, private canAccess: (task:Task)=>boolean = ()=>true, private directoryDecision?:(id:string,input:Incoming,approve:boolean)=>string) {}
   prepare(output: Outbox): object | undefined {
     if(output.payload) {const p=JSON.parse(output.payload);return p.textOnly||p.noCard?undefined:p;}
-    if(!['progress','result'].includes(output.kind) && !output.kind.startsWith('wait:')) return;
+    if(!['progress','result'].includes(output.kind) && !output.kind.startsWith('wait:') && !output.kind.startsWith('directory-approval:')) return;
     const task=this.store.db.prepare('SELECT * FROM tasks WHERE inboxKey=?').get(output.inboxKey) as unknown as Task|undefined;
     if(!task) return;
     return this.store.transaction(()=>{
+      if(output.kind.startsWith('directory-approval:')) {
+        const id=output.kind.slice('directory-approval:'.length);
+        if(!/^DIR-[A-F0-9]{12}$/.test(id)||output.part)return;
+        const actions=['approve','reject'].map(action=>({action,token:randomBytes(24).toString('base64url')}));
+        for(const a of actions)this.store.db.prepare('INSERT INTO card_actions(token,outboxId,taskId,action,inputVersion,expiresAt) VALUES(?,?,?,?,?,?)')
+          .run(a.token,output.id,task.id,`directory-${a.action}:${id}`,task.inputVersion,Date.now()+24*60*60_000);
+        const payload={config:{wide_screen_mode:true},header:{title:plain('目录访问确认'),template:'orange'},elements:[
+          {tag:'div',text:plain(output.content)}, {tag:'action',actions:actions.map(a=>({tag:'button',text:plain(a.action==='approve'?'确认':'拒绝'),type:a.action==='approve'?'primary':'default',value:{namo:a.token}}))}]};
+        this.store.db.prepare('UPDATE outbox SET payload=? WHERE id=?').run(JSON.stringify(payload),output.id);return payload;
+      }
       if(output.kind==='result'&&task.state==='succeeded'&&!readEvidence(this.store,task.id).some(hasExecution) && !/(?:^|\n)\s*>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.test(output.content)) {
         this.store.db.prepare('UPDATE outbox SET payload=? WHERE id=?').run(JSON.stringify({noCard:true}),output.id);
         return;
@@ -135,10 +145,20 @@ export class Cards {
         FROM card_actions a JOIN tasks t ON t.id=a.taskId JOIN outbox o ON o.id=a.outboxId JOIN inbox i ON i.key=o.inboxKey WHERE a.token=?`).get(token);
       // Task stores chatKey; delivery's verified chatId is the callback channel identity.
       if(!a||a.ownerId!==event.operator?.open_id||a.deliveryChat!==event.context?.open_chat_id||!a.platformId||a.platformId!==event.context?.open_message_id) return result('无权操作这项任务',true);
-      if(a.usedAt) return result('这次操作已经处理，请用 /task 查看最新状态');
-      if(Number(a.expiresAt)<Date.now()) return result('按钮已过期，请用 /task 或 /cancel 命令',true);
+      if(a.usedAt) return result('这次操作已经处理，可以询问最新任务状态');
+      if(Number(a.expiresAt)<Date.now()) return result('按钮已过期，可以询问任务状态或让我停止任务',true);
       const tasks=new Tasks(this.store),task=tasks.get(String(a.taskId))!;
       if (!this.canAccess(task)) return result('任务访问权限已变化，请联系管理员。',true);
+      if(String(a.action).startsWith('directory-')) {
+        const match=/^directory-(approve|reject):(DIR-[A-F0-9]{12})$/.exec(String(a.action));
+        const source=this.store.get(task.inboxKey);
+        if(!match||!source||!this.directoryDecision)return result('目录确认暂不可用。',true);
+        const input:Incoming={...source,key:`card-directory:${digest(token)}`,senderId:String(a.ownerId),chatId:String(a.deliveryChat),envelope:{...source.envelope!,type:'card_action',kind:'instruction'}};
+        const answer=this.directoryDecision(match[2],input,match[1]==='approve');
+        if(!answer.startsWith('已确认')&&!answer.startsWith('已拒绝'))return result(answer,true);
+        this.store.db.prepare('UPDATE card_actions SET usedAt=? WHERE token=?').run(Date.now(),token);
+        return result(answer);
+      }
       if(String(a.action).startsWith('answer:')) {
         const waits=new Waits(this.store),w=String(a.outputKind).startsWith('wait:')?waits.get(String(a.outputKind).slice(5)):undefined;
         const groupMatch=/^answer:(\d+):(\d+)$/.exec(String(a.action));

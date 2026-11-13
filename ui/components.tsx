@@ -36,13 +36,16 @@ export function Choice({ id, value, onChange, options, disabled }: {
     <Select.Content position="popper">{options.map(option => <Select.Item key={option.value} value={encode(option.value)}>{option.label}</Select.Item>)}</Select.Content>
   </Select.Root>;
 }
-export function ConfirmButton({ children, title, description, action = tr("components.confirm"), onConfirm, disabled = false, danger = false, variant = 'soft', className }: {
+export function ButtonGroup({ children, label, className = '' }: { children: ReactNode; label: string; className?: string }) {
+  return <div role="group" aria-label={label} className={`button-group ${className}`}>{children}</div>;
+}
+export function ConfirmButton({ children, title, description, action = tr("components.confirm"), onConfirm, disabled = false, danger = false, variant = 'soft', className, size, triggerLabel }: {
   children: ReactNode; title: string; description: string; action?: string; onConfirm: () => Promise<void>;
-  disabled?: boolean; danger?: boolean; variant?: 'solid' | 'soft' | 'outline'; className?:string;
+  disabled?: boolean; danger?: boolean; variant?: 'solid' | 'soft' | 'outline'; className?:string; size?:'1'|'2'|'3'|'4'; triggerLabel?:string;
 }) {
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   return <AlertDialog.Root open={open} onOpenChange={next => { if (!busy) { setOpen(next); setError(''); } }}>
-    <AlertDialog.Trigger><Button type="button" className={className} variant={variant} color={danger ? 'red' : undefined} disabled={disabled}>{children}</Button></AlertDialog.Trigger>
+    <AlertDialog.Trigger><Button type="button" size={size} className={className} variant={variant} color={danger ? 'red' : undefined} disabled={disabled} aria-label={triggerLabel} title={triggerLabel}>{children}</Button></AlertDialog.Trigger>
     <AlertDialog.Content maxWidth="460px" onEscapeKeyDown={event => { if (busy) event.preventDefault(); }}>
       <div className="editor-dialog-header"><AlertDialog.Title>{title}</AlertDialog.Title><EditorCloseButton busy={busy} onClose={()=>setOpen(false)}/></div>
       <AlertDialog.Description size="2">{description}</AlertDialog.Description>

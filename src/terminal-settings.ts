@@ -1,6 +1,6 @@
 import { t } from './locale.js';
 import { editForm, type Draft, type Field } from './terminal-forms.js';
-import type { ConfigPrompter } from './config-prompts.js';
+import { parseSelectedAction, type ConfigPrompter } from './config-prompts.js';
 import { ManagementError, type Management } from './management.js';
 import type { AssistantView, ConfigView, ProfileState } from './ui-contract.js';
 
@@ -35,9 +35,8 @@ export async function editGitHub(manager:Management,ui:ConfigPrompter,view:Confi
   await manager.saveGitHub(view.revision,{github:{source:selected,repositories:[],allowedUserIds:[],...(selected==='anonymous'?{}:{mode:'shared'})},...(token?{newGithubToken:token}:{}),...(clear?{clearGithubToken:true}:{})});
  },false,t('terminal.githubSharing'));
 }
-export async function editAccess(manager:Management,ui:ConfigPrompter,view:ConfigView):Promise<boolean> {
+export async function editAccess(manager:Management,ui:ConfigPrompter,view:ConfigView,action:'edit'|'detect'='edit'):Promise<boolean> {
  const f=view.feishu;
- const action=await ui.select(t('serviceAccess.organizationAccessDirectoryPermissions'),[{value:'edit',label:t('terminal.formEdit')},{value:'detect',label:t('terminal.detectOrg')}]);
  const detected=action==='detect'?await manager.organization():undefined;
  if(detected)ui.info(t('terminal.orgDetected',detected.name,detected.tenantKey));
  const fields=[field('mode',t('serviceAccess.serviceAudience'),'choice',{choices:[{value:'organization',label:t('serviceAccess.feishuOrganizationMembers')},{value:'selected',label:t('serviceAccess.selectedMembersLegacyMode')}]}),field('tenantKey',t('serviceAccess.feishuTenantKey'),'text',{clearable:true}),field('users',t('common.allowedMembersOpenId'),'list',{clearable:true}),field('chats',t('common.restrictChatsLeaveEmptyAllChats'),'list',{clearable:true})];
@@ -52,31 +51,34 @@ export async function editAssistant(manager:Management,ui:ConfigPrompter):Promis
 }
 export async function editProfiles(manager:Management,ui:ConfigPrompter):Promise<boolean> {
  const profiles:ProfileState=manager.profiles();if(!profiles.available||!profiles.entries.length)throw new ManagementError(profiles.reason??t('profiles.noPairedUsersYetRunNamoInit'));
- const id=await ui.select(t('profiles.pairedUser'),profiles.entries.map(p=>({value:p.userId,label:`${p.name||t('profiles.nameNotSet')} · ${p.userId}`})));
- const p=profiles.entries.find(p=>p.userId===id)!;
- const type=await ui.select(t('terminal.profileAction'),[{value:'profile',label:t('design.profileIdentity')},{value:'model',label:t('design.profileModel')}]);
- if(type==='model')return editForm(ui,t('design.profileModel'),{model:p.defaultModel??''},[field('model',t('model.userDefault'),'text',{clearable:true})],d=>{manager.saveUserModel(profiles.configRevision,id,p.defaultModel??'',string(d,'model'));});
- return editForm(ui,t('design.profileIdentity'),{name:p.name,language:p.language,timezone:p.timezone},[field('name',t('profiles.preferredName'),'text',{clearable:true}),field('language',t('common.language'),'text',{clearable:true}),field('timezone',t('common.timezone'),'text',{clearable:true})],d=>{manager.saveProfile(profiles.configRevision,id,p.version,d);});
+ let active:string|undefined;
+ for(;;){
+  ui.screen?.();const choice=await ui.select(t('profiles.pairedUser'),[...profiles.entries.map(p=>({value:p.userId,label:`${p.name||t('profiles.nameNotSet')} · ${p.userId}`,availableActions:['profile','model']})),{value:'profile',label:t('terminal.profileEditSelected'),action:true,shortcut:'E',targeted:true},{value:'model',label:t('terminal.profileModelSelected'),action:true,shortcut:'M',targeted:true}],active);
+  const target=parseSelectedAction(choice),id=target?.[1]??choice;
+  active=id;
+  const p=profiles.entries.find(p=>p.userId===id)!;
+  const type=target?.[0]??'profile';
+   const saved=type==='model'?await editForm(ui,t('design.profileModel'),{model:p.defaultModel??''},[field('model',t('model.userDefault'),'text',{clearable:true})],d=>{manager.saveUserModel(profiles.configRevision,id,p.defaultModel??'',string(d,'model'));}):await editForm(ui,t('design.profileIdentity'),{name:p.name,language:p.language,timezone:p.timezone},[field('name',t('profiles.preferredName'),'text',{clearable:true}),field('language',t('common.language'),'text',{clearable:true}),field('timezone',t('common.timezone'),'text',{clearable:true})],d=>{manager.saveProfile(profiles.configRevision,id,p.version,d);});
+  if(saved)return true;
+ }
 }
 
-export async function editAssistantMenu(manager:Management,ui:ConfigPrompter):Promise<string> {
+export async function editAssistantMenu(manager:Management,ui:ConfigPrompter,action:'edit'|'preview'|'reset'='edit'):Promise<string> {
  const a=(manager.state() as {assistant?:AssistantView}).assistant;if(!a)throw new ManagementError(t('terminal.missingDb'));
- const action=await ui.select(t('terminal.menuAssistant'),[{value:'edit',label:t('terminal.assistantEdit')},{value:'preview',label:t('terminal.assistantPreview')},{value:'reset',label:t('terminal.assistantReset')}]);
  if(action==='edit')return await editAssistant(manager,ui)?t('terminal.saved'):'';
  if(action==='preview')return String(manager.assistant('preview',a.version,a.values));
  if(action==='reset'&&await ui.confirm(t('terminal.assistantReset'))){manager.assistant('reset',a.version,{});return t('terminal.saved');}
  return '';
 }
-export async function manageUpdates(manager:Management,ui:ConfigPrompter,view:ConfigView):Promise<string> {
+export async function manageUpdates(manager:Management,ui:ConfigPrompter,view:ConfigView,action:'check'|'automatic'|'upgrade'|'rollback'='check'):Promise<string> {
  const status=await manager.codexUpdate();
  ui.info(t('terminal.updateStatus',status.currentVersion??'—',status.latestVersion??'—',status.automatic?t('terminal.yes'):t('terminal.no'),status.state));
- const action=await ui.select(t('terminal.menuUpdate'),[{value:'check',label:t('terminal.updateCheck')},{value:'automatic',label:t('terminal.updateAuto')},{value:'upgrade',label:t('terminal.updateUpgrade')},{value:'rollback',label:t('terminal.updateRollback')}]);
  if(action==='automatic') {
-  const enabled=await ui.confirm(t('terminal.updateAuto'),status.automatic);
+  ui.screen?.();const enabled=await ui.confirm(t('terminal.updateAuto'),status.automatic);
   if(enabled===status.automatic)return '';
-  if(!await ui.confirm(t('terminal.confirm')))return '';
+  ui.screen?.();if(!await ui.confirm(t('terminal.confirm')))return '';
   const result=await manager.codexUpdate({action,configRevision:view.revision,enabled});return t('terminal.updateStatus',result.currentVersion??'—',result.latestVersion??'—',result.automatic?t('terminal.yes'):t('terminal.no'),result.state);
  }
- if(!await ui.confirm(t('terminal.updateConfirm')))return '';
+ ui.screen?.();if(!await ui.confirm(t('terminal.updateConfirm')))return '';
  const result=await manager.codexUpdate({action,configRevision:view.revision});return t('terminal.updateStatus',result.currentVersion??'—',result.latestVersion??'—',result.automatic?t('terminal.yes'):t('terminal.no'),result.state);
 }

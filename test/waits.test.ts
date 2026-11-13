@@ -169,7 +169,7 @@ test('resume enforces owner, chat and topic, rejects stale quotes, and supports 
   assert.equal(f.tasks.get(task.id)?.inputVersion, 2); assert.equal(f.tasks.binding(reply)?.id,task.workstreamId);
   assert.equal(new Waits(f.store).get(first.id)?.state, 'answered'); assert.equal(new Waits(f.store).get(second.id)?.state, 'open');
 
-  engine.accept(message('reply-two', `/resume ${second.id} answer-two`));
+  engine.accept(message('reply-two', `回答等待事项 ${second.id}：answer-two`));
   await until(() => f.tasks.get(task.id)?.state === 'succeeded');
   assert.equal(f.tasks.get(task.id)?.inputVersion, 3); assert.deepEqual(threads, [undefined, 'thread-one', 'thread-one']);
   assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM task_runs WHERE taskId=?').get(task.id)?.n, 3);
@@ -309,7 +309,7 @@ test('wait choices render as answers above task controls, persist across restart
   assert.doesNotMatch(f.payload.elements[0].text.content,/WAIT-|N-|\/resume/);
   const resumed=new Store(f.file);try {
     const cards=new Cards(resumed);assert.equal(cards.accept(f.event('answer:0')).toast.type,'info');
-    assert.equal(cards.accept(f.event('answer:0')).toast.content,'这次操作已经处理，请用 /task 查看最新状态');
+    assert.equal(cards.accept(f.event('answer:0')).toast.content,'这次操作已经处理，可以询问最新任务状态');
     assert.equal(cards.accept(f.event('answer:1')).toast.type,'error');
   }finally{resumed.close();}
   const task=f.tasks.get(f.task.id)!;assert.equal(task.state,'queued');assert.equal(task.inputVersion,2);
@@ -426,7 +426,7 @@ test('multiple questions reject invalid groups and retain a text fallback',t=>{
   assert.throws(()=>waitChoicesFixture(t,undefined,[{question:'bad',choices:['one']}]),RuntimeError);
   const f=waitChoicesFixture(t,undefined,[{question:'一？',choices:['是','否']},{question:'二？',choices:['甲','乙']}]);
   const output=f.s.db.prepare('SELECT content FROM outbox WHERE kind=?').get(`wait:${f.id}`);
-  assert.match(String(output?.content),/一？[\s\S]*二？[\s\S]*\/resume/);
+  assert.match(String(output?.content),/一？[\s\S]*二？[\s\S]*等待事项/);
 });
 
 

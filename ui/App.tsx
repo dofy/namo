@@ -177,10 +177,10 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
         <section className="settings-container" hidden={view !== 'settings'} aria-label={tr("nav.directories")}>
           <Tabs.Root className="settings-tabs" value={settingsTab} onValueChange={tab => go(tab === 'work' ? uiRoutes.settings : `${uiRoutes.settings}?tab=${tab}`)}>
             <Tabs.List aria-label={tr('settings.sections')}>
-              <Tabs.Trigger value="work">{tr('settings.workSection')}</Tabs.Trigger>
-              <Tabs.Trigger value="feishu">{tr('settings.feishuMessages')}</Tabs.Trigger>
-              <Tabs.Trigger value="connections">{tr('nav.connections')}</Tabs.Trigger>
-              <Tabs.Trigger value="maintenance">{tr('settings.maintenanceSection')}</Tabs.Trigger>
+              <Tabs.Trigger value="work"><Icon name="settings" />{tr('settings.workSection')}</Tabs.Trigger>
+              <Tabs.Trigger value="feishu"><Icon name="sessions" />{tr('settings.feishuMessages')}</Tabs.Trigger>
+              <Tabs.Trigger value="connections"><Icon name="connections" />{tr('nav.connections')}</Tabs.Trigger>
+              <Tabs.Trigger value="maintenance"><Icon name="activity" />{tr('settings.maintenanceSection')}</Tabs.Trigger>
             </Tabs.List>
             <SettingsPage tab={settingsTab} onTabChange={tab => go(`${uiRoutes.settings}?tab=${tab}`)} config={state.config} profiles={state.profiles} recoveryAvailable={state.recoveryAvailable && !expired} refresh={refresh} notify={notify}
               operations={<OperationsPanel state={state} expired={expired}/>} />

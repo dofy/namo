@@ -45,6 +45,9 @@ import { assertMcpDelivery, assertMcpApprovalScope, mcpRead } from './mcp-connec
 import { assertReviewDelivery, readReview, reviewCoverageBrief } from './github-review.js';
 import { recordProgress } from './public-progress.js';
 import { Schedules } from './schedules.js';
+import { conversationControl } from './conversation-control.js';
+import type { ControlClassification } from './control-classifier.js';
+import { applyDirectoryRequests, decideDirectory, getDirectoryRequest } from './directory-approval.js';
 import { redactExpiredInbox } from './inbox-retention.js';
 
 export interface DeliveryRoute { messageId: string; thread: boolean; }
@@ -91,6 +94,8 @@ export class Engine {
   private nextRetentionPoll = 0;
   private autoMemories?: AutoMemories;
   private memoryRunning?: Promise<void>;
+  private controlRunning?: Promise<void>;
+  private controlAbort?: AbortController;
   private memoryAbort?: AbortController;
   private modelCatalog?: ModelCatalog;
   private versions = new RuntimeVersions();
@@ -150,12 +155,56 @@ export class Engine {
     return true;
   }
   private routeAccepted(m: Incoming): void {
-    if (!this.handleControl(m)) this.route(this.store.get(m.key)!);
+    if (!this.handleControl(m)) {
+      const pending=this.tasks.pending(m).some(t=>t.scopeKey===scopeOf(m)&&['running','waiting'].includes(t.state));
+      if(this.runtime.classifyControl && this.config.file && !this.configurationDraining && pending && !m.key.startsWith('schedule:') && m.envelope?.kind==='instruction' && !m.envelope.materials.length) {
+        this.store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`control-classify:${m.key}`,'pending');
+      } else this.route(this.store.get(m.key)!);
+    }
     this.autoMemories?.enqueue([m.key],this.tasks.binding(m)?.cwd??null,`message:${m.key}`);
     if (this.store.get(m.key)?.taskId && this.config.feishu?.reactions !== false) this.feedback.accepted(m.key);
   }
   private handleControl(m: Incoming): boolean {
     if (m.envelope?.kind === 'material') return false;
+    // A running or waiting task occupies its chat slot. Recognize a small,
+    // unambiguous set of immediate controls before the model queue so a stop
+    // request can interrupt that very task. Original inbound text stays stored.
+    if(this.config.file && m.envelope?.chatType==='p2p' && m.envelope.type==='text' && !m.envelope.materials.length) {
+      const text=m.text.trim().replace(/[。！!？?]+$/u,''),decision=/^(?:请)?(不同意|确认|同意|批准|允许|拒绝|好的|好|可以的|可以|没问题)(?:(?:这个|该|访问|添加到|加入到|添加|加入)?(?:目录|文件夹|白名单|权限|访问|授权))?(?:\s*(DIR-[A-Fa-f0-9]{12}))?$/u.exec(text);
+      if(decision) {
+        let id:string|undefined=decision[2]?.toUpperCase();
+        if(!id && m.envelope.parentId){const row=this.store.db.prepare("SELECT kind FROM outbox WHERE platformId=? AND kind LIKE 'directory-approval:%' LIMIT 1").get(m.envelope.parentId);id=row?String(row.kind).slice('directory-approval:'.length):undefined;}
+        if(!id && !m.envelope.parentId){const rows=this.store.db.prepare("SELECT value FROM settings WHERE key>=? AND key<? LIMIT 100").all('directory-approval:','directory-approval;');
+          const pending=rows.flatMap(row=>{try{const r=JSON.parse(String(row.value));return r.state==='pending'&&r.ownerId===m.senderId&&r.chatKey===m.chatKey&&r.expiresAt>Date.now()?[r]:[];}catch{return [];}});
+          const otherWait=this.tasks.pending(m).some(t=>t.scopeKey===scopeOf(m)&&t.state==='waiting');
+          const generic=/^(?:好的|好|可以的|可以|没问题|同意|批准|确认|允许|拒绝|不同意)$/u.test(text);
+          const latest=generic?this.store.db.prepare("SELECT inboxKey,kind,content FROM outbox WHERE chatId=? AND state='sent' ORDER BY acceptedAt DESC,id DESC LIMIT 1").get(m.chatId):undefined;
+          const context=!generic || !!latest && pending.length===1 && latest.inboxKey===pending[0].sourceKey && (latest.kind===`directory-approval:${pending[0].id}` || latest.kind==='result' && String(latest.content).includes(pending[0].id));
+          if(pending.length===1&&!otherWait&&context)id=pending[0].id;
+        }
+        if(id && getDirectoryRequest(this.store,id)) {const reply=decideDirectory(this.store,loadConfig(this.config.file),id,m,!['拒绝','不同意'].includes(decision[1]));if(this.store.claim(m.key))this.store.finish(m.key,reply);return true;}
+      }
+    }
+    const naturalInput=!m.text.trim().startsWith('/');
+    if(!m.key.startsWith('schedule:') && (m.envelope?.type??'text')==='text' && !m.envelope?.materials?.length) {
+      const text=m.text.trim().replace(/[。！!？?]+$/u,'').trim();
+      const stop=/^(?:请|麻烦|帮我|请帮我)?(?:停止|取消|终止)(?:一下)?(?:任务|当前任务|这个任务|正在运行的任务)(?:\s+(N-[A-Fa-f0-9]{12}))?$/u.exec(text);
+      const all=/^(?:请|麻烦|帮我|请帮我)?(?:停止|取消|终止)(?:所有|全部)任务$/u.test(text);
+      const mcpAction=/^(?:请)?(确认|同意|拒绝|查看|查询)(?:执行|操作|审批|状态)*\s*(MA-[A-Fa-f0-9]{12})$/u.exec(text);
+      const pushAction=/^(?:请)?(确认|同意|拒绝|查看|查询)(?:执行|推送|审批|状态)*\s*(AP-[A-Fa-f0-9]{12})$/u.exec(text);
+      if(mcpAction) {
+        const action=['查看','查询'].includes(mcpAction[1])?'status':mcpAction[1]==='拒绝'?'reject':'approve';
+        m={...m,text:`/mcp-${action} ${mcpAction[2]}${action==='approve'?' --confirm':''}`};
+      } else if(pushAction) {
+        const action=['查看','查询'].includes(pushAction[1])?'status':pushAction[1]==='拒绝'?'reject':'approve';
+        m={...m,text:`/push-${action} ${pushAction[2]}${action==='approve'?' --confirm':''}`};
+      } else if(stop || all) {
+        const pending=this.tasks.pending(m).filter(t=>t.scopeKey===scopeOf(m));
+        if(!all && !stop?.[1] && pending.length>1) {if(this.store.claim(m.key))this.store.finish(m.key,'有多个未完成任务，请说明要停止哪一个。');return true;}
+        m={...m,text:`/cancel${stop?.[1]?` ${stop[1]}`:''}`};
+      } else if(/^(?:请|帮我|请帮我)?(?:查看|看看|查询|列出)(?:一下)?(?:我的)?任务(?:列表|清单)$/u.test(text))m={...m,text:'/tasks'};
+      else if(/^(?:请|帮我|请帮我)?(?:查看|看看|查询)(?:一下)?(?:当前|我的)?(?:任务状态|服务状态)$/u.test(text))m={...m,text:'/status'};
+    }
     const simpleImageRequest=asksForPreviousImage(m.text,!!m.envelope?.parentId),describedImageRequest=asksForDescribedImage(m.text);
     if(!m.key.startsWith('schedule:') && (m.envelope?.type??'text')==='text' && !m.envelope?.materials?.length
       && (simpleImageRequest||describedImageRequest)) {
@@ -217,8 +266,8 @@ export class Engine {
         } catch(e) {if(!(e instanceof RecoveryError))throw e;reply=e.message;}
       }
       else if (command === '/whoami') reply = `用户 open_id：${m.senderId}\n会话 chat_id：${m.chatId}`;
-      else if (command === '/tasks') reply = this.tasks.list(m).map(t => `${taskStateLabel(t.state)} · \`/task ${t.id}\``).join('\n') || '尚无任务记录。';
-      else if (command === '/task') { const id = m.text.trim().split(/\s+/)[1]; const t = id ? this.tasks.owned(id, m) : this.tasks.latest(m); reply = t && this.taskAccessible(t) ? taskStatus(this.store, t) : '未找到可访问的任务。用 /tasks 查看任务编号。'; }
+      else if (command === '/tasks') reply = this.tasks.list(m).filter(t=>t.scopeKey===scopeOf(m)&&this.taskAccessible(t)).map(t => naturalInput ? `${taskStateLabel(t.state)} · ${t.id}` : `${taskStateLabel(t.state)} · \`/task ${t.id}\``).join('\n') || '尚无任务记录。';
+      else if (command === '/task') { const id = m.text.trim().split(/\s+/)[1]; const t = id ? this.tasks.owned(id, m) : this.tasks.latest(m); reply = t && this.taskAccessible(t) ? taskStatus(this.store, t) : '未找到可访问的任务。可以让我列出任务。'; }
       else if (command === '/session') {
         const wid = m.text.trim().split(/\s+/)[1];
         if (wid && this.store.hasPending(m.chatKey, m.key,m.senderId,scopeOf(m))) reply = '仍有未完成请求，暂不能切换工作线。';
@@ -232,37 +281,27 @@ export class Engine {
       else if (command === '/version') reply = `**版本信息**\n${this.versionLines(m)}`;
       else if (command === '/status') {
         const pending = this.tasks.pending(m);
-        reply = `**服务可用**\n工作目录：${this.workspaceLabel(m)}\n\n**版本信息**\n${this.versionLines(m)}\n\n**任务状态**\n正在处理 ${pending.filter(t => t.state === 'running').length} 项 · 排队 ${pending.filter(t => t.state === 'queued').length} 项 · 等待补充 ${pending.filter(t => t.state === 'waiting').length} 项\n\n用 \`/tasks\` 查看本人的任务。`;
+        reply = `**服务可用**\n工作目录：${this.workspaceLabel(m)}\n\n**版本信息**\n${this.versionLines(m)}\n\n**任务状态**\n正在处理 ${pending.filter(t => t.state === 'running').length} 项 · 排队 ${pending.filter(t => t.state === 'queued').length} 项 · 等待补充 ${pending.filter(t => t.state === 'waiting').length} 项${naturalInput?'':'\n\n用 \`/tasks\` 查看本人的任务。'}`;
       }
       else if(command==='/directories') reply=`**可访问目录（读写）**\n${(this.config.codex?.directories??[]).map(path=>'`'+path+'`').join('\n')||'尚未配置目录'}\n\n已准入的成员共享这些目录；任务在独立工作目录中启动。`;
 
       else if (command === '/unsupported') reply = '这类消息暂不支持处理。可发送文字、支持的图片或文本附件并附上说明；语音及其他未支持的内容请先转为文字。';
       else if (command === '/too-long') reply = '这条消息超过 16000 字符，尚未交给模型。请拆成较短的消息。';
       else if (command === '/help') reply = [
-        '**任务**',
-        '`/tasks` 查看任务列表\n`/task N-编号` 查看详情\n`/amend N-编号 补充要求` 追加要求\n`/cancel [N-编号]` 停止本人任务\n`/resume WAIT-编号 回答` 继续等待中的任务',
-        '**会话与目录**',
-        '`/session [W-编号]` 查看或切换工作线\n`/refresh` 刷新模型会话并携带有限历史摘录\n`/new` 或 `/reset` 开始新工作线\n`/directories` 查看可读写目录\n`/status` 查看服务与任务状态\n`/version` 查看版本',
-        '**材料与文件**',
-        '`/material 内容` 暂存材料\n`/run 要求` 处理暂存材料\n`/deliver N-编号 相对路径` 交付任务文件',
-        '**定时提醒与任务 · 私聊**',
-        '`/schedule` 查看创建和管理方法',
-        '**个人设置与记忆 · 私聊**',
-        '`/model` 查看或设置默认模型\n`/profile` 查看或修改个人档案\n`/memories` 查看记忆\n`/remember owner|chat 内容` 保存记忆\n`/memory-correct 编号 版本 内容` 修改记忆\n`/memory-disable 编号 版本` 停用记忆\n`/forget 编号 版本` 删除记忆\n`/handoff N-编号` 保存任务交接',
-        '**历史操作记录**',
-        '`/mcp-status MA-编号` 查看旧操作状态；新操作按已授权权限直接执行',
-        '**异常与受控推送**',
-        '`/issues` 查看待核对异常\n`/issue 编号` 查看异常详情和处理方式\n`/push N-编号 remote refs/heads/分支 --directory 目录` 直接推送到已配置远端\n`/push-status AP-编号` 查看推送状态',
-        '也可引用等待中的问题直接回复。文本附件与合并转发会有界读取；等待补充不代表批准外部操作。本机运行 `namo ui` 管理配置与任务。'
+        '**直接说出你的要求**',
+        '可以让我执行工作、查看或停止任务、补充要求、交付文件、管理会话，以及创建或管理定时任务。',
+        '个人档案、模型偏好和记忆可在私聊中管理；需要确认目标时，我会询问。',
+        '收到等待问题后可以引用问题回复或选择选项；发送结果不明时请先核对聊天记录。',
+        '本机运行 namo ui 可管理配置与任务。'
       ].join('\n\n');
       else if (command === '/reset' || command === '/new') {
-        if (this.tasks.pending(m).some(t => t.scopeKey===scopeOf(m)&&['running','waiting'].includes(t.state))) reply = '本会话仍有执行或等待补充的任务。请先完成或 /cancel，再 /reset。';
+        if (this.tasks.pending(m).some(t => t.scopeKey===scopeOf(m)&&['running','waiting'].includes(t.state))) reply = '本会话仍有执行或等待补充的任务。请先完成或停止任务，再开始新会话。';
         else { this.store.clearThread(m.chatKey); this.tasks.reset(m); reply = '已开始新的工作线。下一条任务使用新上下文；历史任务和代码仍保留。'; }
       } else {
         const target = m.text.trim().split(/\s+/)[1];
-        const rows = this.tasks.pending(m).filter(t => target ? t.id === target.toUpperCase() : t.scopeKey === scopeOf(m));
+        const rows = this.tasks.pending(m).filter(t => t.scopeKey === scopeOf(m) && (!target || t.id === target.toUpperCase()));
         const cancelled = rows.filter(t => this.tasks.cancel(t)).length;
-        reply = cancelled ? `已请求停止 ${cancelled} 条本人任务。已发生的操作不会自动撤销。` : '当前没有可取消的本人任务；可用 /tasks 核对任务编号。';
+        reply = cancelled ? `已请求停止 ${cancelled} 条本人任务。已发生的操作不会自动撤销。` : '当前没有可取消的本人任务。';
         if (cancelled < rows.length) reply += '\n部分运行已结束或失联，没有再发出停止请求；请查看任务状态，失联运行需在本机核对。';
       }
       this.store.finish(m.key, reply);
@@ -371,10 +410,82 @@ export class Engine {
   private routeQueued(): void {
     this.store.transaction(() => {
       const rows = this.store.db.prepare("SELECT key FROM inbox WHERE state='queued' AND taskId IS NULL ORDER BY seq").all() as { key: string }[];
-      for (const row of rows) { const m = this.store.get(row.key)!; this.routeAccepted(m); }
+      for (const row of rows) { if(this.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`control-classify:${row.key}`))continue; const m = this.store.get(row.key)!; this.routeAccepted(m); }
     });
   }
   resume(): void { this.routeQueued(); this.paused = false; void this.pump(); }
+  private startControlClassification():void {
+    if(this.controlRunning || !this.runtime.classifyControl || !this.config.file || this.stopped || this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
+    this.store.db.prepare("DELETE FROM settings WHERE key>=? AND key<? AND NOT EXISTS (SELECT 1 FROM inbox i WHERE 'control-classify:'||i.key=settings.key AND i.state='queued' AND i.taskId IS NULL)").run('control-classify:','control-classify;');
+    const row=this.store.db.prepare(`SELECT i.key FROM inbox i JOIN settings s ON s.key='control-classify:'||i.key
+      WHERE i.state='queued' AND i.taskId IS NULL ORDER BY i.seq LIMIT 1`).get();
+    if(!row)return;
+    const activeRuns=new Set([...this.active.values()].map(a=>a.run));
+    const reserved=(this.runtime.reservations?.()??[]).filter(r=>!activeRuns.has(r.runId));
+    if(this.active.size+reserved.length+(this.memoryRunning?1:0)>=this.config.concurrency){this.memoryAbort?.abort('foreground_control');return;}
+    const message=this.store.get(String(row.key))!;
+    const pending=this.tasks.pending(message).filter(t=>t.scopeKey===scopeOf(message)&&['queued','running','waiting'].includes(t.state));
+    if(!pending.length){this.store.transaction(()=>{this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`control-classify:${message.key}`);this.route(this.store.get(message.key)!,true);});return;}
+    const input={text:message.text,now:new Date().toISOString(),timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,pending:pending.map(t=>{const w=t.state==='waiting'?new Waits(this.store).current(t.id):undefined;return {id:t.id,state:t.state,...(w?{question:w.question,waitId:w.id}:{})};})};
+    const limit=this.config.codex?.dailyTurnLimit??(this.config.feishu?.access?100:0),quota=`daily-turns:${new Date().toISOString().slice(0,10)}`;
+    if(limit>0){const saved=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(quota),used=saved?Number(saved.value):0;
+      if(!Number.isSafeInteger(used)||used>=limit){this.store.transaction(()=>{this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`control-classify:${message.key}`);this.route(this.store.get(message.key)!,true);});return;}
+      this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(quota,String(used+1));
+    }
+    this.controlAbort=new AbortController();
+    this.controlRunning=this.runtime.classifyControl(input,this.controlAbort.signal).then(result=>{
+      if(this.stopped)return;
+      this.store.transaction(()=>this.finishControlClassification(message,result));
+      for(const slot of this.active.values()) {
+        if(this.store.get(slot.key)?.cancelRequested)slot.abort.abort();
+        if(slot.task.chatKey===message.chatKey&&slot.task.ownerId===message.senderId&&slot.task.scopeKey===scopeOf(message))void this.steer(slot).catch(()=>this.fatal('revision_storage_error'));
+      }
+    }).catch(error=>{
+      if(this.stopped)return;
+      const code=error instanceof RuntimeError && /^[a-z0-9_-]{1,80}$/i.test(error.code)?error.code:'classification_failed';
+      const category=error instanceof RuntimeError && ['schema','rate_limit','quota','authentication','other'].includes(error.detail??'')?error.detail:undefined;this.log('control_classification_failed',{code,...(category?{category}:{})});
+      this.store.transaction(()=>{const m=this.store.get(message.key);if(m?.state==='queued'&&!m.taskId){
+        this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`control-classify:${message.key}`);
+        this.store.addOutput(m.key,'control-classification-notice','暂时无法安全识别这条消息是否为控制请求，已保留并按普通任务排队；如需停止当前任务，也可以点击任务卡片上的停止按钮。');
+        this.route(m,true);
+      }});
+    }).finally(()=>{this.controlRunning=undefined;this.controlAbort=undefined;void this.pump();});
+  }
+  private finishControlClassification(message:Incoming,result:ControlClassification):void {
+    const m=this.store.get(message.key);if(!m || m.state!=='queued' || m.taskId){this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`control-classify:${message.key}`);return;}
+    if(!this.config.file || !admitted(loadConfig(this.config.file).feishu,m.senderId,m.chatId,m.envelope?.tenantKey))throw new RuntimeError('access_configuration_changed');
+    this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`control-classify:${message.key}`);
+    const pending=this.tasks.pending(m).filter(t=>t.scopeKey===scopeOf(m)&&['queued','running','waiting'].includes(t.state));
+    const id=typeof result.id==='string'?result.id.toUpperCase():'';
+    const matched=pending.find(t=>t.id===id || (t.state==='waiting'&&new Waits(this.store).current(t.id)?.id===id));
+    const referenced=this.tasks.referenced(m);
+    if(referenced && matched && referenced.id!==matched.id && (result.kind==='answer'||result.kind==='amend'||result.operation==='cancel')) {this.reply(m,'引用的任务与指定目标不一致，请说明要操作哪一个。');return;}
+    const task=matched ?? (!id&&pending.length===1?pending[0]:undefined) ?? (referenced && pending.some(t=>t.id===referenced.id)?referenced:undefined);
+    if(pending.length>1 && ['answer','amend'].includes(result.kind) && !referenced && (!id || !m.text.toUpperCase().includes(id))) {this.reply(m,'有多个未完成任务，请说明要操作哪一个。');return;}
+    if(pending.length>1 && result.kind==='control' && result.operation==='cancel' && result.scope!=='all' && !referenced && (!id || !m.text.toUpperCase().includes(id))) {this.reply(m,'有多个未完成任务，请说明要停止哪一个。');return;}
+    if(result.kind==='answer' && task?.state==='waiting') {
+      const wait=new Waits(this.store).current(task.id);
+      if(wait){try{new Waits(this.store).answer(wait,m,m.text);this.reply(m,'回答已保存，将继续原任务。');return;}catch(e){if(e instanceof WaitInputError){this.reply(m,e.message);return;}throw e;}}
+    }
+    if(result.kind==='amend' && task&&['running','queued'].includes(task.state)) {this.tasks.amend(task,m);return;}
+    if(result.kind==='control' && typeof result.operation==='string' && pending.length && this.config.file) {
+      const current=task??pending[0], args={...result} as Record<string,unknown>;delete args.kind;
+      let response:unknown;
+      if(result.operation.startsWith('schedule_')) {
+        const operation=result.operation.slice('schedule_'.length);
+        const scheduleArgs=operation==='create'?{operation,kind:result.field,frequency:result.scope,time:result.path,content:result.value}:{operation,...(id?{id}:{})};
+        response=new Schedules(this.store).tool(m,scheduleArgs,`classifier-${m.key}`,()=>this.workspace(m,current));
+      } else response=conversationControl(this.store,this.config as Config,m,current,args,`classifier-${m.key}`,this.redact,t=>this.taskAccessible(t),true);
+      const output=response as {result?:unknown;error?:unknown};
+      let text=typeof output.error==='string'?output.error:typeof output.result==='string'?output.result:'';
+      if(!text && result.operation==='tasks' && Array.isArray(output.result)) text=output.result.length?output.result.map((item:any)=>`${item.state} · ${item.id}`).join('\n'):'没有其他任务记录。';
+      if(!text && result.operation==='status' && output.result && typeof output.result==='object') {const state=output.result as Record<string,unknown>;text=`正在处理 ${state.running} 项 · 排队 ${state.queued} 项 · 等待补充 ${state.waiting} 项。`;}
+      if(!text && result.operation==='sessions' && Array.isArray(output.result)) text=output.result.length?output.result.map((item:any)=>`${item.current?'当前会话':'会话'} ${item.id}${item.latestRequest?` · ${item.latestRequest}`:''}`).join('\n'):'没有可访问的会话。';
+      if(!text)text=JSON.stringify(output.result??response);
+      this.reply(m,text);return;
+    }
+    this.route(m,true);
+  }
   private configurationDraining = false;
   drainConfiguration(value: boolean): void { this.configurationDraining=value; }
   async pump(): Promise<void> {
@@ -385,6 +496,16 @@ export class Engine {
       this.tasks.expireMaterials();
       new Waits(this.store).expire();
       if(Date.now()>=this.nextRetentionPoll){this.nextRetentionPoll=Date.now()+3_600_000;redactExpiredInbox(this.store,this.config.retention?.inboxDays??0);}
+      if(this.config.file && this.store.db.prepare("SELECT 1 FROM settings WHERE key>=? AND key<? AND json_valid(value) AND json_extract(value,'$.state') IN ('approved','saved') LIMIT 1").get('directory-approval:','directory-approval;')) {
+        let latest:Config|undefined;try{latest=loadConfig(this.config.file);}catch{this.log('directory_configuration_unavailable');}
+        if(latest){const applied={...latest,codex:{...latest.codex,directories:this.config.codex?.directories??[]}};
+        applyDirectoryRequests(this.store,applied,(source,request)=>{
+          const previous=this.store.db.prepare("SELECT content FROM output_sources WHERE inboxKey=? AND kind='result'").get(source.key);
+          const text=JSON.stringify({instruction:'继续用户原任务中尚未完成的工作。已发生的操作不自动重做；状态不明先核对。不得超出原请求及已确认目录的授权。',original_request:source.text,approved_directory:request.path,remaining_work:request.remaining,prior_result:String(previous?.content??'').slice(0,2000)});
+          const message:Incoming={...source,key:`directory-continuation:${request.id}`,text,createdAt:Date.now(),envelope:{...source.envelope!,parentId:undefined,rootId:undefined,kind:'instruction',materials:[],limitations:[]}};
+          if(this.store.enqueue(message))this.routeAccepted(message);
+        });}
+      }
       if(!this.configurationDraining&&Date.now()>=this.nextSchedulePoll){
         const now=Date.now(); this.nextSchedulePoll=now+1000;
         this.store.transaction(()=>{if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
@@ -395,7 +516,7 @@ export class Engine {
           const pause=(reason:string,notify:boolean)=>{
             this.store.db.prepare("UPDATE schedules SET state='paused' WHERE id=?").run(schedule.id);saveStatus({...status(),reason});
             if(notify){const key=`schedule-alert:${schedule.id}:${schedule.nextAt}`;
-              if(this.store.enqueue({...source,key,text:'',createdAt:now})){this.store.claim(key);this.store.finish(key,`定时任务 ${schedule.id} 已暂停：${reason}。处理后可用 /schedule resume ${schedule.id} 恢复。`);}}
+              if(this.store.enqueue({...source,key,text:'',createdAt:now})){this.store.claim(key);this.store.finish(key,`定时任务 ${schedule.id} 已暂停：${reason}。处理后可以让我恢复该任务。`);}}
           };
           // Recheck only the scheduled task's own authority against saved
           // settings; unrelated changes do not consume or pause this trigger.
@@ -447,10 +568,11 @@ export class Engine {
         const ready=this.tasks.candidates().some(t=>!this.active.has(this.slotKey(t))&&!blocked.some(a=>('task' in a?this.slotKey(a.task):a.slotKey??a.chatKey)===this.slotKey(t)||('task' in a?this.tasks.directories(a.task):a.paths?.length?a.paths:[a.cwd]).some(root=>this.tasks.directories(t).some(path=>pathsOverlap(root,path)))));
         if(ready&&this.active.size+reservations.length+1>=this.config.concurrency)this.memoryAbort?.abort('foreground_task');
       }
+      this.startControlClassification();
       for (;;) {
         const activeRuns = new Set([...this.active.values()].map(a => a.run));
         const reservations = (this.runtime.reservations?.() ?? []).filter(r => !activeRuns.has(r.runId));
-        if (this.active.size + reservations.length + (this.memoryRunning ? 1 : 0) >= this.config.concurrency) break;
+        if (this.active.size + reservations.length + (this.memoryRunning ? 1 : 0) + (this.controlRunning || this.runtime.classifyControl && this.config.concurrency>1 ? 1 : 0) >= this.config.concurrency) break;
         const claimed=this.store.transaction(()=>{
           if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
           const next=this.tasks.candidates().find(t=>!this.active.has(this.slotKey(t))&&![...this.active.values(), ...reservations].some(a=>('task' in a?this.slotKey(a.task):a.slotKey??a.chatKey)===this.slotKey(t)||('task' in a?this.tasks.directories(a.task):a.paths?.length?a.paths:[a.cwd]).some(root=>this.tasks.directories(t).some(path=>pathsOverlap(root,path)))));
@@ -471,7 +593,7 @@ export class Engine {
       const reserved=this.runtime.reservations?.()??[];
       const runs=new Set([...this.active.values()].map(a=>a.run));
       if(!this.configurationDraining&&!this.memoryRunning&&this.autoMemories?.pending()
-        &&this.active.size+reserved.filter(r=>!runs.has(r.runId)).length<this.config.concurrency
+        &&this.active.size+reserved.filter(r=>!runs.has(r.runId)).length+(this.controlRunning?1:0)<this.config.concurrency
         &&!this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get()) {
         const allowed=this.store.transaction(()=>{
           const limit=this.config.codex?.dailyTurnLimit??(this.config.feishu?.access?100:0);if(!limit)return true;
@@ -516,6 +638,7 @@ export class Engine {
       if (!this.runtime.persistent) evidence = new EvidenceRecorder(this.store, run, cwd, this.config.codex?.denyPaths, this.redact);
       let prompt = this.tasks.prompt(task), images:ImageInput[]=[];
       if (!reattaching) {
+        this.tasks.upgradeToolSession(task);
         recordActivity(this.store, run, 'connecting');
         const feishu:Config['feishu']={appId:'local',appSecret:'',allowedUserIds:[],allowedChatIds:[],requireMention:true,domain:'feishu',...this.config.feishu};
         prompt=buildTaskRunPrompt(this.store,task,m,this.contextConfig(),run);
@@ -546,9 +669,11 @@ export class Engine {
         prompt, images,
         ...(this.config.file?{onMcp:(args:unknown,toolSignal:AbortSignal)=>mcpRead(this.store,this.config.file!,task,args,toolSignal)}:{}),
         ...(this.config.file?{onReview:(args:unknown)=>readReview(this.store,this.config.file!,task,args,signal)}:{}),
+        ...(this.config.file?{onControl:(args:unknown,callId:string)=>conversationControl(this.store,loadConfig(this.config.file!),m,task,args,callId,this.redact,t=>this.taskAccessible(t))}:{}),
+        onSchedule: (args,callId) => new Schedules(this.store).tool(m,args,callId,()=>this.workspace(m,task)),
         onActivity: phase => recordActivity(this.store, run, phase),
         onProgress: event => recordProgress(this.store, run, event, this.redact),
-        onThread: threadId => { this.store.saveThread(this.tasks.sessionKey(task), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
+        onThread: threadId => { if (!new Waits(this.store).resume(task)) this.store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`control-tools-v3-thread:${threadId}`,'1'); this.store.saveThread(this.tasks.sessionKey(task), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
         onTurn: turnId => { const threadId = this.store.thread(this.tasks.sessionKey(task)); if (threadId) { this.store.saveRun(m.key, threadId, turnId); this.tasks.saveRun(run, threadId, turnId); } },
         onReady: controls => { const slot = this.active.get(this.slotKey(task)); if (slot?.task.id === task.id) { slot.controls = controls; void this.steer(slot).catch(() => this.fatal('revision_storage_error')); } },
         onEvidence: item => evidence!.observe(item),
@@ -614,38 +739,44 @@ export class Engine {
       this.log('turn_failed', { messageId: m.messageId, code });
     }
   }
-  private route(m: Inbox): void {
+  private route(m: Inbox, acceptedBeforeDrain=false): void {
     try {
       const waits = new Waits(this.store);
       // Topic replies point at the root even without an explicit quotation.
       const topicRoot = !!m.envelope?.threadId && !!m.envelope.rootId && m.envelope.parentId === m.envelope.rootId;
       const resume = /^\/resume\s+(WAIT-[A-Fa-f0-9]{12})\s+([\s\S]+)$/.exec(m.text.trim());
       const quotedWait = topicRoot ? undefined : waits.referenced(m);
-      if (/^\/resume(?:\s|$)/.test(m.text.trim()) || quotedWait) {
-        const w = resume ? waits.get(resume[1].toUpperCase()) : quotedWait;
-        if (!w || m.envelope?.kind === 'material') { this.reply(m, '请引用当前等待问题回复，或使用 /resume WAIT-等待编号 你的回答。'); return; }
-        waits.answer(w, m, resume ? resume[2] : m.text);
+      const text=m.text.trim();
+      const answer=/^(?:请|帮我)?(?:回答|回复)(?:等待事项|任务)\s*(WAIT-[A-Fa-f0-9]{12}|N-[A-Fa-f0-9]{12})\s*[:：]\s*([\s\S]+)$/u.exec(text);
+      const exactChoices=!m.key.startsWith('schedule:')&&!m.envelope?.materials?.length && !m.envelope?.parentId
+        ? this.tasks.pending(m).filter(t=>t.scopeKey===scopeOf(m)&&t.state==='waiting').map(t=>waits.current(t.id)).filter(w=>w?.choices?.includes(text)) : [];
+      const answerWait=answer ? (answer[1].toUpperCase().startsWith('WAIT-')?waits.get(answer[1].toUpperCase()):(()=>{const t=this.tasks.owned(answer[1],m);return t&&t.scopeKey===scopeOf(m)?waits.current(t.id):undefined;})()) : exactChoices.length===1?exactChoices[0]:undefined;
+      if (/^\/resume(?:\s|$)/.test(text) || quotedWait || answer || answerWait) {
+        const w = resume ? waits.get(resume[1].toUpperCase()) : quotedWait ?? answerWait;
+        if (!w || m.envelope?.kind === 'material') { this.reply(m, '请引用当前等待问题回复，或说明你要回答的等待事项和答案。'); return; }
+        waits.answer(w, m, resume ? resume[2] : answer ? answer[2] : m.text);
         this.reply(m, '回答已保存，将继续原任务。'); return;
       }
-      if(this.configurationDraining) {
-        const amendment=/^\/amend\s+(N-[A-Fa-f0-9]{12})\s+\S/.exec(m.text);
+      const naturalAmend=/^(?:请|帮我)?(?:给|向)(?:任务)?\s*(N-[A-Fa-f0-9]{12})\s*(?:补充|追加|添加)\s*[:：]?\s*\S/u.exec(m.text);
+      if(this.configurationDraining && !acceptedBeforeDrain) {
+        const amendment=/^\/amend\s+(N-[A-Fa-f0-9]{12})\s+\S/.exec(m.text) ?? naturalAmend;
         const target=amendment?this.tasks.owned(amendment[1],m):topicRoot?undefined:this.tasks.referenced(m);
         if(m.envelope?.kind==='material'||!target||!['queued','running'].includes(target.state))return;
       }
       if (/^\/(?:material|run)\s*$/.test(m.text)) { this.reply(m, '请在 /material 后填写材料，或在 /run 后填写处理要求。尚未开工。'); return; }
-      const explicit = /^\/amend\s+(N-[A-Fa-f0-9]{12})\s+\S/.exec(m.text);
+      const explicit = /^\/amend\s+(N-[A-Fa-f0-9]{12})\s+\S/.exec(m.text) ?? naturalAmend;
       if (m.text.startsWith('/amend') && !explicit) { this.reply(m, '用法：/amend N-任务编号 补充要求'); return; }
       // In a Feishu topic every post reply points at the topic root, even when
       // the user did not quote a task. Do not interpret that link as a quote.
       const ref = explicit ? this.tasks.owned(explicit[1], m) : topicRoot ? undefined : this.tasks.referenced(m);
       const materialRef = !explicit && !topicRoot ? this.tasks.referenceMaterial(m) : undefined;
-      if ((explicit || m.envelope?.parentId && !topicRoot) && !ref && !materialRef) { this.reply(m, '未找到本人在本聊天中的引用任务或待处理材料。请用 /tasks 选择任务，或将引用材料和要求一并贴出。'); return; }
+      if ((explicit || m.envelope?.parentId && !topicRoot) && !ref && !materialRef) { this.reply(m, '未找到本人在本聊天中的引用任务或待处理材料。请说明任务，或将引用材料和要求一并贴出。'); return; }
       const workspace = this.workspace(m, ref);
       if (materialRef && this.tasks.materialBinding(materialRef.key) !== JSON.stringify(workspace)) {
         this.reply(m, '引用材料属于另一目录或权限版本，尚未开工。请先选择对应目录，或重新提交材料和要求。'); return;
       }
       if (m.envelope?.kind === 'material') { this.tasks.material(m, workspace); return; }
-      if (ref?.state === 'waiting') { this.reply(m, '任务正在等待补充，请引用它的问题回复，或用 /task 查看恢复方式。'); return; }
+      if (ref?.state === 'waiting') { this.reply(m, '任务正在等待补充，请引用它的问题回复。'); return; }
       if (ref && ['queued', 'running'].includes(ref.state)) {
         this.tasks.amend(ref, m); return;
       }
@@ -693,7 +824,7 @@ export class Engine {
         this.store.transaction(() => {
           this.tasks.dispatch(revision.inboxKey, state);
           if (state !== 'accepted') this.store.addOutput(revision.inboxKey, 'notice',
-            `任务 ${slot.task.id} 的补充${state === 'unknown' ? '提交结果不明' : '未被当前轮接受'}，未自动重送。请用 /task 核对，必要时 /cancel 后明确继续。`);
+            `任务 ${slot.task.id} 的补充${state === 'unknown' ? '提交结果不明' : '未被当前轮接受'}，未自动重送。请询问任务状态，必要时先停止任务，再明确继续。`);
         });
       }
     })().finally(() => { slot.steering = undefined; });
@@ -775,6 +906,8 @@ export class Engine {
   }
   async stop(): Promise<void> {
     this.stopped = true; clearInterval(this.interval);
+    this.controlAbort?.abort();
+    await this.controlRunning;
     const modelDiscovery = this.modelCatalog?.stop();
     this.memoryAbort?.abort();
     const tasks = [...this.active.values()];
@@ -790,7 +923,7 @@ export class Engine {
     while (this.outputBusy) await new Promise(r => setTimeout(r, 20));
   }
   acceptCard(event: CardEvent): ReturnType<Cards['accept']> {
-    const result=new Cards(this.store,task=>this.taskAccessible(task)).accept(event);
+    const result=new Cards(this.store,task=>this.taskAccessible(task),this.config.file?(id,input,approve)=>decideDirectory(this.store,loadConfig(this.config.file!),id,input,approve):undefined).accept(event);
     for(const active of this.active.values()) if(this.store.get(active.key)?.cancelRequested) active.abort.abort();
     void this.pump();return result;
   }

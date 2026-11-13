@@ -13,7 +13,10 @@ import { Profiles } from '../src/profiles.js';
 import { execFileSync } from 'node:child_process';
 import { initialConfig } from '../src/onboarding.js';
 import { loadConfig } from '../src/config.js';
+import { Schedules } from '../src/schedules.js';
+import { chatWorkspace } from '../src/safety.js';
 import { serviceLogs } from '../src/management-operations.js';
+import { Back, selectedAction } from '../src/config-prompts.js';
 
 function fixture(t:any,deps:any={}){
  const dir=mkdtempSync(join(tmpdir(),'namo-ui-')),data=join(dir,'data'),project=join(dir,'project'),file=join(dir,'config.json');mkdirSync(data);mkdirSync(project);
@@ -480,7 +483,7 @@ test('MCP authorization result pages are localized, nonce-styled and do not refl
 
 function terminalScript(selections:string[],texts:string[]=[],confirmations:boolean[]=[true]) {
  const messages:string[]=[];
- return {messages,select:async()=>{const v=selections.shift();assert.notEqual(v,undefined,'missing selection');return v!;},text:async(_label:string,_initial?:string,secret?:boolean)=>{const v=texts.shift();assert.notEqual(v,undefined,'missing text');if(secret)assert.ok(!messages.includes(v!));return v!;},confirm:async()=>confirmations.shift()??true,info:(value:string)=>messages.push(value),close:()=>{}};
+ return {messages,select:async()=>{const v=selections.shift();assert.notEqual(v,undefined,'missing selection');if(v==='$escape')throw new Back();return v!;},text:async(_label:string,_initial?:string,secret?:boolean)=>{const v=texts.shift();assert.notEqual(v,undefined,'missing text');if(secret)assert.ok(!messages.includes(v!));return v!;},confirm:async()=>confirmations.shift()??true,info:(value:string)=>messages.push(value),close:()=>{}};
 }
 test('terminal execution form updates only edited fields and preserves legacy concurrency and secrets',async t=>{
  const {editExecution}=await import('../src/terminal-settings.js');const f=fixture(t);
@@ -495,8 +498,8 @@ test('terminal drafts survive validation errors and discard without writing',asy
 test('terminal assistant and profile settings use existing versioned management APIs',async t=>{
  const {editAssistant,editProfiles}=await import('../src/terminal-settings.js');const f=fixture(t);
  const assistant=terminalScript(['name','$save'],['Compass']);assert.equal(await editAssistant(f.manager,assistant),true);assert.equal(f.manager.state().assistant.values.name,'Compass');
- const profile=terminalScript(['alice','profile','name','$save'],['Sailor']);assert.equal(await editProfiles(f.manager,profile),true);assert.equal(f.manager.profiles().entries[0].name,'Sailor');
- const model=terminalScript(['alice','model','model','$save'],['sample-model']);assert.equal(await editProfiles(f.manager,model),true);assert.equal(f.manager.profiles().entries[0].defaultModel,'sample-model');
+ const profile=terminalScript(['alice','name','$save'],['Sailor']);assert.equal(await editProfiles(f.manager,profile),true);assert.equal(f.manager.profiles().entries[0].name,'Sailor');
+ const model=terminalScript([selectedAction('model','alice'),'model','$save'],['sample-model']);assert.equal(await editProfiles(f.manager,model),true);assert.equal(f.manager.profiles().entries[0].defaultModel,'sample-model');
 });
 test('terminal Feishu form keeps existing secret when editing message settings',async t=>{
  const {editFeishu}=await import('../src/terminal-settings.js');const f=fixture(t);
@@ -506,13 +509,13 @@ test('terminal Feishu form keeps existing secret when editing message settings',
 test('terminal MCP edit retains credentials and rejects moving them to a different endpoint',async t=>{
  const {manageMcp}=await import('../src/terminal-mcp.js');const f=fixture(t);const revision=f.manager.config().revision;
  f.manager.save(revision,{mcpConnections:[{id:'demo',type:'remote',url:'https://mcp.example/mcp',newToken:'synthetic-private-token'}]});const before=readFileSync(f.file,'utf8');
- const ui=terminalScript(['demo','edit','url','$save','$back'],['https://other.example/mcp']);
- await manageMcp(f.manager,ui);assert.equal(readFileSync(f.file,'utf8'),before);assert.ok(ui.messages.some(s=>s.includes('mcp_credential_target_changed')));assert.ok(ui.messages.every(s=>!s.includes('synthetic-private-token')));
+ const ui=terminalScript(['demo','url','$save','$back','$escape'],['https://other.example/mcp']);
+ await assert.rejects(manageMcp(f.manager,ui),Back);assert.equal(readFileSync(f.file,'utf8'),before);assert.ok(ui.messages.some(s=>s.includes('mcp_credential_target_changed')));assert.ok(ui.messages.every(s=>!s.includes('synthetic-private-token')));
 });
 
 test('terminal organization access changes preserve existing members and chat restrictions',async t=>{
  const {editAccess}=await import('../src/terminal-settings.js');const f=fixture(t);
- const ui=terminalScript(['edit','mode','organization','tenantKey','$save'],['tenant-example']);
+ const ui=terminalScript(['mode','organization','tenantKey','$save'],['tenant-example']);
  assert.equal(await editAccess(f.manager,ui,f.manager.config()),true);const value=JSON.parse(readFileSync(f.file,'utf8')).feishu;
  assert.deepEqual(value.access,{mode:'organization',tenantKey:'tenant-example'});assert.deepEqual(value.allowedUserIds,['alice']);assert.deepEqual(value.allowedChatIds,[]);
 });
@@ -521,7 +524,7 @@ test('terminal MCP add and remove preserve other connections and never display t
  f.manager.save(f.manager.config().revision,{mcpConnections:[{id:'old',type:'remote',url:'https://old.example/mcp',newToken:'old-private'}]});
  const add=terminalScript(['$add','id','url','method','token','token','$save'],['new','https://new.example/mcp','new-private']);
  await manageMcp(f.manager,add);let config=JSON.parse(readFileSync(f.file,'utf8'));assert.equal(config.mcpConnections.length,2);assert.equal(config.mcpConnections.find((v:{id:string})=>v.id==='old').token,'old-private');assert.ok(add.messages.every(s=>!s.includes('new-private')));
- const remove=terminalScript(['new','remove']);await manageMcp(f.manager,remove);config=JSON.parse(readFileSync(f.file,'utf8'));assert.deepEqual(config.mcpConnections.map((v:{id:string})=>v.id),['old']);assert.equal(config.mcpConnections[0].token,'old-private');
+ const remove=terminalScript([selectedAction('remove','new')]);await manageMcp(f.manager,remove);config=JSON.parse(readFileSync(f.file,'utf8'));assert.deepEqual(config.mcpConnections.map((v:{id:string})=>v.id),['old']);assert.equal(config.mcpConnections[0].token,'old-private');
 });
 
 test('terminal stale configuration rejects save and leaves both draft and external change intact',async t=>{
@@ -548,7 +551,7 @@ test('terminal Codex update settings preserve revision and explicit choice',asyn
  const {manageUpdates}=await import('../src/terminal-settings.js');let request:unknown;
  const status={supported:true,currentVersion:'1.0',latestVersion:'1.1',checkedAt:null,automatic:false,state:'idle' as const,updateAvailable:true,managed:false,previousVersion:null,error:null};
  const manager={codexUpdate:async(input?:unknown)=>{request=input;return {...status,automatic:!!input};}} as unknown as Management;
- const ui=terminalScript(['automatic'],[],[true,true]);await manageUpdates(manager,ui,{revision:'fixture-revision'} as any);
+ const ui=terminalScript([],[],[true,true]);await manageUpdates(manager,ui,{revision:'fixture-revision'} as any,'automatic');
  assert.deepEqual(request,{action:'automatic',configRevision:'fixture-revision',enabled:true});
 });
 
@@ -557,4 +560,36 @@ test('terminal GitHub settings explicitly clear a token without exposing it',asy
  f.manager.save(f.manager.config().revision,{github:{source:'token',mode:'shared',repositories:[],allowedUserIds:[]},newGithubToken:'synthetic-github-secret'});
  const ui=terminalScript(['clear','$save'],[],[true,true]);assert.equal(await editGitHub(f.manager,ui,f.manager.config()),true);
  const raw=JSON.parse(readFileSync(f.file,'utf8'));assert.equal(raw.github.token,undefined);assert.ok(ui.messages.every(s=>!s.includes('synthetic-github-secret')));
+});
+
+
+test('workbench schedule controls enforce transitions, stale state, and current access',t=>{
+ const f=fixture(t),s=new Store(join(f.data,'bot.sqlite'));
+ const source:Incoming={key:'schedule-origin',messageId:'schedule-origin',chatKey:'chat',chatId:'chat',senderId:'alice',text:'/schedule add task daily 2099-01-01T09:00+08:00 work',envelope:{version:1,type:'text',kind:'instruction',chatType:'p2p',scopeKey:'chat',materials:[],limitations:[]}};
+ s.enqueue(source);const cwd=chatWorkspace(f.data,'chat:user:alice');mkdirSync(cwd,{recursive:true});
+ const reply=new Schedules(s).command(source,()=>({cwd,policyHash:'old'}))!,id=/S-[A-F0-9]{12}/.exec(reply)![0];
+ const nextAt=Number(s.db.prepare('SELECT nextAt FROM schedules WHERE id=?').get(id)?.nextAt);
+ assert.deepEqual(f.manager.scheduleAction({id,action:'pause',state:'active',nextAt}),{ok:true});
+ assert.throws(()=>f.manager.scheduleAction({id,action:'pause',state:'active',nextAt}),/changed|变化/i);
+ assert.equal(s.db.prepare('SELECT state FROM schedules WHERE id=?').get(id)?.state,'paused');
+ const changed={...f.raw,feishu:{...f.raw.feishu,allowedUserIds:[]}};writeFileSync(f.file,JSON.stringify(changed));
+ assert.throws(()=>f.manager.scheduleAction({id,action:'resume',state:'paused',nextAt}),/unavailable|不可用/i);
+ assert.equal(s.db.prepare('SELECT state FROM schedules WHERE id=?').get(id)?.state,'paused');
+ writeFileSync(f.file,JSON.stringify(f.raw));
+ assert.deepEqual(f.manager.scheduleAction({id,action:'resume',state:'paused',nextAt}),{ok:true});
+ assert.throws(()=>f.manager.scheduleAction({id,action:'delete',state:'active',nextAt}),/不支持|not available/i);
+ f.manager.scheduleAction({id,action:'pause',state:'active',nextAt});
+ assert.deepEqual(f.manager.scheduleAction({id,action:'delete',state:'paused',nextAt}),{ok:true});
+ assert.equal(s.db.prepare('SELECT state FROM schedules WHERE id=?').get(id)?.state,'deleted');s.close();
+});
+
+test('workbench deletes completed schedules and protects the schedule action endpoint',async t=>{
+ const f=fixture(t),s=new Store(join(f.data,'bot.sqlite'));
+ s.enqueue({key:'schedule-source',messageId:'s',chatKey:'chat',chatId:'chat',senderId:'alice',text:'reminder'});
+ s.db.prepare('INSERT INTO schedules VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run('S-AAAAAAAAAAAA','alice','chat','chat','schedule-source','reminder','old',null,1000,'completed',null,1);s.close();
+ const ui=await startUi(f.manager);t.after(()=>ui.close());const post=(cookie='',origin=ui.url)=>fetch(ui.url+'/api/schedules/action',{method:'POST',headers:{'Content-Type':'application/json',Origin:origin,...(cookie?{Cookie:cookie}:{})},body:JSON.stringify({id:'S-AAAAAAAAAAAA',action:'delete',state:'completed',nextAt:1000})});
+ assert.equal((await post()).status,401);
+ const login=await fetch(ui.url+'/api/session',{method:'POST',headers:{'Content-Type':'application/json',Origin:ui.url},body:JSON.stringify({code:ui.entryUrl.split('#')[1]})});const cookie=login.headers.get('set-cookie')!;
+ assert.equal((await post(cookie,'https://attacker.invalid')).status,403);assert.equal((await post(cookie)).status,200);
+ const after=new Store(join(f.data,'bot.sqlite'),true);assert.equal(after.db.prepare('SELECT state FROM schedules WHERE id=?').get('S-AAAAAAAAAAAA')?.state,'deleted');after.close();
 });

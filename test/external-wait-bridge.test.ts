@@ -50,7 +50,7 @@ test('bridge persists both ledgers, parks without a human resume route, and reje
   assert.equal(externalWait.taskId, f.taskId); assert.equal(externalWait.runId, f.runId);
   assert.equal(f.tasks.get(f.taskId)?.state, 'waiting');
   const notice = String(f.store.db.prepare('SELECT content FROM outbox WHERE kind=?').get(`wait:${f.id}`)?.content);
-  assert.match(notice, /普通回复、引用、按钮或 \/resume 都不会跳过条件/);
+  assert.match(notice, /普通回复、引用或按钮不会跳过条件/);
   assert.doesNotMatch(notice, new RegExp(`/resume ${f.id}`));
 
   const forged = message('forged', 'checks passed'); f.store.enqueue(forged);

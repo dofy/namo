@@ -16,10 +16,12 @@ import { recordProgress } from './public-progress.js';
 import { Waits } from './waits.js';
 import { requestWait } from './external-wait-bridge.js';
 import { loadRunImages } from './image-inputs.js';
-import { executionPolicy, taskAuthorizationValid } from './access.js';
+import { admitted, executionPolicy, taskAuthorizationValid } from './access.js';
 import { readReview, assertReviewDelivery } from './github-review.js';
 import { mcpRead, assertMcpDelivery } from './mcp-connections.js';
 import { githubApi } from './github-api.js';
+import { Schedules } from './schedules.js';
+import { conversationControl } from './conversation-control.js';
 
 process.umask(0o077);
 async function main(): Promise<void> {
@@ -83,7 +85,7 @@ async function main(): Promise<void> {
             write(() => {
               tasks.dispatch(revision.inboxKey, state); runnerEvent(store, runId, `revision_${state}`);
               if (state !== 'accepted') store.addOutput(revision.inboxKey, 'notice',
-                `任务 ${task.id} 的补充${state === 'unknown' ? '提交结果不明' : '未被当前轮接受'}，未自动重送。请用 /task 核对。`);
+                `任务 ${task.id} 的补充${state === 'unknown' ? '提交结果不明' : '未被当前轮接受'}，未自动重送。请询问任务状态。`);
             });
           }
         })().catch(() => { storageFailed = true; abort.abort('storage_failed'); }).finally(() => { steering = undefined; });
@@ -111,6 +113,7 @@ async function main(): Promise<void> {
         threadId: tasks.thread(task), signal: abort.signal,
         onProcess: pid => write(() => { store.db.prepare('UPDATE runner_jobs SET runtimePid=? WHERE runId=?').run(pid, runId); runnerEvent(store, runId, 'runtime_started'); }),
         onThread: thread => write(() => {
+          if (!new Waits(store).resume(task)) store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`control-tools-v3-thread:${thread}`,'1');
           store.saveThread(tasks.sessionKey(task), thread); store.saveRun(task.inboxKey, thread); tasks.saveRun(runId, thread);
           runnerEvent(store, runId, 'thread_bound');
         }),
@@ -128,6 +131,20 @@ async function main(): Promise<void> {
         },
         onReview: args => readReview(store,file,task,args,abort.signal),
         ...(config.github && (config.github.source==='gh'||!!config.github.token)?{onGitHub:(args:unknown,signal:AbortSignal)=>githubApi(store,file,task,args,signal)}:{}),
+        onControl: (args,callId) => {
+          const latest=loadConfig(file);
+          if(abort.signal.aborted || !taskAuthorizationValid(config,latest,message)) throw new RuntimeError('access_configuration_changed');
+          owned();
+          return conversationControl(store,latest,message,task,args,callId,redact,t=>{
+            try {const source=store.get(t.inboxKey);if(!source||!admitted(latest.feishu,source.senderId,source.chatId,source.envelope?.tenantKey))return false;
+              assertReviewDelivery(store,latest,t);assertMcpDelivery(store,latest,t);return true;}catch{return false;}
+          });
+        },
+        onSchedule: (args,callId) => {
+          if(abort.signal.aborted || !taskAuthorizationValid(config,loadConfig(file),message)) throw new RuntimeError('access_configuration_changed');
+          owned();
+          return new Schedules(store).tool(message,args,callId,()=>({cwd:task.cwd,policyHash:task.policyHash,directories:config.codex.directories??[],...(selection.profileId!=='codex'?{agentSelection:selection}:{})}));
+        },
         onReady: next => { controls = next; steer(); },
         onActivity: phase => write(() => recordActivity(store, runId, phase)),
         onProgress: event => write(() => recordProgress(store, runId, event, redact)),

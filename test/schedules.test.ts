@@ -148,3 +148,19 @@ test('an unrelated saved authorization change does not pause an authorized sched
  raw.feishu.allowedUserIds.push('other');writeFileSync(file,JSON.stringify(raw));engine.start();
  await waitFor(()=>calls===1,4000);assert.equal(store.db.prepare('SELECT state FROM schedules').get()?.state,'completed');
 });
+
+test('natural language schedule tool persists, scopes and deduplicates operations', t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-schedule-tool-')),store=new Store(join(dir,'db'));t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true});});
+ const m=message('natural','每天搜索并更新项目');store.enqueue(m);
+ const schedules=new Schedules(store),args={operation:'create',kind:'task',frequency:'daily',time:'2099-01-01T09:00+08:00',content:'搜索并更新项目，有新增时简报'};
+ const first=schedules.tool(m,args,'call-1',()=>({cwd:dir,policyHash:'policy'})) as {result:string};
+ assert.match(first.result,/已创建/);assert.match((schedules.tool(m,args,'call-1',()=>({})) as {result:string}).result,/已创建/);
+ assert.equal(store.db.prepare('SELECT COUNT(*) n FROM schedules').get()?.n,1);
+ assert.match((schedules.tool(m,{operation:'list'},'call-2',()=>({})) as {result:string}).result,/2099-01-01T09:00:00.000\+08:00/);
+ const id=/S-[A-F0-9]{12}/.exec(first.result)![0];
+ const other=message('other','删除任务','other');store.enqueue(other);
+ assert.match((schedules.tool(other,{operation:'delete',id},'call-3',()=>({})) as {result:string}).result,/未找到/);
+ assert.match((schedules.tool({...m,key:'schedule:S-AAAAAAAAAAAA:1'},args,'call-4',()=>({})) as {error:string}).error,/不能自行/);
+ assert.equal(store.db.prepare('SELECT state FROM schedules').get()?.state,'active');
+ assert.match((schedules.tool(m,{operation:'pause',id},'call-5',()=>({})) as {result:string}).result,/已暂停/);
+});

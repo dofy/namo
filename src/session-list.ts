@@ -52,13 +52,13 @@ export function sessionList(store: Store, message: Incoming, options: {
       `${literal(excerpt(options.redact(row.cwd ?? '隔离目录'), 40))} · ${row.taskCount} 项任务${latest ? ` · 最近任务${taskStateLabel(latest.state)}` : ''}`,
       `最近活动：${date.format(row.lastActiveAt)}`,
       ...(latest && latest.id !== first?.id && recent && recent !== title ? [`最近：${literal(recent)}`] : []),
-      `继续此会话：\`/session ${row.id}\``,
+      `会话编号：${row.id}`,
     ].join('\n'));
     if (entries.length === 10) break;
   }
-  if (!entries.length) return '**会话列表**\n\n尚无可用会话。直接发送任务即可创建；也可以用 `/new` 开始新会话。';
+  if (!entries.length) return '**会话列表**\n\n尚无可用会话。直接发送任务即可创建，也可以让我开始新会话。';
   return ['**会话列表**', `最多显示 10 条；当前会话置顶，其余按最近活动排序。时间：${zone}。\n标题取自首条请求。`,
     ...entries,
-    '发送对应的 `/session W-编号` 后，再发送新要求即可续接上下文；不会重跑旧任务。\n正在等待补充的任务，请用 `/tasks` 找到后查看 `/task N-编号` 的恢复指引。\n新开会话：`/new`',
+    '告诉我要继续哪个会话，再发送新要求即可续接上下文；不会重跑旧任务。\n正在等待补充的任务，可以让我查看并询问如何继续。',
   ].join('\n\n');
 }

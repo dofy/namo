@@ -1,17 +1,19 @@
 import { randomBytes } from 'node:crypto';
 import { Store, type Incoming } from './store.js';
 import { scopeOf } from './tasks.js';
+import { t as tr } from './locale.js';
 
 interface Schedule {
   id:string; ownerId:string; chatKey:string; scopeKey:string; sourceKey:string;
   kind:'reminder'|'task'; content:string; intervalMs:number|null; nextAt:number;
   state:string; binding:string|null;
 }
-const HELP = '**定时任务**\n`/schedule list` 查看\n`/schedule add reminder|task once|daily|weekly 2026-11-01T09:00+08:00 内容` 创建\n`/schedule pause|resume|delete S-编号` 管理\n时间必须含 UTC 偏移；daily 和 weekly 按固定间隔重复。仅支持私聊，服务停止时不会运行；恢复后合并错过的触发。';
+const HELP = '**定时任务**\n在私聊中直接告诉我你要创建、查看、暂停、恢复或删除的定时任务。创建时请说明内容、时间和时区；每日和每周按固定间隔重复。服务停止时不会运行，恢复后合并错过的触发。';
 export class Schedules {
   constructor(private store:Store) {}
   private displayTime(row:Schedule):string {
-    const text=this.store.get(row.sourceKey)?.text??'',match=/^\/schedule\s+add\s+(?:reminder|task)\s+(?:once|daily|weekly)\s+\S*?(Z|[+-]\d{2}:\d{2})(?:\s|$)/.exec(text.trim());
+    const saved=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`schedule-time:${row.id}`);
+    const text=this.store.get(row.sourceKey)?.text??'',match=saved ? /(Z|[+-]\d{2}:\d{2})$/.exec(String(saved.value)) : /^\/schedule\s+add\s+(?:reminder|task)\s+(?:once|daily|weekly)\s+\S*?(Z|[+-]\d{2}:\d{2})(?:\s|$)/.exec(text.trim());
     if(!match||match[1]==='Z')return new Date(row.nextAt).toISOString();
     const offset=match[1],minutes=(Number(offset.slice(1,3))*60+Number(offset.slice(4,6)))*(offset[0]==='-'?-1:1);
     if(!Number.isFinite(minutes)||Math.abs(minutes)>1439)return new Date(row.nextAt).toISOString();
@@ -71,6 +73,61 @@ export class Schedules {
     const interval=add[2]==='daily'?86_400_000:add[2]==='weekly'?604_800_000:null;
     this.store.db.prepare('INSERT INTO schedules VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(id,m.senderId,m.chatKey,scopeOf(m),m.key,add[1],content,interval,next,'active',frozen,now);
     return `已创建 ${id} · ${add[1]==='reminder'?'提醒':'任务'} · ${add[2]}\n首次：${time}（${new Date(next).toISOString()}）\n内容：${content}\n服务需保持运行；错过多次时只补一次。`;
+  }
+  /** Local owner changes are serialized with dispatch; stale UI state never overwrites a trigger. */
+  changeFromWorkbench(id:string,expectedState:string,expectedNextAt:number,action:'pause'|'resume'|'delete',binding:(source:Incoming)=>unknown,now=Date.now()):void {
+    this.store.transaction(()=>{
+      const row=this.store.db.prepare('SELECT * FROM schedules WHERE id=?').get(id) as unknown as Schedule|undefined;
+      if(!row || row.state!==expectedState || row.nextAt!==expectedNextAt)throw Error(tr('schedules.conflict'));
+      if(action==='pause' && row.state!=='active' || action==='resume' && row.state!=='paused' || action==='delete' && !['paused','completed'].includes(row.state))throw Error(tr('schedules.invalidAction'));
+      let next=row.nextAt,nextBinding=row.binding;
+      if(action==='resume') {
+        if(row.kind==='task') {
+          const source=this.store.get(row.sourceKey);
+          if(!source)throw Error(tr('schedules.resumeUnavailable'));
+          try { const previous=JSON.parse(row.binding??'null'),current=binding(source) as {cwd?:unknown};
+            if(!previous || typeof previous.cwd!=='string' || !current || typeof current.cwd!=='string')throw Error();
+            nextBinding=JSON.stringify(current);
+          } catch {throw Error(tr('schedules.resumeUnavailable'));}
+        }
+        if(next<=now)next=row.intervalMs?next+(Math.floor((now-next)/row.intervalMs)+1)*row.intervalMs:now+1;
+      }
+      const nextState=action==='pause'?'paused':action==='resume'?'active':'deleted';
+      this.store.db.prepare('UPDATE schedules SET state=?,nextAt=?,binding=? WHERE id=?').run(nextState,next,nextBinding,id);
+      if(action==='resume') {const statusKey=`schedule-status:${id}`,saved=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(statusKey);
+        if(saved){const status=JSON.parse(String(saved.value));delete status.reason;this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(status),statusKey);}}
+    });
+  }
+  /** Model tool calls use the same validated scheduler and are scoped to the authenticated message. */
+  tool(m:Incoming, args:unknown, callId:string, binding:()=>unknown):unknown {
+    if(m.key.startsWith('schedule:') || m.envelope?.chatType!=='p2p' || m.envelope.kind!=='instruction')
+      return {error:'定时任务只能由本人在私聊中管理，定时触发不能自行创建或修改任务。'};
+    if(!args || typeof args!=='object' || Array.isArray(args)) return {error:'参数无效'};
+    const a=args as Record<string,unknown>;
+    if(Object.keys(a).some(k=>!['operation','kind','frequency','time','content','id'].includes(k))) return {error:'参数无效'};
+    if(typeof a.operation!=='string' || !['list','create','pause','resume','delete'].includes(a.operation)) return {error:'操作无效'};
+    let command:string;
+    if(a.operation==='list') command='/schedule list';
+    else if(a.operation==='create') {
+      if(typeof a.kind!=='string' || !['reminder','task'].includes(a.kind) || typeof a.frequency!=='string' || !['once','daily','weekly'].includes(a.frequency)
+        || typeof a.time!=='string' || /\s/.test(a.time) || typeof a.content!=='string') return {error:'创建参数无效'};
+      command=`/schedule add ${a.kind} ${a.frequency} ${a.time} ${a.content}`;
+    } else {
+      if(typeof a.id!=='string' || !/^S-[A-Fa-f0-9]{12}$/.test(a.id)) return {error:'请先确定任务编号'};
+      command=`/schedule ${a.operation} ${a.id}`;
+    }
+    const key=`schedule-tool:${m.key}:${callId}`;
+    return this.store.transaction(()=>{
+      const previous=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key);
+      if(previous)return JSON.parse(String(previous.value));
+      const synthetic={...m,text:command,envelope:{...m.envelope!,parentId:undefined,rootId:undefined,materials:[],limitations:[]}};
+      const result=this.command(synthetic,binding) ?? '操作无效';
+      const id=/^已创建 (S-[A-F0-9]{12})/.exec(result)?.[1];
+      if(id)this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(`schedule-time:${id}`,String(a.time).match(/(Z|[+-]\d{2}:\d{2})$/)?.[1]??'Z');
+      const value={result};
+      if(a.operation!=='list') this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(key,JSON.stringify(id?{result:`已创建 ${id}；此前工具调用已完成。`}:value));
+      return value;
+    });
   }
   due(now:number, dispatch:(s:Schedule,source:Incoming)=>void|false):void {
     this.store.transaction(()=>{
