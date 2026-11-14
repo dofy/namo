@@ -89,3 +89,34 @@ createInterface({input:process.stdin}).on('line',line=>{
     assert.equal(args.some(v => v.includes('mcp_servers.private')), false);
   } finally { await rpc.close(); }
 });
+
+test('browser prototype fixes operation shape and never accepts a caller space or script', async () => {
+  const { EgoBrowserPrototype, browserAction } = await import('../src/ego-browser-prototype.js');
+  for (const action of [
+    { operation: 'snapshot', id: 22 }, { operation: 'open', url: 'file:///etc/passwd' },
+    { operation: 'open', url: 'https://name:secret@example.com/' },
+    { operation: 'evaluate', script: 'process.exit()' },
+    { operation: 'click', selector: 'x', script: 'process.exit()' },
+  ]) assert.throws(() => browserAction(action));
+  const scripts: string[] = [];
+  const run = async (script: string) => { scripts.push(script); return 'NAMO_RESULT={"id":42,"result":"ok"}\n'; };
+  const first = new EgoBrowserPrototype(run), second = new EgoBrowserPrototype(run);
+  const signal = new AbortController().signal;
+  await first.call({ operation: 'open', url: 'https://example.com/' }, signal);
+  await second.call({ operation: 'snapshot' }, signal);
+  await first.call({ operation: 'click', selector: 'button";process.exit();//' }, signal);
+  assert.match(scripts[2], /ownership!=="agent"/);
+  assert.ok(scripts[2].includes('\\\\\\";process.exit()'));
+  assert.ok(!scripts[0].includes('process.exit()'));
+  await assert.rejects(first.call({ operation: 'snapshot', id: 43 }, signal));
+});
+
+test('browser prototype refuses subsequent commands after an unknown outcome', async () => {
+  const { EgoBrowserPrototype } = await import('../src/ego-browser-prototype.js');
+  let calls = 0;
+  const browser = new EgoBrowserPrototype(async () => { calls++; throw Error('ambiguous'); });
+  const signal = new AbortController().signal;
+  await assert.rejects(browser.call({ operation: 'snapshot' }, signal), /browser_result_unknown/);
+  await assert.rejects(browser.call({ operation: 'snapshot' }, signal), /browser_unavailable/);
+  assert.equal(calls, 1);
+});

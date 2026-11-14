@@ -20,6 +20,7 @@ export interface RunRequest {
   onReview?: (arguments_: unknown) => Promise<unknown>;
   onGitHub?: (arguments_: unknown, signal: AbortSignal) => Promise<unknown>;
   onMcp?: (arguments_: unknown, signal: AbortSignal) => Promise<unknown>;
+  onBrowser?: (arguments_: unknown, signal: AbortSignal) => Promise<unknown>;
   onEvidence?: (item: EvidenceItem) => void;
   onActivity?: (phase: ActivityPhase) => void;
   onProgress?: (event: PublicProgressEvent) => void;

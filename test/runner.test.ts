@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpa
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config.js';
 import { Store, type Incoming } from '../src/store.js';
@@ -26,14 +27,14 @@ import { setUserModel } from '../src/model-preferences.js';
 const wait = (condition: () => boolean, timeoutMs = 7000) => waitFor(condition, timeoutMs);
 const fake = `#!/usr/bin/env node
 import {createInterface} from 'node:readline';
-import {appendFileSync,existsSync,mkdirSync,writeFileSync} from 'node:fs';
+import {appendFileSync,existsSync,mkdirSync,writeFileSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
-let cwd,thread='thread',turn='turn',timer;
+let cwd,thread='thread',turn='turn',timer,browserExtra=false;
 process.on('SIGTERM',()=>{if(!cwd||!existsSync(join(cwd,'hold-close')))process.exit(0);appendFileSync(join(cwd,'closing'),'ready');setInterval(()=>{if(existsSync(join(cwd,'exit-now'))){appendFileSync(join(cwd,'exiting'),'ready');process.exit(0);}},5);});
 const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
 const done=text=>{clearInterval(timer);send({method:'item/completed',params:{threadId:thread,turnId:turn,item:{id:'command',type:'commandExecution',command:'node --test',cwd,status:'completed',exitCode:0,durationMs:12}}});send({method:'turn/completed',params:{threadId:thread,turn:{id:turn,status:'completed',items:[{id:'final',type:'agentMessage',phase:'final_answer',text}]}}});};
 createInterface({input:process.stdin}).on('line',line=>{
- const m=JSON.parse(line);if(m.id===99&&!m.method){appendFileSync(join(cwd,'mcp-discovery'),m.result?.contentItems?.[0]?.text??'error');return done('discovered');}if(m.id===undefined)return;
+ const m=JSON.parse(line);if(m.id===99&&!m.method){appendFileSync(join(cwd,'mcp-discovery'),m.result?.contentItems?.[0]?.text??'error');if(browserExtra){send({id:100,method:'item/tool/call',params:{namespace:null,tool:'ego_browser',threadId:thread,turnId:turn,callId:'browser-press',arguments:{operation:'press',selector:'body',key:'Tab'}}});return;}return done('discovered');}if(m.id===100&&!m.method){appendFileSync(join(cwd,'browser-press-result'),m.result?.contentItems?.[0]?.text??'error');return done('browser done');}if(m.id===undefined)return;
  if(m.method==='initialize')return send({id:m.id,result:{}});
  if(m.method==='config/read')return send({id:m.id,result:{config:{features:{plugins:false,apps:false}}}});
  if(m.method==='model/list')return send({id:m.id,result:{data:[{model:'default-model',isDefault:true}],nextCursor:null}});
@@ -55,6 +56,8 @@ createInterface({input:process.stdin}).on('line',line=>{
   if(actual.messages[0].text==='control-check'){send({id:99,method:'item/tool/call',params:{namespace:null,tool:'manage_namo',threadId:thread,turnId:turn,callId:'control-check',arguments:{operation:'tasks'}}});return;}
   if(actual.messages[0].text==='schedule-check'){send({id:99,method:'item/tool/call',params:{namespace:null,tool:'manage_schedule',threadId:thread,turnId:turn,callId:'schedule-check',arguments:{operation:'create',kind:'task',frequency:'daily',time:'2099-01-01T09:00+08:00',content:'搜索项目并汇报'}}});return;}
   if(actual.messages[0].text==='mcp-check'){send({id:99,method:'item/tool/call',params:{namespace:null,tool:'mcp_read',threadId:thread,turnId:turn,callId:'mcp',arguments:{operation:'connections'}}});return;}
+  if(actual.messages[0].text==='browser-check'){send({id:99,method:'item/tool/call',params:{namespace:null,tool:'ego_browser',threadId:thread,turnId:turn,callId:'browser',arguments:{operation:'open',url:readFileSync(join(cwd,'browser-url'),'utf8')}}});return;}
+  if(actual.messages[0].text==='browser-extra'){browserExtra=true;send({id:99,method:'item/tool/call',params:{namespace:null,tool:'ego_browser',threadId:thread,turnId:turn,callId:'browser',arguments:{operation:'open',url:readFileSync(join(cwd,'browser-url'),'utf8')}}});return;}
   if(actual.messages[0].text==='instant')return done('saved answer');
   timer=setInterval(()=>{if(existsSync(join(cwd,'release')))done('saved answer');},30);return;
  }
@@ -615,4 +618,89 @@ test('approved directory cannot be swapped before configuration is saved',t=>{
  const id=/DIR-[A-F0-9]{12}/.exec(requestDirectory(f.store,f.config,m,task,dir,'finish'))![0];decideDirectory(f.store,f.config,id,m,true);
  renameSync(dir,`${dir}-old`);mkdirSync(dir);applyDirectoryRequests(f.store,f.config,()=>assert.fail('must not continue'));
  assert.equal(getDirectoryRequest(f.store,id)?.state,'failed');assert.equal(loadConfig(f.file).codex.directories?.includes(dir),false);
+});
+
+test('detached browser worker waits for the owner, survives receiver restart, and resumes once', { skip: process.platform !== 'darwin' || !existsSync(join(process.env.HOME ?? '', '.local/bin/ego-browser')) }, async t => {
+  const f=fixture(t), receiver=f.receiver(); receiver.start();
+  const server=createServer((_req,res)=>res.end('<title>Namo test page</title><p>Browser fixture</p>')).listen(0,'127.0.0.1');
+  await new Promise<void>(resolve=>server.once('listening',resolve));t.after(()=>server.close());
+  writeFileSync(join(f.project,'browser-url'),`http://127.0.0.1:${(server.address() as {port:number}).port}/`);
+  receiver.accept(message('browser-task','browser-check'));
+  await wait(()=>!!f.store.db.prepare("SELECT 1 FROM settings WHERE key LIKE 'mcp-approval:%'").get());
+  const row=f.store.db.prepare("SELECT key FROM settings WHERE key LIKE 'mcp-approval:%'").get()!;
+  const id=String(row.key).slice('mcp-approval:'.length);
+  assert.ok(JSON.parse(readFileSync(join(f.project,'thread-tools'),'utf8').trim()).includes('ego_browser'));
+  assert.equal(f.job().state,'running');
+  const intruder={...message('browser-intruder',`确认操作 ${id}`),senderId:'mallory'};
+  receiver.accept(intruder);
+  await wait(()=>f.store.get('browser-intruder')?.state==='replied');
+  assert.equal(JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`mcp-approval:${id}`)?.value)).state,'pending');
+  await receiver.stop();
+  const resumed=f.receiver();resumed.start();resumed.accept(message('browser-consent',`确认操作 ${id}`));
+  await wait(()=>f.store.get('browser-task')?.state==='replied',15000);
+  assert.equal(f.job().state,'completed');
+  assert.equal(JSON.parse(String(f.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`mcp-approval:${id}`)?.value)).state,'completed');
+  assert.match(readFileSync(join(f.project,'mcp-discovery'),'utf8'),/Browser fixture/);
+  assert.equal(f.calls(),1);
+});
+
+test('additional browser capability needs a second exact approval', { skip: process.platform !== 'darwin' || !existsSync(join(process.env.HOME ?? '', '.local/bin/ego-browser')) }, async t => {
+  const f=fixture(t), receiver=f.receiver();receiver.start();
+  const server=createServer((_req,res)=>res.end('<title>Namo test page</title><p>Browser fixture</p>')).listen(0,'127.0.0.1');
+  await new Promise<void>(resolve=>server.once('listening',resolve));t.after(()=>server.close());
+  writeFileSync(join(f.project,'browser-url'),`http://127.0.0.1:${(server.address() as {port:number}).port}/`);
+  receiver.accept(message('browser-extra-task','browser-extra'));
+  const approvals=()=>f.store.db.prepare("SELECT key,value FROM settings WHERE key LIKE 'mcp-approval:%'").all().map(r=>({id:String(r.key).slice('mcp-approval:'.length),...JSON.parse(String(r.value))}));
+  await wait(()=>approvals().length===1);
+  receiver.accept(message('browser-extra-first',`确认操作 ${approvals()[0].id}`));
+  await wait(()=>approvals().length===2,12000);
+  const second=approvals().find(x=>x.tool==='press')!;
+  assert.deepEqual(second.arguments,{selector:'body',key:'Tab'});
+  assert.equal(second.state,'pending');
+  assert.equal(existsSync(join(f.project,'browser-press-result')),false);
+  receiver.accept(message('browser-extra-second',`确认操作 ${second.id}`));
+  await wait(()=>f.store.get('browser-extra-task')?.state==='replied',12000);
+  assert.equal(approvals().find(x=>x.id===second.id).state,'completed');
+  assert.match(readFileSync(join(f.project,'browser-press-result'),'utf8'),/Browser fixture/);
+});
+
+test('browser tool is unavailable to group chats', { skip: process.platform !== 'darwin' || !existsSync(join(process.env.HOME ?? '', '.local/bin/ego-browser')) }, async t => {
+  const f=fixture(t), receiver=f.receiver();receiver.start();
+  const group=message('browser-group','instant','group-chat');group.envelope!.chatType='group';
+  receiver.accept(group);await wait(()=>f.store.get('browser-group')?.state==='replied');
+  const task=f.tasks.get(f.store.get('browser-group')!.taskId!)!;
+  assert.equal(JSON.parse(readFileSync(join(task.cwd,'thread-tools'),'utf8').trim()).includes('ego_browser'),false);
+});
+
+test('permanent browser grant persists across workers, includes press, and revocation restores confirmation', { skip: process.platform !== 'darwin' || !existsSync(join(process.env.HOME ?? '', '.local/bin/ego-browser')) }, async t => {
+ const f=fixture(t), receiver=f.receiver();receiver.start();
+ const server=createServer((_req,res)=>res.end('<title>Namo test page</title><p>Browser fixture</p>')).listen(0,'127.0.0.1');
+ await new Promise<void>(resolve=>server.once('listening',resolve));t.after(()=>server.close());
+ writeFileSync(join(f.project,'browser-url'),`http://127.0.0.1:${(server.address() as {port:number}).port}/`);
+ const approvals=()=>f.store.db.prepare("SELECT key,value FROM settings WHERE key LIKE 'mcp-approval:%'").all().map(r=>({id:String(r.key).slice('mcp-approval:'.length),...JSON.parse(String(r.value))}));
+ receiver.accept(message('always-first','browser-extra'));await wait(()=>approvals().length===1);
+ receiver.accept(message('always-approve',`永久允许 ${approvals()[0].id}`));
+ await wait(()=>f.store.get('always-first')?.state==='replied',15000);
+ assert.equal(approvals().length,1);assert.equal(approvals()[0].state,'completed');assert.match(readFileSync(join(f.project,'browser-press-result'),'utf8'),/Browser fixture/);
+ receiver.accept(message('always-second','browser-extra'));await wait(()=>f.store.get('always-second')?.state==='replied',15000);
+ assert.equal(approvals().length,1);
+ receiver.accept(message('always-revoke','撤销浏览器永久授权'));await wait(()=>f.store.get('always-revoke')?.state==='replied');
+ receiver.accept(message('always-third','browser-check'));await wait(()=>approvals().length===2,15000);
+ const pending=approvals().find(a=>a.state==='pending');assert.equal(pending.tool,'task_browser_access');
+ receiver.accept(message('always-reject',`拒绝操作 ${pending.id}`));await wait(()=>f.store.get('always-third')?.state==='replied',15000);
+});
+
+test('press confirmation can enable the permanent browser option for subsequent tasks', { skip: process.platform !== 'darwin' || !existsSync(join(process.env.HOME ?? '', '.local/bin/ego-browser')) }, async t => {
+ const f=fixture(t),receiver=f.receiver();receiver.start();
+ const server=createServer((_req,res)=>res.end('<title>Namo test page</title><p>Browser fixture</p>')).listen(0,'127.0.0.1');
+ await new Promise<void>(resolve=>server.once('listening',resolve));t.after(()=>server.close());
+ writeFileSync(join(f.project,'browser-url'),`http://127.0.0.1:${(server.address() as {port:number}).port}/`);
+ const approvals=()=>f.store.db.prepare("SELECT key,value FROM settings WHERE key LIKE 'mcp-approval:%'").all().map(r=>({id:String(r.key).slice('mcp-approval:'.length),...JSON.parse(String(r.value))}));
+ receiver.accept(message('press-always-first','browser-extra'));await wait(()=>approvals().length===1);
+ receiver.accept(message('press-always-once',`确认操作 ${approvals()[0].id}`));await wait(()=>approvals().length===2,15000);
+ const press=approvals().find(a=>a.tool==='press');assert.equal(press.state,'pending');
+ receiver.accept(message('press-always-enable',`永久允许 ${press.id}`));await wait(()=>f.store.get('press-always-first')?.state==='replied',15000);
+ assert.equal(approvals().find(a=>a.id===press.id).state,'completed');
+ receiver.accept(message('press-always-next','browser-check'));await wait(()=>f.store.get('press-always-next')?.state==='replied',15000);
+ assert.equal(approvals().length,2);
 });

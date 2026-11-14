@@ -1,5 +1,5 @@
 import { sessionList } from './session-list.js';
-import { mcpApprovalCommand } from './mcp-write-approval.js';
+import { mcpApprovalCommand, revokeBrowserGrant } from './mcp-write-approval.js';
 import { memoryDirectories } from './memory-access.js';
 import { AgentRegistryError, selectAgent, selectedPolicyHash, type AgentSelection } from './agent-registry.js';
 import { mkdirSync, realpathSync, readFileSync } from 'node:fs';
@@ -191,8 +191,11 @@ export class Engine {
       const stop=/^(?:请|麻烦|帮我|请帮我)?(?:停止|取消|终止)(?:一下)?(?:任务|当前任务|这个任务|正在运行的任务)(?:\s+(N-[A-Fa-f0-9]{12}))?$/u.exec(text);
       const all=/^(?:请|麻烦|帮我|请帮我)?(?:停止|取消|终止)(?:所有|全部)任务$/u.test(text);
       const mcpAction=/^(?:请)?(确认|同意|拒绝|查看|查询)(?:执行|操作|审批|状态)*\s*(MA-[A-Fa-f0-9]{12})$/u.exec(text);
+      const browserAlways=/^(?:请)?永久允许\s*(MA-[A-Fa-f0-9]{12})$/u.exec(text);
       const pushAction=/^(?:请)?(确认|同意|拒绝|查看|查询)(?:执行|推送|审批|状态)*\s*(AP-[A-Fa-f0-9]{12})$/u.exec(text);
-      if(mcpAction) {
+      if(browserAlways) {
+        m={...m,text:`/mcp-approve ${browserAlways[1]} --always`};
+      } else if(mcpAction) {
         const action=['查看','查询'].includes(mcpAction[1])?'status':mcpAction[1]==='拒绝'?'reject':'approve';
         m={...m,text:`/mcp-${action} ${mcpAction[2]}${action==='approve'?' --confirm':''}`};
       } else if(pushAction) {
@@ -228,7 +231,12 @@ export class Engine {
       this.store.finish(m.key,reply);return true;
     }
     if(this.approvals?.handleControl(m))return true;
-    if(mcpApprovalCommand(this.store,m))return true;
+    if(this.config.file && /^(?:\/browser-revoke|撤销浏览器永久授权)[。！!\s]*$/u.test(m.text.trim())) {
+      if(!this.store.claim(m.key))return true;
+      const ok=revokeBrowserGrant(this.store,loadConfig(this.config.file),m);
+      this.store.finish(m.key,ok?'已撤销本人私聊的浏览器永久授权；已发出的操作不会撤回。':'只能由已配对用户在私聊中撤销浏览器永久授权。');return true;
+    }
+    if(mcpApprovalCommand(this.store,m,this.config.file?loadConfig(this.config.file):undefined))return true;
     const scheduleReply=new Schedules(this.store).command(m,()=>this.workspace(m));
     if(scheduleReply!==undefined){if(this.store.claim(m.key))this.store.finish(m.key,scheduleReply);return true;}
     const knownUsers=this.config.feishu?.access?[m.senderId]:this.config.feishu?.allowedUserIds??[];
@@ -673,7 +681,7 @@ export class Engine {
         onSchedule: (args,callId) => new Schedules(this.store).tool(m,args,callId,()=>this.workspace(m,task)),
         onActivity: phase => recordActivity(this.store, run, phase),
         onProgress: event => recordProgress(this.store, run, event, this.redact),
-        onThread: threadId => { if (!new Waits(this.store).resume(task)) this.store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`control-tools-v3-thread:${threadId}`,'1'); this.store.saveThread(this.tasks.sessionKey(task), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
+        onThread: threadId => { if (!new Waits(this.store).resume(task)) this.store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`control-tools-v4-thread:${threadId}`,'1'); this.store.saveThread(this.tasks.sessionKey(task), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
         onTurn: turnId => { const threadId = this.store.thread(this.tasks.sessionKey(task)); if (threadId) { this.store.saveRun(m.key, threadId, turnId); this.tasks.saveRun(run, threadId, turnId); } },
         onReady: controls => { const slot = this.active.get(this.slotKey(task)); if (slot?.task.id === task.id) { slot.controls = controls; void this.steer(slot).catch(() => this.fatal('revision_storage_error')); } },
         onEvidence: item => evidence!.observe(item),

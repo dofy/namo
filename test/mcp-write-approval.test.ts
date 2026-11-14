@@ -55,3 +55,25 @@ test('a repeated operation warns when a previous dispatch has an unknown outcome
  const notice=String(f.store.db.prepare('SELECT content FROM outbox WHERE kind=?').get(`mcp-approval:${next}`)?.content);
  assert.match(notice,/此前相同操作的结果不明/);f.command(`/mcp-reject ${next}`);await assert.rejects(second,/mcp_approval_rejected/);
 });
+
+test('permanent browser permission is owner, chat and app scoped and revocable',async t=>{
+ const {browserGrant,revokeBrowserGrant}=await import('../src/mcp-write-approval.js');
+ const f=fixture(t),c={feishu:{appId:'app',domain:'feishu',allowedUserIds:['alice']}} as import('../src/config.js').Config;
+ const waiting=awaitMcpApproval(f.store,f.task,'ego-browser','local Ego Lite','task_browser_access',{},'browser',new AbortController().signal,()=>true);
+ const id=f.approval();let seq=0;
+ const input=(senderId='alice',chatKey='chat',chatType:'p2p'|'group'='p2p')=>{const key=`always-${++seq}`;return {key,messageId:key,chatKey,chatId:chatKey,senderId,text:`/mcp-approve ${id} --always`,envelope:{version:1 as const,type:'text' as const,kind:'instruction' as const,scopeKey:chatKey,chatType,materials:[],limitations:[]}};};
+ for(const m of [input('bob'),input('alice','other'),input('alice','chat','group')]){f.store.enqueue(m);mcpApprovalCommand(f.store,m,c);assert.equal(browserGrant(f.store,c,'alice','chat'),undefined);}
+ const m=input();f.store.enqueue(m);mcpApprovalCommand(f.store,m,c);const grant=browserGrant(f.store,c,'alice','chat');assert.ok(grant);
+ assert.equal(browserGrant(f.store,c,'alice','other'),undefined);assert.equal(browserGrant(f.store,{...c,feishu:{...c.feishu,appId:'other'}},'alice','chat'),undefined);
+ const done=await waiting;assert.equal(done.always,true);done('completed');
+ assert.equal(revokeBrowserGrant(f.store,c,input('bob')),false);assert.equal(browserGrant(f.store,c,'alice','chat'),grant);
+ assert.equal(revokeBrowserGrant(f.store,c,input()),true);assert.equal(browserGrant(f.store,c,'alice','chat'),undefined);
+});
+
+test('permanent browser approval cannot grant an arbitrary MCP',async t=>{
+ const f=fixture(t),c={feishu:{appId:'app',domain:'feishu',allowedUserIds:['alice']}} as import('../src/config.js').Config;
+ const waiting=awaitMcpApproval(f.store,f.task,'remote','https://example.com','create',{},'scope',new AbortController().signal,()=>true);
+ const id=f.approval();const m={key:'bad-always',messageId:'bad-always',chatKey:'chat',chatId:'chat',senderId:'alice',text:`/mcp-approve ${id} --always`,envelope:{version:1 as const,type:'text' as const,kind:'instruction' as const,scopeKey:'chat',chatType:'p2p' as const,materials:[],limitations:[]}};
+ f.store.enqueue(m);mcpApprovalCommand(f.store,m,c);assert.match(String(f.store.db.prepare("SELECT content FROM outbox WHERE inboxKey=?").get(m.key)?.content),/只适用于/);
+ f.command(`/mcp-reject ${id}`);await assert.rejects(waiting,/mcp_approval_rejected/);
+});

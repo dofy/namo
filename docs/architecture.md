@@ -53,6 +53,7 @@ flowchart TB
 | 入站与调度 | [engine](../src/engine.ts)、[tasks](../src/tasks.ts) | 先落库再确认；同聊天串行、全局限流、重叠真实目录互斥 |
 | 独立执行 | [runner](../src/runner.ts)、[worker](../src/runner-worker.ts) | 唯一运行归属；接收端重启后关联原运行，失联不重启模型；取消只停止所属进程组 |
 | Codex 协议 | [connection](../src/codex-connection.ts)、[runtime](../src/runtime.ts) | 官方 provider、独立认证、目录白名单；修订回执未知时不自动重送 |
+| 受限浏览器原型 | [ego-browser-prototype](../src/ego-browser-prototype.ts)、[worker](../src/runner-worker.ts) | 私聊配对用户逐任务批准；固定操作、宿主持有空间绑定；能力外操作和结果不明均不自动执行或重试 |
 | 人工 / 外部等待 | [waits](../src/waits.ts)、[external-waits](../src/external-waits.ts) | 等待释放执行资源，保留聊天顺序；回答绑定身份和版本；GitHub 固定 HEAD，恢复只消费一次 |
 | 身份与资源 | [access](../src/access.ts)、[path-policy](../src/path-policy.ts)、[skill-access](../src/skill-access.ts) | 组织准入保留；已准入成员共享目录与 MCP；续接与交付重验权限；Skills 仅只读开放启用的具体目录 |
 | 档案与记忆 | [assistant](../src/assistant.ts)、[memory](../src/memory.ts)、[extractor](../src/memory-extractor.ts) | 档案显式启用；长期事实带来源和范围；人工纠正、停用、删除不能被自动恢复 |

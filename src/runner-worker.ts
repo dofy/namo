@@ -1,6 +1,7 @@
 import { selectAgent, selectedPolicyHash, AgentRegistryError, agentCodexConfig } from './agent-registry.js';
 import { runtimeFor } from './agents.js';
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { loadConfig, type Config } from './config.js';
 import { readWorkerSnapshot } from './runtime-config.js';
@@ -22,6 +23,8 @@ import { mcpRead, assertMcpDelivery } from './mcp-connections.js';
 import { githubApi } from './github-api.js';
 import { Schedules } from './schedules.js';
 import { conversationControl } from './conversation-control.js';
+import { EgoBrowserPrototype, egoExecute, browserAction } from './ego-browser-prototype.js';
+import { awaitMcpApproval, browserGrant } from './mcp-write-approval.js';
 
 process.umask(0o077);
 async function main(): Promise<void> {
@@ -69,6 +72,18 @@ async function main(): Promise<void> {
       if (resolve(database) !== join(config.dataDir, 'bot.sqlite') || revision !== runnerJob(store, runId)!.configRevision
         || task.policyHash !== selectedPolicyHash(effectiveConfig, selection) || realpathSync(task.cwd) !== task.cwd) throw new RuntimeError('task_configuration_changed');
       const redact = makeRedactor([config.feishu.appSecret,config.github?.token??'',...(config.mcpConnections??[]).map(c=>c.token)]);
+      const egoBin=join(homedir(),'.local','bin','ego-browser');
+      const browserEligible=process.platform==='darwin' && existsSync(egoBin) && message.envelope?.chatType==='p2p'
+        && message.envelope.kind==='instruction' && config.feishu.allowedUserIds.includes(message.senderId)
+        && !message.key.startsWith('schedule:') && config.codex.networkAccess===true;
+      const browser=browserEligible ? new EgoBrowserPrototype(egoExecute(egoBin)) : undefined;
+      let browserGranted=false, browserBusy=false, permanentId:string|undefined;
+      const browserValid=()=>{
+        try { owned(); const latest=loadConfig(file); return !abort.signal.aborted && latest.codex.networkAccess===true
+          && latest.feishu.allowedUserIds.includes(message.senderId) && taskAuthorizationValid(config,latest,message)
+          && (!permanentId || browserGrant(store,latest,message.senderId,message.chatKey)===permanentId); }
+        catch { return false; }
+      };
       if (store.get(task.inboxKey)?.cancelRequested || abort.signal.aborted) throw new RuntimeError('cancelled');
       write(() => { evidence = new EvidenceRecorder(store, runId, task.cwd, selectedConfig.denyPaths, redact); });
       const steer = (): void => {
@@ -113,7 +128,7 @@ async function main(): Promise<void> {
         threadId: tasks.thread(task), signal: abort.signal,
         onProcess: pid => write(() => { store.db.prepare('UPDATE runner_jobs SET runtimePid=? WHERE runId=?').run(pid, runId); runnerEvent(store, runId, 'runtime_started'); }),
         onThread: thread => write(() => {
-          if (!new Waits(store).resume(task)) store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`control-tools-v3-thread:${thread}`,'1');
+          if (!new Waits(store).resume(task)) store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`control-tools-v4-thread:${thread}`,'1');
           store.saveThread(tasks.sessionKey(task), thread); store.saveRun(task.inboxKey, thread); tasks.saveRun(runId, thread);
           runnerEvent(store, runId, 'thread_bound');
         }),
@@ -129,6 +144,36 @@ async function main(): Promise<void> {
           }
           return response;
         },
+        ...(browser ? { onBrowser:async(args:unknown,signal:AbortSignal)=>{
+          const action=browserAction(args);
+          if(browserBusy || !browserValid() || signal.aborted)throw Error('browser_unavailable');
+          browserBusy=true;
+          try {
+            if(!browserGranted){
+              permanentId=browserGrant(store,loadConfig(file),message.senderId,message.chatKey);
+              if(!permanentId){
+                const finish=await awaitMcpApproval(store,task,'ego-browser','local Ego Lite','task_browser_access',
+                  {capability:'open, snapshot, click, fill',scope:'this task',initialAction:action.operation,
+                    ...(action.operation==='open'?{site:new URL(action.url).origin}:{})},'browser',signal,browserValid);
+                if(finish.always){permanentId=browserGrant(store,loadConfig(file),message.senderId,message.chatKey);if(!permanentId){finish('not_sent');throw Error('browser_unavailable');}}
+                finish('completed');
+              }
+              browserGranted=true;
+            }
+            let finish:((outcome:'completed'|'unknown'|'not_sent')=>void)|undefined;
+            if(permanentId && !['open','snapshot','click','fill','press','finish'].includes(action.operation))throw Error('browser_unsupported_action');
+            if(permanentId && action.operation==='press' && !['Enter','Tab','Escape','ArrowDown','ArrowUp'].includes(action.key))throw Error('browser_unsupported_action');
+            if(action.operation==='press' && !permanentId) {
+              const approval=await awaitMcpApproval(store,task,'ego-browser','local Ego Lite','press',
+                {selector:action.selector,key:action.key},'browser',signal,browserValid);
+              if(approval.always){permanentId=browserGrant(store,loadConfig(file),message.senderId,message.chatKey);if(!permanentId){approval('not_sent');throw Error('browser_unavailable');}}
+              finish=approval;
+            }
+            if(!browserValid() || signal.aborted){finish?.('not_sent');throw Error('browser_unavailable');}
+            try {const value=await browser.call(action,signal); finish?.('completed');return value;}
+            catch(error){finish?.('unknown');throw error;}
+          } finally {browserBusy=false;}
+        }} : {}),
         onReview: args => readReview(store,file,task,args,abort.signal),
         ...(config.github && (config.github.source==='gh'||!!config.github.token)?{onGitHub:(args:unknown,signal:AbortSignal)=>githubApi(store,file,task,args,signal)}:{}),
         onControl: (args,callId) => {
@@ -157,9 +202,15 @@ async function main(): Promise<void> {
           runnerEvent(store, runId, 'wait_requested'); return id;
         }),
       });
+      let browserCleanupFailed=false;
+      if(browser && browserGranted && !abort.signal.aborted) {
+        try { await browser.call({operation:'finish'},AbortSignal.timeout(5000)); }
+        catch { browserCleanupFailed=true; /* Never retry unknown or user-controlled browser state. */ }
+      }
+      if(browserCleanupFailed && raw.waiting) write(()=>store.addOutput(task.inboxKey,`browser-cleanup:${runId}`,'浏览器空间未能确认关闭，请在 Ego 中检查。'));
       assertReviewDelivery(store,loadConfig(file),task);
       assertMcpDelivery(store,loadConfig(file),task);
-      result = { ...raw, text: redact(raw.text), ...(raw.waiting ? { waiting: { ...raw.waiting, question: redact(raw.waiting.question), choices: raw.waiting.choices?.map(redact), questions: raw.waiting.questions?.map(q => ({question:redact(q.question),choices:q.choices.map(redact)})) } } : {}) };
+      result = { ...raw, text: redact(raw.text) + (browserCleanupFailed && !raw.waiting ? '\n\n浏览器空间未能确认关闭，请在 Ego 中检查。' : ''), ...(raw.waiting ? { waiting: { ...raw.waiting, question: redact(raw.waiting.question), choices: raw.waiting.choices?.map(redact), questions: raw.waiting.questions?.map(q => ({question:redact(q.question),choices:q.choices.map(redact)})) } } : {}) };
     } catch (e) {
       error = abort.signal.reason === 'worker_stopped' ? 'interrupted'
         : storageFailed ? 'runner_storage_error' : e instanceof RuntimeError || e instanceof AgentRegistryError ? e.code : 'runtime_error';

@@ -41,7 +41,7 @@ export class Tasks {
   }
   upgradeToolSession(t:Task):void {
     const key=this.sessionKey(t), thread=this.store.thread(key);
-    if(!thread || new Waits(this.store).resume(t) || this.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`control-tools-v3-thread:${thread}`)) return;
+    if(!thread || new Waits(this.store).resume(t) || this.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`control-tools-v4-thread:${thread}`)) return;
     this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
       .run(`session-refresh:${key}`,JSON.stringify({before:Date.now(),previousThread:thread}));
     this.store.clearThread(key);
