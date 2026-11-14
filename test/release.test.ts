@@ -37,12 +37,14 @@ test('release snapshot is deterministic, self-contained, and detects tampering',
   const temp = mkdtempSync(join(tmpdir(), 'namo-release-'));
   t.after(() => { if (lstatSync(temp).isDirectory()) { writable(temp); rmSync(temp, { recursive: true, force: true }); } });
   const fixture = source(join(temp, 'source'));
+  put(join(fixture.root, 'docs-site/index.html'), '<main>documentation</main>\n');
   const releases = join(temp, 'data', 'releases');
   const first = createRuntimeRelease(fixture.root, releases);
   const second = createRuntimeRelease(fixture.root, releases);
   assert.equal(second.id, first.id);
   assert.equal(second.root, first.root);
   assert.equal(verifyRuntimeRelease(first.root).id, first.id);
+  assert.equal(readFileSync(join(first.root, 'docs-site/index.html'), 'utf8'), '<main>documentation</main>\n');
   assert.equal(readFileSync(join(first.root, 'node_modules/fixture_runtime/index.js'), 'utf8'), 'export const dependency = "one";\n');
   assert.equal(lstatSync(join(first.root, 'node_modules/fixture_runtime')).isSymbolicLink(), false);
   assert.equal(dirname(first.worker), join(first.root, 'dist/src'));

@@ -12,7 +12,7 @@ pnpm run build
 pnpm cli init
 ```
 
-需要安装本机命令时，运行 `pnpm pack`，再用 `npm install -g ./namo-0.4.1.tgz` 安装（文件名以打包输出为准）。源码开发方式见[技术实现](architecture.md#开发与验证)。
+需要安装本机命令时，运行 `pnpm pack`，再用 `npm install -g` 安装生成的 `.tgz` 文件（文件名以打包输出为准）。源码开发方式见[技术实现](architecture.md#开发与验证)。
 
 `init` 在交互终端中依次完成：目录白名单 → 应用凭据 → 独立 Codex 登录 → 飞书连接与用户配对 → 可选真实收发测试 → 可选后台服务。Secret 不回显，取消后可续做；已有配置和用户保留。不要同时运行同一应用的其他接收端。
 

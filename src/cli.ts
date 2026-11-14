@@ -49,12 +49,20 @@ async function main(): Promise<void> {
   }
   if (args.includes('--version') || args.includes('-v')) { console.log(NAMO_VERSION); return; }
   if (args.includes('--help') || args.includes('-h') || command === 'help') { console.log(tr('cli.help') + '\n' + tr('cli.directory', REPOSITORY_URL)); return; }
-  if (!['init','config','login','start','service','ui'].includes(command)) throw new Error(tr('cli.unknownCommandRunNamoHelp', command));
+  if (!['init','config','login','start','service','ui','docs'].includes(command)) throw new Error(tr('cli.unknownCommandRunNamoHelp', command));
   if (positional.length > (command === 'service' ? 2 : 1)) throw new Error(tr('cli.tooManyArgumentsRunNamoHelpUsage'));
   if (requestedProfile && command !== 'login') throw new Error(tr('cli.profileOnlyLogin'));
   if (args.includes('--device-auth') && command !== 'login') throw new Error(tr('terminal.deviceLoginOnly'));
   if (args.includes('--import') && command !== 'init') throw new Error(tr('cli.importOnlyInit'));
   if (command === 'service' && !['install','start','stop','restart','upgrade','uninstall'].includes(positional[1])) throw new Error(tr('cli.serviceUsage'));
+  if (command === 'docs') {
+    const {startDocs} = await import('./docs-site.js'); const docs = await startDocs();
+    try { await (await import('./ui.js')).openUi(docs.url); } catch (error) { await docs.close(); throw error; }
+    console.log(tr('docs.opened',docs.url));
+    let stopping=false;
+    const close=async()=>{if(stopping)return;stopping=true;await docs.close();finish(0);};
+    process.once('SIGINT',()=>void close());process.once('SIGTERM',()=>void close());return;
+  }
   const file = configFile(flag('--config'));
   if (command === 'init') {
     if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error(tr('cli.namoInitRequiresInteractiveTerminalRunLocally'));
@@ -179,7 +187,7 @@ async function main(): Promise<void> {
 }
 const languageChoice = args.includes('--lang') ? args[args.indexOf('--lang') + 1] : process.env.NAMO_LANG;
 const defaultLocale = systemLocale([process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || Intl.DateTimeFormat().resolvedOptions().locale]);
-withLocale(parseLocale(languageChoice) ?? defaultLocale, () => main().then(() => { if (!['start','ui'].includes(positional[0]) || args.includes('--help') || args.includes('--version') || args.includes('-h') || args.includes('-v')) finish(Number(process.exitCode ?? 0)); }).catch(e => {
+withLocale(parseLocale(languageChoice) ?? defaultLocale, () => main().then(() => { if (!['start','ui','docs'].includes(positional[0]) || args.includes('--help') || args.includes('--version') || args.includes('-h') || args.includes('-v')) finish(Number(process.exitCode ?? 0)); }).catch(e => {
   const message = e instanceof Cancelled ? e.message : e instanceof SyntaxError ? tr("cli.invalidConfigurationJsonConfigurationContentsWereNot") : e instanceof Error ? e.message : tr("cli.actionIncomplete");
   console.error(redact(message.slice(0, 500))); finish(e instanceof Cancelled ? 130 : 1);
 }));

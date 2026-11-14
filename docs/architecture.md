@@ -53,7 +53,7 @@ flowchart TB
 | 入站与调度 | [engine](../src/engine.ts)、[tasks](../src/tasks.ts) | 先落库再确认；同聊天串行、全局限流、重叠真实目录互斥 |
 | 独立执行 | [runner](../src/runner.ts)、[worker](../src/runner-worker.ts) | 唯一运行归属；接收端重启后关联原运行，失联不重启模型；取消只停止所属进程组 |
 | Codex 协议 | [connection](../src/codex-connection.ts)、[runtime](../src/runtime.ts) | 官方 provider、独立认证、目录白名单；修订回执未知时不自动重送 |
-| 受限浏览器原型 | [ego-browser-prototype](../src/ego-browser-prototype.ts)、[worker](../src/runner-worker.ts) | 私聊配对用户逐任务批准；固定操作、宿主持有空间绑定；能力外操作和结果不明均不自动执行或重试 |
+| 受限浏览器原型 | [ego-browser-prototype](../src/ego-browser-prototype.ts)、[worker](../src/runner-worker.ts) | 私聊配对用户逐任务批准或显式持久授权；固定操作、宿主持有空间绑定；能力外操作和结果不明均不自动执行或重试 |
 | 人工 / 外部等待 | [waits](../src/waits.ts)、[external-waits](../src/external-waits.ts) | 等待释放执行资源，保留聊天顺序；回答绑定身份和版本；GitHub 固定 HEAD，恢复只消费一次 |
 | 身份与资源 | [access](../src/access.ts)、[path-policy](../src/path-policy.ts)、[skill-access](../src/skill-access.ts) | 组织准入保留；已准入成员共享目录与 MCP；续接与交付重验权限；Skills 仅只读开放启用的具体目录 |
 | 档案与记忆 | [assistant](../src/assistant.ts)、[memory](../src/memory.ts)、[extractor](../src/memory-extractor.ts) | 档案显式启用；长期事实带来源和范围；人工纠正、停用、删除不能被自动恢复 |
@@ -68,7 +68,7 @@ flowchart TB
 
 **数据与恢复。** SQLite 保存 inbox、task、run、wait、outbox 和审计。取消、回答、恢复以事务顺序决定归属；心跳过期不转移执行权，失联进程及后代核对完成前保留目录占位。模型完成、平台接受、用户收件是三类事实，不能相互推断。
 
-开发期采用 v13 基线，不再维护 v0–12 的兼容转换。v13 / v14 可在停机备份后事务迁移到 v15。空库在一个事务中初始化，失败整体回滚；不兼容旧库明确拒绝写入，绝不自动删库。重建步骤见[运维指南](operations.md)。
+开发期采用 v13 基线，不再维护 v0–12 的兼容转换。v13 / v14 / v15 可在停机备份后迁移到 v16。空库在一个事务中初始化，失败整体回滚；不兼容旧库明确拒绝写入，绝不自动删库。重建步骤见[运维指南](operations.md)。
 
 | 数据域 | 独立表与约束 |
 | --- | --- |

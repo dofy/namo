@@ -16,7 +16,8 @@
     "build:server": "node scripts/clean-server-build.mjs && tsc -p tsconfig.json",
     "typecheck:ui": "tsc -p tsconfig.ui.json",
     "build:ui": "pnpm run typecheck:ui && vite build",
-    "ui:watch": "vite build --watch"
+    "ui:watch": "vite build --watch",
+    "docs:dev": "vite docs-site --config docs-site/vite.config.mjs --host 127.0.0.1"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.76.0",
@@ -66,6 +67,7 @@
     "README.md",
     "README.zh-CN.md",
     "docs/",
+    "docs-site/",
     "assets/namo-logo.png",
     "assets/fonts/"
   ]

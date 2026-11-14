@@ -272,7 +272,9 @@ export const chinese = {
 
   "management.databaseSchemaUnsupported": "数据库版本不兼容。请使用匹配版本；旧测试库需停服备份后重建，配置和 Codex 登录可保留。",
   "operations.approvalInputInvalid": "请选择已完成的任务和有效的推送目标。",
-  "cli.help": "Namo · 飞书与 Codex\n\n用法：namo <命令> [--config 路径] [--lang system|en|zh-CN]\n  init                 初始化飞书、目录权限和用户配对\n  config               在交互终端中配置\n  login [--device-auth] 登录独立的官方 Codex 账号\n  start                在当前终端运行接收服务\n  service <操作>       install / start / stop / restart / upgrade / uninstall\n  ui                   打开本机工作台\n\n导入已有 OpenClaw 配置使用 init --import。\n状态、诊断、日志、任务和审批统一在工作台查看。\n命令信息使用 --help 或 --version。",
+  "docs.assetsMissing": "缺少文档站资源，请恢复 docs-site 或重新安装 Namo。",
+  "docs.opened": "Namo 文档已打开：{0}\n仅本机可访问；按 Ctrl+C 停止文档服务。",
+  "cli.help": "Namo · 飞书与 Codex\n\n用法：namo <命令> [--config 路径] [--lang system|en|zh-CN]\n  init                 初始化飞书、目录权限和用户配对\n  config               在交互终端中配置\n  login [--device-auth] 登录独立的官方 Codex 账号\n  start                在当前终端运行接收服务\n  service <操作>       install / start / stop / restart / upgrade / uninstall\n  ui                   打开本机工作台\n  docs                 打开本机文档\n\n导入已有 OpenClaw 配置使用 init --import。\n状态、诊断、日志、任务和审批统一在工作台查看。\n命令信息使用 --help 或 --version。",
   "cli.optionOnce": "{0} 只能指定一次。",
   "cli.useWorkbench": "{0} 已移至工作台。运行 namo ui 管理连接、查看状态与日志，或处理任务和审批。",
   "cli.importMoved": "导入使用 namo init --import；来源检查在工作台的连接设置中查看。",

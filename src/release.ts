@@ -152,6 +152,7 @@ export function createRuntimeRelease(sourceRoot: string, releasesRoot: string): 
       if (!existsSync(source)) throw new Error(tr("release.incompleteNamoBuildMissing", required));
       copyTree(source, join(staging, required));
     }
+    if (existsSync(join(sourceRoot, 'docs-site'))) copyTree(join(sourceRoot, 'docs-site'), join(staging, 'docs-site'));
     const dependencies = Object.keys(pkg.dependencies ?? {}).sort();
     for (const name of dependencies) {
       const source = dependencySource(sourceRoot, name);

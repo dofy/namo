@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, writeFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, writeFileSync, realpathSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { request } from 'node:http';
+import { once } from 'node:events';
+import { startDocs } from '../src/docs-site.js';
 import { initialConfig, onboard, type InitDeps } from '../src/onboarding.js';
 test('new installations enable progress cards without altering legacy defaults',()=>{
  assert.equal(initialConfig('/tmp/namo-config-test/config.json').feishu.cards,true);
@@ -17,9 +20,39 @@ import { acquireLock } from '../src/safety.js';
 import { PairingChallenge, type SetupConnection } from '../src/feishu-setup.js';
 
 const bin=resolve('bin/namo.js');
+test('documentation server exposes only its fixed assets on loopback',async t=>{
+ const docs=await startDocs();t.after(()=>docs.close());
+ const url=new URL(docs.url);assert.equal(url.hostname,'127.0.0.1');
+ const get=(path:string,headers:Record<string,string>={},method='GET')=>new Promise<{status:number|undefined;headers:import('node:http').IncomingHttpHeaders;body:Buffer}>((accept,reject)=>{
+  const req=request(new URL(path,docs.url),{headers,method},res=>{const chunks:Buffer[]=[];res.on('data',chunk=>chunks.push(Buffer.from(chunk)));res.on('end',()=>accept({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}));});req.on('error',reject);req.end();
+ });
+ for(const path of ['/','/index.html','/main.js','/content.js','/style.css','/assets/namo-logo.png'])assert.equal((await get(path)).status,200);
+ for(const path of ['/config.local.json','/data/bot.sqlite','/@fs/etc/passwd','/README.md'])assert.equal((await get(path)).status,404);
+ assert.equal((await get('/',{host:'attacker.test'})).status,403);
+ assert.equal((await get('/',{origin:'https://attacker.test'})).status,403);
+ assert.equal((await get('/',{},'POST')).status,405);
+ const head=await get('/',{},'HEAD');assert.equal(head.status,200);assert.equal(head.body.length,0);
+ assert.match(String(head.headers['content-security-policy']),/default-src 'none'/);assert.equal(head.headers['cache-control'],'no-store');
+});
+test('docs command opens a browser without configuration and stops on SIGTERM', {skip:process.platform==='win32'},async t=>{
+ const dir=realpathSync(mkdtempSync(join(tmpdir(),'namo-docs-cli-')));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const opener=join(dir,process.platform==='darwin'?'open':'xdg-open');const capture=join(dir,'opened');
+ writeFileSync(opener,'#!/bin/sh\nprintf "%s" "$1" > "$NAMO_DOCS_OPEN_CAPTURE"\n');chmodSync(opener,0o700);
+ const child=spawn(process.execPath,[bin,'docs','--lang','en'],{cwd:dir,env:{...process.env,PATH:`${dir}:${process.env.PATH}`,NAMO_HOME:dir,NAMO_DOCS_OPEN_CAPTURE:capture},stdio:['ignore','pipe','pipe']});
+ t.after(()=>{if(child.exitCode===null)child.kill('SIGKILL');});
+ let output='';child.stdout.on('data',chunk=>{output+=String(chunk)});child.stderr.on('data',chunk=>{output+=String(chunk)});
+ const deadline=Date.now()+10000;while((!existsSync(capture)||!output.includes('Ctrl+C'))&&child.exitCode===null&&Date.now()<deadline)await new Promise(r=>setTimeout(r,25));
+ assert.ok(existsSync(capture)&&output.includes('Ctrl+C'),`docs did not start: ${output}`);
+ const url=readFileSync(capture,'utf8');assert.match(url,/^http:\/\/127\.0\.0\.1:\d+$/);
+ const response=await fetch(url);assert.equal(response.status,200);assert.match(await response.text(),/Namo/);
+ assert.equal(existsSync(join(dir,'config.json')),false);
+ const exited=once(child,'exit');child.kill('SIGTERM');const [code]=await exited;assert.equal(code,0);
+ await assert.rejects(fetch(url));
+});
 test('CLI keeps lifecycle commands and rejects invalid arguments before loading configuration',t=>{
  const dir=mkdtempSync(join(tmpdir(),'namo-cli-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const run=(...a:string[])=>spawnSync(process.execPath,[bin,...a],{cwd:dir,encoding:'utf8',env:{...process.env,NAMO_HOME:dir,NAMO_LANG:'system',LC_ALL:'en_US.UTF-8'}});
+ assert.match(run('--help').stdout,/\bdocs\b/);
  for(const command of ['doctor','check','status','logs','agent','issues','issue','resolve','access','github','approval']) {const result=run(command);assert.equal(result.status,1);assert.match(result.stderr,/namo ui/);}
  assert.match(run('migrate').stderr,/namo init --import/);
  assert.match(run('init','--import').stderr,/interactive (?:local )?terminal/);
