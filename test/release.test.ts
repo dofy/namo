@@ -205,3 +205,15 @@ test('a failed or silently empty backup operation cannot produce a verified rece
   const current=new DatabaseSync(f.database,{readOnly:true});assert.equal(databaseFingerprint(current),before);current.close();
  });
 });
+
+test('legacy receiver check blocks live or respawning jobs unless they serve another app', async () => {
+  const { legacyReceiverConflict } = await import('../src/service.js');
+  const live = process.pid, other = 'cli_other';
+  assert.equal(legacyReceiverConflict({ loaded: false, pid: live, appId: 'cli_a' }, 'cli_a', -1), false);
+  assert.equal(legacyReceiverConflict({ loaded: true, pid: live, appId: 'cli_a' }, 'cli_a', -1), true);
+  assert.equal(legacyReceiverConflict({ loaded: true, pid: live, appId: other }, 'cli_a', -1), false);
+  assert.equal(legacyReceiverConflict({ loaded: true, pid: live }, 'cli_a', -1), true, 'unreadable registration fails closed');
+  assert.equal(legacyReceiverConflict({ loaded: true, pid: live }, 'cli_a'), false, 'the receiver itself is not a conflict');
+  assert.equal(legacyReceiverConflict({ loaded: true, state: 'spawn scheduled' }, 'cli_a', -1), true, 'KeepAlive respawn gap');
+  assert.equal(legacyReceiverConflict({ loaded: true, state: 'not running' }, 'cli_a', -1), false);
+});

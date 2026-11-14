@@ -82,15 +82,27 @@ export function activeData(data: string): boolean {
   try { const pid = Number(readFileSync(join(data, 'service.lock', 'pid'), 'utf8')); return Number.isSafeInteger(pid) && pid > 0 && processAlive(pid); }
   catch { return false; }
 }
+/** Decides whether a legacy launchd receiver may already serve `appId`.
+ * A live or respawning job whose app cannot be read fails closed. */
+export function legacyReceiverConflict(job: { loaded: boolean; state?: string; pid?: number; appId?: string }, appId: string, self = process.pid): boolean {
+  if (!job.loaded) return false;
+  const live = job.pid ? job.pid !== self && processAlive(job.pid) : job.state === 'spawn scheduled';
+  return live && job.appId !== undefined ? job.appId === appId : live;
+}
 export function assertNoLegacyReceiver(appId: string): void {
   if (process.platform !== 'darwin' || !existsSync(plistFile(legacyLabel))) return;
   const state = spawnSync('launchctl', ['print', `${domain()}/${legacyLabel}`], { encoding: 'utf8', timeout: 3000 });
-  const pid = Number(state.stdout?.match(/^\s*pid = (\d+)\s*$/m)?.[1]);
-  if (!pid || pid === process.pid || !processAlive(pid)) return;
-  const p = spawnSync('/usr/libexec/PlistBuddy', ['-c', 'Print :ProgramArguments:4', plistFile(legacyLabel)], { encoding: 'utf8', timeout: 3000 });
-  let same = false;
-  try { same = readJson(p.stdout.trim()).feishu?.appId === appId; } catch { /* Unknown registrations are not altered. */ }
-  if (same) throw new Error(tr("service.olderNamoReceiverRunningFeishuAppStop"));
+  const job: { loaded: boolean; state?: string; pid?: number; appId?: string } = {
+    loaded: state.status === 0,
+    state: state.stdout?.match(/^\s*state = (.+?)\s*$/m)?.[1],
+    pid: Number(state.stdout?.match(/^\s*pid = (\d+)\s*$/m)?.[1]) || undefined,
+  };
+  if (job.loaded && !(job.pid === process.pid)) {
+    const p = spawnSync('/usr/libexec/PlistBuddy', ['-c', 'Print :ProgramArguments:4', plistFile(legacyLabel)], { encoding: 'utf8', timeout: 3000 });
+    // Unknown registrations are not altered; they only block a second receiver.
+    try { const id = readJson(p.stdout.trim()).feishu?.appId; if (typeof id === 'string') job.appId = id; } catch { /* Fail closed below. */ }
+  }
+  if (legacyReceiverConflict(job, appId)) throw new Error(tr("service.olderNamoReceiverRunningFeishuAppStop"));
 }
 export function serviceLabel(c: Config): string {
   const saved = join(c.dataDir, 'service.json');
