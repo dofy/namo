@@ -502,6 +502,20 @@ test('duplicate worker claims fail closed and configuration changes before start
   assert.equal(runnerJob(f.store, run)?.error, 'task_configuration_changed'); assert.equal(f.calls(), 1);
 });
 
+test('a reused worker PID loses ownership once the heartbeat is stale', {skip: process.platform === 'win32'}, async t => {
+  const f = fixture(t), receiver = f.receiver(); receiver.accept(message('a'));
+  const task = f.tasks.get(f.store.get('a')!.taskId!)!, run = f.tasks.start(task);
+  const stranger = spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { stdio: 'ignore' });
+  t.after(() => { stranger.kill('SIGKILL'); });
+  await wait(() => processState(stranger.pid!) === 'alive');
+  f.store.db.prepare("INSERT INTO runner_jobs(runId,owner,state,pid,createdAt,updatedAt,configRevision,prompt) VALUES(?,?,'running',?,?,?,?,?)")
+    .run(run, 'reused-owner', stranger.pid!, Date.now(), Date.now(), digest(readFileSync(f.file, 'utf8')), f.tasks.prompt(task));
+  assert.equal(reconcileRunner(f.store, run)?.state, 'running');
+  f.store.db.prepare('UPDATE runner_jobs SET updatedAt=0 WHERE runId=?').run(run);
+  assert.equal(reconcileRunner(f.store, run)?.state, 'lost');
+  assert.equal(runnerJob(f.store, run)?.error, 'runner_lost');
+});
+
 test('unclaimed start timeout fences late starters without rerunning', async t => {
   const f = fixture(t), receiver = f.receiver(); receiver.accept(message('a'));
   const task = f.tasks.get(f.store.get('a')!.taskId!)!, run = f.tasks.start(task);
