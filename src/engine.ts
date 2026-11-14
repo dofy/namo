@@ -388,7 +388,12 @@ export class Engine {
       mkdirSync(cwd,{recursive:true,mode:0o700});
       return {cwd:realpathSync(cwd),directories:c?.directories??[],policyHash:policy&&selection?selectedPolicyHash({...this.config,codex:policy},selection):policyHash(policy),
         ...(selection&&selection.profileId!=='codex'?{agentSelection:selection}:{})};
-    } catch(error) {if(error instanceof AgentRegistryError)throw new RuntimeError(error.code);throw error;}
+    } catch(error) {
+      if(error instanceof AgentRegistryError)throw new RuntimeError(error.code);
+      // Filesystem failures are a configuration problem for this chat, not a storage fault.
+      if(error instanceof Error&&typeof (error as NodeJS.ErrnoException).syscall==='string')throw new RuntimeError('workspace_unavailable');
+      throw error;
+    }
   }
   private workspaceLabel(m: Incoming): string {
     try { return this.workspace(m).cwd; }
@@ -457,7 +462,7 @@ export class Engine {
         this.store.addOutput(m.key,'control-classification-notice','暂时无法安全识别这条消息是否为控制请求，已保留并按普通任务排队；如需停止当前任务，也可以点击任务卡片上的停止按钮。');
         this.route(m,true);
       }});
-    }).finally(()=>{this.controlRunning=undefined;this.controlAbort=undefined;void this.pump();});
+    }).catch(()=>{if(!this.stopped)this.fatal('control_storage_error');}).finally(()=>{this.controlRunning=undefined;this.controlAbort=undefined;void this.pump();});
   }
   private finishControlClassification(message:Incoming,result:ControlClassification):void {
     const m=this.store.get(message.key);if(!m || m.state!=='queued' || m.taskId){this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`control-classify:${message.key}`);return;}

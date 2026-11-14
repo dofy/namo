@@ -1,7 +1,7 @@
 import { waitFor } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, realpathSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Engine, SendError, type Sender } from '../src/engine.js';
@@ -170,4 +170,15 @@ test('natural approval reaches a waiting operation without accepting another use
  assert.equal(JSON.parse(String(store.db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value)).state,'pending');
  engine.accept({...msg('approved','chat',`确认操作 ${id}`),envelope:{version:1,type:'text',kind:'instruction',chatType:'p2p',scopeKey:'chat',parentId:'approval-card',materials:[],limitations:[]}});const finalize=await pending;finalize('completed');
  assert.equal(JSON.parse(String(store.db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value)).state,'completed');
+});
+
+test('an unusable chat workspace is answered instead of crashing the receiver',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-workspace-unavailable-')),store=new Store(join(dir,'db'));let runs=0;const sent:string[]=[];
+ writeFileSync(join(dir,'workspaces'),'not a directory');
+ const engine=new Engine(store,{async run(){runs++;return{text:'done',threadId:'t',turnId:'turn'};}},
+  {async send(_c,text,id){sent.push(text);return id;}},{dataDir:dir,concurrency:1});
+ t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+ engine.start();assert.equal(engine.accept(msg('a')),true);
+ await wait(()=>sent.some(text=>text.includes('workspace_unavailable')));
+ assert.equal(runs,0);assert.equal(store.get('a')?.taskId,null);
 });
