@@ -165,7 +165,10 @@ export function App({ initial, startupError }: { initial?: ManagementState; star
       </header>
       {notice && <Notice error={notice.error}>{notice.text}</Notice>}
       {state && <ModelCatalogProvider revision={state.config.revision}>
-        {view === 'assistant' && (state.assistant ? <AssistantPage settings={state.assistant} editable={!expired && state.recoveryAvailable} save={api.assistantSave} reset={api.assistantReset} preview={api.assistantPreview} refresh={refresh} /> : <Notice>{tr("app.initializeServiceDatabaseFirst")}</Notice>)}
+        {/* Kept mounted like Memory and Settings so an unsaved draft survives navigation. */}
+        <section hidden={view !== 'assistant'} aria-label={pages.assistant}>
+          {state.assistant ? <AssistantPage settings={state.assistant} editable={!expired && state.recoveryAvailable} save={api.assistantSave} reset={api.assistantReset} preview={api.assistantPreview} refresh={refresh} /> : <Notice>{tr("app.initializeServiceDatabaseFirst")}</Notice>}
+        </section>
         <section hidden={view !== 'memory'} aria-label={tr("nav.memoryProfiles")}>
           <MemoryProfilesPage active={view === 'memory'} tab={memoryTab} onTabChange={tab => go(tab === 'profiles' ? `${uiRoutes.memory}?tab=profiles` : uiRoutes.memory)}
             profiles={state.profiles ?? { available: false, configRevision: state.config.revision, entries: [], reason: tr("app.workbenchNotSupportProfilesYetCloseRun") }}
