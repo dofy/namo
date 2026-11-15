@@ -4,7 +4,7 @@ import { Badge, Button, Flex, Spinner, Text, TextArea, TextField } from '@radix-
 import type { MemoryViewItem as MemoryPageItem, MemoryViewKind as MemoryPageKind, MemoryViewScope as MemoryPageScope, MemoryViewState } from '../../src/ui-contract';
 import { t as tr, getLocale } from '../i18n';
 import { Choice, ConfirmButton, Field, Notice } from '../components';
-import { api } from '../api';
+import { api, ApiError } from '../api';
 import { MemoryExtractionStatus } from '../MemoryExtractionStatus';
 
 const labels = () => ({
@@ -118,7 +118,8 @@ export function MemoryPage({ active, editable, unavailableReason }: { active: bo
     if (busy) return;
     setBusy(true); setError(''); setNotice('');
     try { setState(await action()); if (announce) setNotice(c.saved); }
-    catch (failure) { setError(`${errorMessage(failure)} ${c.conflict}`); }
+    // Version guidance only fits a real conflict (409), not network or server errors.
+    catch (failure) { setError(failure instanceof ApiError && failure.status === 409 ? `${errorMessage(failure)} ${c.conflict}` : errorMessage(failure)); }
     finally { setBusy(false); }
   }
 
