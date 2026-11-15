@@ -1,5 +1,5 @@
 import { sessionList } from './session-list.js';
-import { mcpApprovalCommand, revokeBrowserGrant } from './mcp-write-approval.js';
+import { decideMcpApproval, mcpApprovalCommand, revokeBrowserGrant } from './mcp-write-approval.js';
 import { memoryDirectories } from './memory-access.js';
 import { AgentRegistryError, selectAgent, selectedPolicyHash, type AgentSelection } from './agent-registry.js';
 import { mkdirSync, realpathSync, readFileSync } from 'node:fs';
@@ -943,7 +943,7 @@ export class Engine {
     while (this.outputBusy) await new Promise(r => setTimeout(r, 20));
   }
   acceptCard(event: CardEvent): ReturnType<Cards['accept']> {
-    const result=new Cards(this.store,task=>this.taskAccessible(task),this.config.file?(id,input,approve)=>decideDirectory(this.store,loadConfig(this.config.file!),id,input,approve):undefined).accept(event);
+    const result=new Cards(this.store,task=>this.taskAccessible(task),this.config.file?(id,input,approve)=>decideDirectory(this.store,loadConfig(this.config.file!),id,input,approve):undefined,this.config.file?(id,input,action,always)=>decideMcpApproval(this.store,input,id,action,always,loadConfig(this.config.file!)):undefined).accept(event);
     for(const active of this.active.values()) if(this.store.get(active.key)?.cancelRequested) active.abort.abort();
     void this.pump();return result;
   }

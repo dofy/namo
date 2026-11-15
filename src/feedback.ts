@@ -22,7 +22,7 @@ export class Feedback {
     // Independent lanes: a slow reaction must never hold up readable progress.
     const work:Promise<void>[]=[];
     if(!this.reactionBusy){this.reactionBusy=true;work.push(this.reactions().finally(()=>{this.reactionBusy=false;}));}
-    if(!this.progressBusy){this.progressBusy=true;work.push((async()=>{if(options.waitCards!==false) await this.waitCards(); if(options.progress!==false) await this.progress(options.cadenceMs??5000,options.heartbeatMs??30000);})().finally(()=>{this.progressBusy=false;}));}
+    if(!this.progressBusy){this.progressBusy=true;work.push((async()=>{if(options.waitCards!==false){await this.approvalCards();await this.waitCards();} if(options.progress!==false) await this.progress(options.cadenceMs??5000,options.heartbeatMs??30000);})().finally(()=>{this.progressBusy=false;}));}
     await Promise.all(work);
   }
   async settle(): Promise<void> {while(this.progressBusy||this.reactionBusy||this.finalizers)await new Promise(r=>setTimeout(r,20));}
@@ -72,6 +72,36 @@ export class Feedback {
       }
     }
     if (last.state!=='sending') this.retire(outputId);
+  }
+  /** Reflect durable decisions on the original card after the callback returns. */
+  private async approvalCards():Promise<void> {
+    if(!this.sender.updateCard)return;
+    const rows=this.store.db.prepare(`SELECT o.id AS outputId,o.platformId,o.payload,o.kind,t.* FROM outbox o
+      JOIN tasks t ON t.inboxKey=o.inboxKey LEFT JOIN settings s ON s.key=o.kind
+      WHERE o.kind LIKE 'mcp-approval:%' AND o.state='sent' AND o.progressRetired=0 AND o.payload IS NOT NULL
+        AND (EXISTS(SELECT 1 FROM card_actions a WHERE a.outboxId=o.id AND a.usedAt IS NOT NULL)
+          OR t.state<>'running' OR CASE WHEN json_valid(s.value) THEN json_extract(s.value,'$.state')<>'pending' OR json_extract(s.value,'$.expiresAt')<=? ELSE 1 END)
+      ORDER BY o.id`).all(Date.now());
+    for(const row of rows){
+      const task=row as unknown as Task;if(!this.canAccess(task))continue;
+      const last=this.store.db.prepare('SELECT * FROM progress_updates WHERE outboxId=? ORDER BY version DESC LIMIT 1').get(row.outputId);
+      if(last&&['unknown','failed','sending'].includes(String(last.state))){await this.reconcileBlockedUpdate(last,Number(row.outputId),String(row.platformId));continue;}
+      if(last?.state==='sent'){this.retire(Number(row.outputId));continue;}
+      const chosen=this.store.db.prepare('SELECT action FROM card_actions WHERE outboxId=? AND usedAt IS NOT NULL ORDER BY usedAt, rowid LIMIT 1').get(row.outputId);
+      let approval:{state?:string;always?:boolean};try{approval=JSON.parse(String(this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(row.kind)?.value));}catch{approval={};}
+      const action=String(chosen?.action??'').split(':')[0];
+      const label=action==='mcp-approve'?'已选择：本次允许':action==='mcp-always'?'已选择：永久允许':action==='mcp-reject'?'已选择：拒绝':approval.state==='rejected'?'已拒绝':approval.always?'已永久允许':['approved','executing','completed','unknown','not_sent'].includes(approval.state??'')?'已允许':'授权已结束';
+      const card=JSON.parse(String(row.payload)) as {header?:{title?:{content?:string};template?:string};elements?:{tag?:string}[]};
+      if(!Array.isArray(card.elements)){this.retire(Number(row.outputId));continue;}
+      if(card.header?.title)card.header.title.content=label;
+      if(card.header)card.header.template=action==='mcp-reject'||approval.state==='rejected'||label==='授权已结束'?'grey':'green';
+      card.elements=card.elements.map(element=>element.tag==='action'?{tag:'div',text:{tag:'plain_text',content:label}}:element);
+      const content=JSON.stringify(card),version=Number(last?.version??0)+1;
+      this.store.db.prepare("INSERT INTO progress_updates(outboxId,version,state,phase,content,createdAt,revision) VALUES(?,?,'sending','approval',?,?,?)").run(row.outputId,version,content,Date.now(),label);
+      try{await this.sender.updateCard(String(row.platformId),card);this.store.db.prepare("UPDATE progress_updates SET state='sent' WHERE outboxId=? AND version=?").run(row.outputId,version);this.retire(Number(row.outputId));}
+      catch(e){const error=e as {unknown?:boolean;code?:string};this.store.db.prepare('UPDATE progress_updates SET state=?,error=? WHERE outboxId=? AND version=?').run(error.unknown===false?'failed':'unknown',error.code??'update_unknown',row.outputId,version);}
+      return;
+    }
   }
   /** Serialize wait-card patches in the same receiver-owned lane as progress. */
   private async waitCards(): Promise<void> {

@@ -32,22 +32,25 @@ export function mcpApprovalCommand(store:Store,message:Incoming,config?:Config):
  if(!store.claim(message.key))return true;
  const match=/^\/mcp-(approve|reject|status)\s+(MA-[A-F0-9]{12})(?:\s+(--confirm|--always))?\s*$/i.exec(message.text.trim());
  if(!match||match[1]!.toLowerCase()==='approve'&&!match[3]){store.finish(message.key,'用法：/mcp-approve MA-编号 --confirm；/mcp-reject MA-编号；/mcp-status MA-编号。');return true;}
- const a=get(store,match[2]!.toUpperCase());
- if(!a||(a.approverId??a.ownerId)!==message.senderId||(a.approvalChatKey??a.chatKey)!==message.chatKey||(a.approvalScopeKey??a.scopeKey)!==scopeOf(message)||a.approverId&&message.envelope?.chatType!=='p2p'){store.finish(message.key,'未找到属于当前用户和会话的 MCP 审批。');return true;}
+ const decision=decideMcpApproval(store,message,match[2]!.toUpperCase(),match[1]!.toLowerCase() as 'approve'|'reject'|'status',match[3]==='--always',config);
+ store.finish(message.key,decision.text);return true;
+}
+/** Shared by text commands and verified card callbacks. */
+export function decideMcpApproval(store:Store,message:Incoming,id:string,action:'approve'|'reject'|'status',always:boolean,config?:Config):{ok:boolean;text:string} {
+ const a=get(store,id);
+ if(!a||(a.approverId??a.ownerId)!==message.senderId||(a.approvalChatKey??a.chatKey)!==message.chatKey||(a.approvalScopeKey??a.scopeKey)!==scopeOf(message)||a.approverId&&message.envelope?.chatType!=='p2p')return {ok:false,text:'未找到属于当前用户和会话的 MCP 审批。'};
  const currentTask=store.db.prepare('SELECT state FROM tasks WHERE id=?').get(a.taskId);
  if(currentTask?.state!=='running'&&a.state==='executing'){a.state='unknown';save(store,a);if(a.url)store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(mcpUnknownOperationKey(a.connection,a.url,a.tool,a.arguments),a.id);}
  else if((Date.now()>=a.expiresAt||currentTask?.state!=='running')&&['pending','approved'].includes(a.state)){a.state='cancelled';save(store,a);}
- const action=match[1]!.toLowerCase();
- const always=match[3]==='--always';
- if(always && (action!=='approve'||!config||a.connection!=='ego-browser'||!['task_browser_access','press'].includes(a.tool)||a.approverId||message.envelope?.chatType!=='p2p'||message.envelope.kind!=='instruction'||message.envelope.type!=='text'||message.envelope.materials.length||!config.feishu.allowedUserIds.includes(message.senderId))) {store.finish(message.key,'永久授权只适用于配对用户在私聊中的浏览器授权请求。');return true;}
+ if(always && (action!=='approve'||!config||a.connection!=='ego-browser'||!['task_browser_access','press'].includes(a.tool)||a.approverId||message.envelope?.chatType!=='p2p'||message.envelope.kind!=='instruction'||message.envelope.type!=='text'||message.envelope.materials.length||!config.feishu.allowedUserIds.includes(message.senderId))) return {ok:false,text:'永久授权只适用于配对用户在私聊中的浏览器授权请求。'};
  if(action!=='status'){
    const task=store.db.prepare("SELECT state FROM tasks WHERE id=? AND ownerId=? AND chatKey=?").get(a.taskId,a.ownerId,a.chatKey);
-   if(a.state!=='pending'||Date.now()>=a.expiresAt||task?.state!=='running'||store.get(a.inboxKey)?.cancelRequested){store.finish(message.key,'审批已处理或已过期，不能重复执行。');return true;}
+   if(a.state!=='pending'||Date.now()>=a.expiresAt||task?.state!=='running'||store.get(a.inboxKey)?.cancelRequested)return {ok:false,text:'审批已处理或已过期，不能重复执行。'};
    if(always){store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(browserKey(config!,message.senderId,message.chatKey),JSON.stringify({version:1,id:randomBytes(16).toString('hex')}));a.always=true;}
    a.state=action==='approve'?'approved':'rejected';save(store,a);
  }
  const labels:Record<State,string>={pending:'等待确认',approved:'已确认，等待任务继续',rejected:'已拒绝',executing:'正在执行',completed:'已完成',unknown:'结果不明，请先核对外部服务',cancelled:'已取消',not_sent:'未发送'};
- store.finish(message.key,`${a.connection==='ego-browser'?'浏览器':a.connection==='github'&&a.tool==='github_api'?'GitHub':'MCP'} 审批 ${a.id}：${labels[a.state]}。${always?'已开启本人私聊的永久浏览器授权；可发送“撤销浏览器永久授权”。':''}`);return true;
+ return {ok:true,text:`${a.connection==='ego-browser'?'浏览器':a.connection==='github'&&a.tool==='github_api'?'GitHub':'MCP'} 审批 ${a.id}：${labels[a.state]}。${always?'已开启本人私聊的永久浏览器授权；可发送“撤销浏览器永久授权”。':''}`};
 }
 export async function awaitMcpApproval(store:Store,task:Task,connection:string,url:string,tool:string,args:Record<string,unknown>,scope:string,signal:AbortSignal,valid:()=>boolean,route?:ApprovalRoute):Promise<((outcome:'completed'|'unknown'|'not_sent')=>void)&{always:boolean}> {
  const json=JSON.stringify(args,null,2);

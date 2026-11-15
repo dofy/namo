@@ -95,13 +95,28 @@ export function renderTaskCard(t: Task, content: string, kind: string, part: num
       ...(controls.length?[buttons(controls)]:[])]};
 }
 export class Cards {
-  constructor(private store: Store, private canAccess: (task:Task)=>boolean = ()=>true, private directoryDecision?:(id:string,input:Incoming,approve:boolean)=>string) {}
+  constructor(private store: Store, private canAccess: (task:Task)=>boolean = ()=>true, private directoryDecision?:(id:string,input:Incoming,approve:boolean)=>string, private mcpDecision?:(id:string,input:Incoming,action:'approve'|'reject',always:boolean)=>{ok:boolean;text:string}) {}
   prepare(output: Outbox): object | undefined {
     if(output.payload) {const p=JSON.parse(output.payload);return p.textOnly||p.noCard?undefined:p;}
-    if(!['progress','result'].includes(output.kind) && !output.kind.startsWith('wait:') && !output.kind.startsWith('directory-approval:')) return;
+    if(!['progress','result'].includes(output.kind) && !output.kind.startsWith('wait:') && !output.kind.startsWith('directory-approval:') && !output.kind.startsWith('mcp-approval:')) return;
     const task=this.store.db.prepare('SELECT * FROM tasks WHERE inboxKey=?').get(output.inboxKey) as unknown as Task|undefined;
     if(!task) return;
     return this.store.transaction(()=>{
+      if(output.kind.startsWith('mcp-approval:')) {
+        const id=output.kind.slice('mcp-approval:'.length),source=this.store.get(task.inboxKey);
+        if(!/^MA-[A-F0-9]{12}$/.test(id)||output.part||!source||this.store.db.prepare('SELECT 1 FROM outbox WHERE inboxKey=? AND kind=? AND part>0').get(output.inboxKey,output.kind))return;
+        let approval: {taskId?:string;ownerId?:string;state?:string;expiresAt?:number;connection?:string;tool?:string;approverId?:string};
+        try {approval=JSON.parse(String(this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`mcp-approval:${id}`)?.value));}catch{return;}
+        if(approval.taskId!==task.id||approval.ownerId!==task.ownerId||approval.approverId||approval.state!=='pending'||typeof approval.expiresAt!=='number'||approval.expiresAt<=Date.now())return;
+        const instructions=output.content.lastIndexOf('\n\n回复“确认操作 ');
+        if(instructions<0)return;
+        const cardContent=output.content.slice(0,instructions);
+        const permanent=approval.connection==='ego-browser'&&['task_browser_access','press'].includes(approval.tool??'')&&source.envelope?.chatType==='p2p';
+        const actions=[{action:'approve',label:'本次允许'},...(permanent?[{action:'always',label:'永久允许'}]:[]),{action:'reject',label:'拒绝'}].map(a=>({...a,token:randomBytes(24).toString('base64url')}));
+        for(const a of actions)this.store.db.prepare('INSERT INTO card_actions(token,outboxId,taskId,action,inputVersion,expiresAt) VALUES(?,?,?,?,?,?)').run(a.token,output.id,task.id,`mcp-${a.action}:${id}`,task.inputVersion,approval.expiresAt);
+        const payload={config:{wide_screen_mode:true,update_multi:true},header:{title:plain('操作需要确认'),template:'orange'},elements:[{tag:'markdown',content:cardMarkdown(cardContent)},{tag:'action',actions:actions.map(a=>({tag:'button',text:plain(a.label),type:a.action==='approve'?'primary':'default',value:{namo:a.token},...(a.action==='always'?{confirm:{title:plain('永久允许浏览器操作？'),text:plain('未来同一私聊可打开、快照、点击、填写及按键，包括已登录网站。可发送“撤销浏览器永久授权”撤销。')}}:{})}))}]};
+        this.store.db.prepare('UPDATE outbox SET payload=? WHERE id=?').run(JSON.stringify(payload),output.id);return payload;
+      }
       if(output.kind.startsWith('directory-approval:')) {
         const id=output.kind.slice('directory-approval:'.length);
         if(!/^DIR-[A-F0-9]{12}$/.test(id)||output.part)return;
@@ -149,6 +164,16 @@ export class Cards {
       if(Number(a.expiresAt)<Date.now()) return result('按钮已过期，可以询问任务状态或让我停止任务',true);
       const tasks=new Tasks(this.store),task=tasks.get(String(a.taskId))!;
       if (!this.canAccess(task)) return result('任务访问权限已变化，请联系管理员。',true);
+      if(String(a.action).startsWith('mcp-')) {
+        const match=/^mcp-(approve|always|reject):(MA-[A-F0-9]{12})$/.exec(String(a.action));
+        const source=this.store.get(task.inboxKey);
+        if(!match||!source||!this.mcpDecision||a.inputVersion!==a.currentVersion||task.state!=='running')return result('审批已结束或任务已变化。',true);
+        const input:Incoming={...source,senderId:String(a.ownerId),chatId:String(a.deliveryChat),envelope:{...source.envelope,version:1,type:'text',kind:'instruction',scopeKey:task.scopeKey,materials:[],limitations:[]}};
+        const decision=this.mcpDecision(match[2],input,match[1]==='reject'?'reject':'approve',match[1]==='always');
+        if(!decision.ok)return result(decision.text,true);
+        this.store.db.prepare('UPDATE card_actions SET usedAt=? WHERE token=?').run(Date.now(),token);
+        return result(decision.text);
+      }
       if(String(a.action).startsWith('directory-')) {
         const match=/^directory-(approve|reject):(DIR-[A-F0-9]{12})$/.exec(String(a.action));
         const source=this.store.get(task.inboxKey);

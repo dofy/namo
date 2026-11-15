@@ -127,7 +127,7 @@ The local workbench binds to loopback and uses startup authorization, an HttpOnl
 
 ## Ego browser access
 
-On macOS, a paired user can use the restricted Ego Lite browser in a private chat when command networking is enabled. The first browser request asks for task-scoped approval; key presses require separate approval. Reply `/mcp-approve MA-ID --always` to authorize the current fixed browser operations for future tasks in that private chat, or `/browser-revoke` to revoke the persistent grant. The browser can use its own network access and logged-in sessions. Group chats and scheduled tasks cannot use this integration.
+On macOS, a paired user can use the restricted Ego Lite browser in a private chat when command networking is enabled. The first browser request asks for task-scoped approval; key presses require separate approval. With card callbacks enabled, use the approval buttons, or reply `/mcp-approve MA-ID --always` to authorize the current fixed browser operations for future tasks in that private chat. Send `/browser-revoke` to revoke the persistent grant. The browser can use its own network access and logged-in sessions. Group chats and scheduled tasks cannot use this integration.
 
 The tool supports opening pages, snapshots, clicks, filling fields and a limited set of key presses in a task-owned space. It does not accept arbitrary scripts, raw CDP, uploads or downloads. New capabilities are not automatically covered by the persistent grant. A normal run closes its space; interrupted or uncertain operations are not automatically retried and may leave a space to inspect manually. A new run after a human wait does not resume the old browser space. See [Ego browser operations (Chinese)](operations.md#ego-浏览器原型).
 
