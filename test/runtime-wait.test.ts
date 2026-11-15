@@ -87,6 +87,11 @@ createInterface({ input: process.stdin }).on('line', line => {
     return;
   }
   if (m.id === 900) {
+    if (mode === 'wait-refused') {
+      if (!m.error || m.error.message !== 'wait_unresolved_revision' || m.result) process.exit(29);
+      return write({ method: 'turn/completed', params: { threadId: 'thread-one', turn: { id: 'turn-one', status: 'completed',
+        items: [{ id: 'final', type: 'agentMessage', phase: 'final_answer', text: 'continued without waiting' }] } } });
+    }
     if (mode === 'storage-error') {
       if (!m.error || m.result) process.exit(24);
       return;
@@ -178,6 +183,12 @@ test('wait storage failure rejects before any success acknowledgement', async t 
   await assert.rejects(waitRun(runtime, dir, 'storage-error', { onWait() { throw new Error('private database detail'); } }),
     (error: unknown) => error instanceof RuntimeError && error.code === 'wait_storage_error');
   assert.equal(existsSync(join(dir, 'persisted')), false);
+});
+
+test('a refused wait is a tool error and the turn continues', async t => {
+  const { dir, runtime } = fixture(t);
+  const result = await waitRun(runtime, dir, 'wait-refused', { onWait() { throw new RuntimeError('wait_unresolved_revision'); } });
+  assert.equal(result.text, 'continued without waiting'); assert.equal(result.waiting, undefined);
 });
 
 test('foreign and malformed wait requests are protocol errors, never successful waits', async t => {

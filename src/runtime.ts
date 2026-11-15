@@ -12,6 +12,7 @@ import { isWaitToolItem, isEffectfulItem, itemSettled } from './codex-items.js';
 import { stageGeneratedImage } from './generated-images.js';
 import { CONTROL_TOOL } from './conversation-control.js';
 import { BROWSER_TOOL } from './ego-browser-prototype.js';
+const WAIT_REFUSALS = new Set(['wait_unresolved_revision', 'wait_already_requested', 'wait_invalid_request', 'wait_invalid_choices']);
 
 // Compatibility facade: existing consumers retain their imports and runtime error identity.
 export * from './runtime-contract.js';
@@ -380,7 +381,12 @@ export class CodexRuntime implements Runtime {
           const request: WaitRequest = { threadId, turnId, callId: params.callId, ...question };
           let waitId: string;
           try { waitId = r.onWait(request); }
-          catch { rpc.respondError(id, -32000, 'wait_storage_error'); fail('wait_storage_error'); return; }
+          catch (error) {
+            // Policy refusals leave the turn running so the model can continue
+            // without waiting; only storage faults end the turn.
+            if (error instanceof RuntimeError && WAIT_REFUSALS.has(error.code)) { rpc.respondError(id, -32602, error.code); return; }
+            rpc.respondError(id, -32000, 'wait_storage_error'); fail('wait_storage_error'); return;
+          }
           if (typeof waitId !== 'string' || !waitId.trim()) {
             rpc.respondError(id, -32000, 'wait_storage_error'); fail('wait_storage_error'); return;
           }
