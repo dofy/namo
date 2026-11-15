@@ -884,18 +884,25 @@ export class Engine {
       if(output.kind==='result'&&this.config.feishu?.progressUpdates!==false){const task=this.store.get(output.inboxKey)?.taskId;if(task)void this.feedback.finalize(task).catch(()=>this.fatal('feedback_storage_error'));}
       this.nextSendAt = Date.now() + 300;
       let platformId: string;
-      let card: object|undefined;
-      if(this.config.feishu?.cards&&this.sender.sendCard) card=new Cards(this.store).prepare(output);
-      const route = output.route ? JSON.parse(output.route) as DeliveryRoute : undefined;
-      const plainOnly = output.payload && JSON.parse(output.payload).textOnly;
-      const incoming=this.store.get(output.inboxKey);
-      if(!card && !plainOnly && this.sender.sendCard && output.kind==='result' && incoming?.text.trim()==='/tasks')
-        card=renderTaskListCard(output.content);
-      const previous=output.part?this.store.db.prepare('SELECT content FROM outbox WHERE inboxKey=? AND kind=? AND part<? ORDER BY part').all(output.inboxKey,output.kind,output.part).map(row=>String(row.content)).join(''):'';
-      const display=output.kind==='result' && output.part===0 && !previous
-        ? formatControlDisplay(this.store.get(output.inboxKey)?.text ?? '',output.content) : output.content;
-      const post = !card && !plainOnly && this.sender.sendPost && hasMarkdown(previous+display) ? richPost(display, openFence(previous)??false) : undefined;
-      const plain=plainOnly && incoming?.text.trim()==='/tasks' ? display.replaceAll('`','') : display;
+      let card: object|undefined, route: DeliveryRoute|undefined, plainOnly: unknown, post: ReturnType<typeof richPost>|undefined, plain: string;
+      // Nothing has been transmitted yet, so a preparation fault is a definite
+      // failure, never an unknown delivery.
+      try {
+        if(this.config.feishu?.cards&&this.sender.sendCard) card=new Cards(this.store).prepare(output);
+        route = output.route ? JSON.parse(output.route) as DeliveryRoute : undefined;
+        plainOnly = output.payload && JSON.parse(output.payload).textOnly;
+        const incoming=this.store.get(output.inboxKey);
+        if(!card && !plainOnly && this.sender.sendCard && output.kind==='result' && incoming?.text.trim()==='/tasks')
+          card=renderTaskListCard(output.content);
+        const previous=output.part?this.store.db.prepare('SELECT content FROM outbox WHERE inboxKey=? AND kind=? AND part<? ORDER BY part').all(output.inboxKey,output.kind,output.part).map(row=>String(row.content)).join(''):'';
+        const display=output.kind==='result' && output.part===0 && !previous
+          ? formatControlDisplay(this.store.get(output.inboxKey)?.text ?? '',output.content) : output.content;
+        post = !card && !plainOnly && this.sender.sendPost && hasMarkdown(previous+display) ? richPost(display, openFence(previous)??false) : undefined;
+        plain=plainOnly && incoming?.text.trim()==='/tasks' ? display.replaceAll('`','') : display;
+      } catch {
+        this.store.deliveryFailed(output.id, false, 'delivery_prepare_failed');
+        this.log('delivery_issue', { outboxId: output.id, state: 'failed', code: 'delivery_prepare_failed' }); continue;
+      }
       try { platformId = card ? await this.sender.sendCard!(output.chatId, card, output.uuid, route) : post ? await this.sender.sendPost!(output.chatId, post, output.uuid, route) : await this.sender.send(output.chatId, plain, output.uuid, route); }
       catch (e) {
         const error = e instanceof SendError ? e : new SendError(true, 'transport_error');

@@ -182,3 +182,16 @@ test('an unusable chat workspace is answered instead of crashing the receiver',a
  await wait(()=>sent.some(text=>text.includes('workspace_unavailable')));
  assert.equal(runs,0);assert.equal(store.get('a')?.taskId,null);
 });
+
+test('an outbox row that cannot be prepared fails definitively and later replies still send',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'namo-outbox-prepare-')),store=new Store(join(dir,'db'));const sent:string[]=[];
+ const engine=new Engine(store,{async run(){return{text:'done',threadId:'t',turnId:'turn'};}},
+  {async send(_c,text,id){sent.push(text);return id;}},{dataDir:dir,concurrency:1});
+ t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+ store.enqueue(msg('broken'));store.addOutput('broken','notice','never sent');
+ store.db.prepare("UPDATE outbox SET route='{' WHERE inboxKey='broken'").run();
+ engine.start();await wait(()=>store.db.prepare("SELECT state FROM outbox WHERE inboxKey='broken'").get()?.state==='failed');
+ assert.equal(store.db.prepare("SELECT error FROM outbox WHERE inboxKey='broken'").get()?.error,'delivery_prepare_failed');
+ engine.accept(msg('next','other'));await wait(()=>store.get('next')?.state==='replied');
+ assert.deepEqual(sent.filter(text=>text==='never sent'),[]);
+});
