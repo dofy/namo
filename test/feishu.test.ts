@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeEvent, type FeishuEvent } from '../src/feishu.js';
 import { makeRedactor, codexEnvironment, acquireLock } from '../src/safety.js';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -42,6 +43,22 @@ test('credential redaction and child environment do not expose Feishu or provide
   assert.equal(env.CODEX_HOME, '/private-bot-home');
   assert.equal(env.FEISHU_APP_SECRET, undefined); assert.equal(env.OPENAI_BASE_URL, undefined);
   assert.equal(env.OPENAI_API_KEY, undefined);
+});
+
+test('stale lock reclaim is guarded so only one starter can take over a dead PID', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'bot-lock-reclaim-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout;
+  const lock = join(dir, 'service.lock'), guard = `${lock}.reclaim`;
+  mkdirSync(lock); writeFileSync(join(lock, 'pid'), dead);
+  mkdirSync(guard);
+  assert.throws(() => acquireLock(dir), /已有服务运行/, 'a reclaim in progress keeps the lock');
+  assert.equal(readFileSync(join(lock, 'pid'), 'utf8'), dead);
+  const old = new Date(Date.now() - 120_000); utimesSync(guard, old, old);
+  assert.throws(() => acquireLock(dir), /锁回收被中断/, 'an abandoned guard is reported, never removed');
+  rmSync(guard, { recursive: true });
+  const release = acquireLock(dir);
+  assert.equal(readFileSync(join(lock, 'pid'), 'utf8'), String(process.pid)); assert.equal(existsSync(guard), false);
+  release(); assert.equal(existsSync(lock), false);
 });
 
 test('singleton lock rejects a second process and can be released cleanly', t => {

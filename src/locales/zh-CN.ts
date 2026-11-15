@@ -1058,6 +1058,7 @@ export const chinese = {
   "release.runtimeFileMissingReleaseSnapshot": "发布快照缺少运行文件：{0}",
   "release.unsupportedFileTypeReleaseSnapshot": "发布快照包含不支持的文件类型：{0}",
   "safety.invalidServiceLockRefusingStart": "服务锁损坏，拒绝启动",
+  "safety.lockReclaimInterrupted": "上次锁回收被中断；请确认没有 Namo 服务在运行后手动删除 {0}",
   "safety.lockFileIncompleteConfirmOldServiceStopped": "锁文件未完成写入；请确认旧服务已停止后手动清理 data/service.lock",
   "safety.serviceAlreadyRunningDatadir": "同一个 dataDir 已有服务运行",
   "service.agentNotReadyRunNamoDoctorNamo": "Codex 尚未就绪。请在 namo ui 中诊断，需要认证时运行 namo login。",

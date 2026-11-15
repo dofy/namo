@@ -1057,6 +1057,7 @@ export const english = {
   "release.runtimeFileMissingReleaseSnapshot": "Runtime file missing from release snapshot: {0}",
   "release.unsupportedFileTypeReleaseSnapshot": "Unsupported file type in release snapshot: {0}",
   "safety.invalidServiceLockRefusingStart": "Invalid service lock; refusing to start",
+  "safety.lockReclaimInterrupted": "A previous lock recovery was interrupted. Confirm no Namo service is running, then remove {0}.",
   "safety.lockFileIncompleteConfirmOldServiceStopped": "Lock file is incomplete. Confirm the old service has stopped before manually removing data/service.lock.",
   "safety.serviceAlreadyRunningDatadir": "A service is already running with this dataDir",
   "service.agentNotReadyRunNamoDoctorNamo": "Codex is not ready. Run diagnostics in namo ui and use namo login if authentication is needed.",
