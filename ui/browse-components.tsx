@@ -1,6 +1,6 @@
 import { SectionHeading } from './components/PageSection';
 import { t as tr, getLocale, useLocale } from './i18n';
-import { useEffect, useId, useState, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { Button, Card, Link, Text, TextField } from '@radix-ui/themes';
 import type { BrowseOptions, PageResult } from '../src/ui-contract';
 import { message } from './api';
@@ -15,17 +15,30 @@ export function LocalLink({ href, navigate, children, className, title }: { href
   }
   return <Link href={href} onClick={click} className={className} title={title} underline="hover">{children}</Link>;
 }
+/** Loads `key` and reloads when `revision` changes. A revision-only change never
+ * aborts a request in flight: it is coalesced into one reload after it settles,
+ * so a request slower than the poll interval still completes. */
 export function useRemote<T>(key: string, load: (signal: AbortSignal) => Promise<T>, revision: unknown, enabled = true) {
   const locale = useLocale();
   const [result, setResult] = useState<{ key: string; data: T }>(), [error, setError] = useState(''), [busy, setBusy] = useState(true);
+  const [again, setAgain] = useState(0);
+  const flight = useRef<{ id: string; load: typeof load; controller: AbortController; stale: boolean }>(undefined);
+  useEffect(() => () => { flight.current?.controller.abort(); flight.current = undefined; }, []);
   useEffect(() => {
-    if (!enabled) return;
-    const controller = new AbortController(); setBusy(true); setError('');
+    const id = `${key}\u0000${locale}`, current = flight.current;
+    if (!enabled) { current?.controller.abort(); flight.current = undefined; return; }
+    if (current && current.id === id && current.load === load) { current.stale = true; return; }
+    current?.controller.abort();
+    const controller = new AbortController(), entry = { id, load, controller, stale: false };
+    flight.current = entry; setBusy(true); setError('');
     void load(controller.signal).then(data => { if (!controller.signal.aborted) setResult({ key, data }); })
       .catch(e => { if (!controller.signal.aborted) setError(message(e)); })
-      .finally(() => { if (!controller.signal.aborted) setBusy(false); });
-    return () => controller.abort();
-  }, [key, load, revision, enabled, locale]);
+      .finally(() => {
+        if (flight.current !== entry) return;
+        flight.current = undefined; setBusy(false);
+        if (entry.stale) setAgain(n => n + 1);
+      });
+  }, [key, load, revision, enabled, locale, again]);
   return { data: result?.key === key ? result.data : undefined, error, busy };
 }
 export function DateTime({ value, empty = tr("browse.notStarted") }: { value: number | null | undefined; empty?: string }) {
