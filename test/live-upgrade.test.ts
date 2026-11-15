@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Store } from '../src/store.js';
@@ -208,4 +208,14 @@ test('verified runtime updates preserve the receiver pin and recover the active 
     assert.equal(confirmLiveTrial(dir,hostRelease.id,target.id),true);
     assert.equal(activeRuntimeId(dir,hostRelease.id),target.id);
   } finally { await stopWatch(); await host.stop(); }
+});
+
+test('durable row codecs are part of the live-upgrade ABI', () => {
+  const files = readdirSync(new URL('../src/', import.meta.url)).filter(name => name.endsWith('.js'))
+    .map(name => ({ path: `dist/src/${name}`, sha256: 'a'.repeat(64), size: 1, mode: 0o644 }));
+  const manifest = (changed?: string) => ({ format: 1, id: 'x', entry: 'dist/src/cli.js', worker: 'dist/src/runner-worker.js', packageVersion: '0', runtimeDependencies: [],
+    files: files.map(file => file.path === changed ? { ...file, sha256: 'b'.repeat(64) } : file) }) as unknown as Parameters<typeof assertLiveCompatible>[0];
+  assert.doesNotThrow(() => assertLiveCompatible(manifest(), manifest('dist/src/runtime.js')));
+  for (const name of ['record-table', 'business-storage', 'schema-directory-migration'])
+    assert.throws(() => assertLiveCompatible(manifest(), manifest(`dist/src/${name}.js`)), /live_upgrade_requires_receiver_restart/);
 });
