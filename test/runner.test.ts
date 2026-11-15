@@ -502,6 +502,17 @@ test('duplicate worker claims fail closed and configuration changes before start
   assert.equal(runnerJob(f.store, run)?.error, 'task_configuration_changed'); assert.equal(f.calls(), 1);
 });
 
+test('approved directory requests are applied even after many finished requests', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'namo-directory-backlog-')), store = new Store(join(dir, 'db'));
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  const put = store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)');
+  for (let i = 0; i < 150; i++) put.run(`directory-approval:DIR-A${String(i).padStart(11, '0')}`, JSON.stringify({ id: `DIR-A${i}`, state: 'rejected' }));
+  put.run('directory-approval:DIR-ZZZZZZZZZZZZ', JSON.stringify({ id: 'DIR-ZZZZZZZZZZZZ', state: 'approved', sourceKey: 'missing', taskId: 'missing' }));
+  put.run('directory-approval:DIR-ZZZZZZZZZZZY', '{corrupt');
+  applyDirectoryRequests(store, {} as never, () => { throw new Error('must not dispatch'); });
+  assert.equal(getDirectoryRequest(store, 'DIR-ZZZZZZZZZZZZ')?.state, 'failed');
+});
+
 test('a reused worker PID loses ownership once the heartbeat is stale', {skip: process.platform === 'win32'}, async t => {
   const f = fixture(t), receiver = f.receiver(); receiver.accept(message('a'));
   const task = f.tasks.get(f.store.get('a')!.taskId!)!, run = f.tasks.start(task);

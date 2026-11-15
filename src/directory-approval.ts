@@ -37,7 +37,10 @@ export function decideDirectory(store:Store,c:Config,id:string,m:Incoming,approv
 }
 /** Apply each approved request exactly once; config watcher handles safe reload. */
 export function applyDirectoryRequests(store:Store,c:Config,dispatch:(source:Incoming,request:{id:string;taskId:string;path:string;remaining:string})=>void):void {
- const rows=store.db.prepare("SELECT key,value FROM settings WHERE key>=? AND key<? LIMIT 100").all('directory-approval:','directory-approval;');
+ // Filter by state in SQL: finished requests are never deleted and must not
+ // crowd approved ones out of the per-tick limit.
+ const rows=store.db.prepare(`SELECT key,value FROM settings WHERE key>=? AND key<?
+  AND (CASE WHEN json_valid(value) THEN json_extract(value,'$.state') END) IN ('approved','saved') ORDER BY key LIMIT 100`).all('directory-approval:','directory-approval;');
  for(const row of rows){let r:Request;try{r=JSON.parse(String(row.value));}catch{continue;}
   if(!['approved','saved'].includes(r.state))continue;
   const source=store.get(r.sourceKey),task=store.db.prepare('SELECT state FROM tasks WHERE id=?').get(r.taskId);
