@@ -1,6 +1,6 @@
 import sqlite, { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Config } from './config.js';
 
@@ -80,10 +80,28 @@ export async function createUpgradeBackup(c: Config, plist: string, operation: '
     writeFileSync(manifest, JSON.stringify({ format: 1, operation, verifiedAt: Date.now(), database: { present, fingerprint }, files }) + '\n', { mode: 0o600, flag: 'wx' });
     syncFile(manifest); syncFile(directory);
     const complete = join(root, id); renameSync(directory, complete); syncFile(root);
+    try { pruneUpgradeBackups(root); } catch { /* Pruning never invalidates the new verified backup. */ }
     return complete;
   } catch {
     // Retain partial evidence under .pending, but never issue a successful receipt.
     // Raw filesystem/SQLite errors and private paths must not enter CLI logs.
     throw new Error('upgrade_backup_failed');
   }
+}
+
+const BACKUP_NAME = /^(upgrade|install|live-upgrade)-(\d+)-[0-9a-f-]{36}$/;
+const PENDING_NAME = /^\.(upgrade|install|live-upgrade)-(\d+)-[0-9a-f-]{36}\.pending$/;
+/** Keeps the newest `keep` verified backups and drops interrupted `.pending`
+ * attempts older than `pendingMaxAgeMs`. Only Namo-named directories are touched. */
+export function pruneUpgradeBackups(root: string, keep = 5, pendingMaxAgeMs = 7 * 24 * 60 * 60_000, now = Date.now()): string[] {
+  if (lstatSync(root).isSymbolicLink()) return [];
+  const entries = readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory());
+  const verified = entries.map(entry => ({ name: entry.name, match: BACKUP_NAME.exec(entry.name) }))
+    .filter(item => item.match && existsSync(join(root, item.name, 'verified.json')))
+    .sort((a, b) => Number(b.match![2]) - Number(a.match![2]) || b.name.localeCompare(a.name));
+  const stale = entries.map(entry => ({ name: entry.name, match: PENDING_NAME.exec(entry.name) }))
+    .filter(item => item.match && now - Number(item.match[2]) > pendingMaxAgeMs);
+  const removed = [...verified.slice(keep), ...stale].map(item => item.name);
+  for (const name of removed) rmSync(join(root, name), { recursive: true, force: true });
+  return removed;
 }

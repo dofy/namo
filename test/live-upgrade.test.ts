@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Store } from '../src/store.js';
@@ -229,4 +229,24 @@ test('database fingerprint ignores physical row order, including case-only ties'
   const a = build(['b', 'A', 'a']), b = build(['a', 'b', 'A']), c = build(['a', 'b', 'B']);
   assert.equal(databaseFingerprint(a), databaseFingerprint(b));
   assert.notEqual(databaseFingerprint(a), databaseFingerprint(c));
+});
+
+test('upgrade backups keep the newest verified copies and drop old interrupted attempts', async t => {
+  const { pruneUpgradeBackups } = await import('../src/upgrade-backup.js');
+  const root = mkdtempSync(join(tmpdir(), 'namo-backup-prune-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const day = 24 * 60 * 60_000, now = 100 * day;
+  const make = (name: string, verified: boolean) => { mkdirSync(join(root, name)); if (verified) writeFileSync(join(root, name, 'verified.json'), '{}'); };
+  for (let i = 1; i <= 7; i++) make(`upgrade-${i * day}-${uuid(i)}`, true);
+  make(`live-upgrade-${8 * day}-${uuid(8)}`, true);
+  make(`upgrade-${9 * day}-${uuid(9)}`, false);
+  make(`.upgrade-${now - 30 * day}-${uuid(10)}.pending`, false);
+  make(`.upgrade-${now - day}-${uuid(11)}.pending`, false);
+  make('user-notes', false);
+  const removed = pruneUpgradeBackups(root, 5, 7 * day, now);
+  assert.deepEqual(removed.sort(), [`.upgrade-${now - 30 * day}-${uuid(10)}.pending`, `upgrade-${1 * day}-${uuid(1)}`, `upgrade-${2 * day}-${uuid(2)}`, `upgrade-${3 * day}-${uuid(3)}`].sort());
+  const left = readdirSync(root).sort();
+  assert.ok(left.includes(`live-upgrade-${8 * day}-${uuid(8)}`) && left.includes(`upgrade-${9 * day}-${uuid(9)}`) && left.includes('user-notes'));
+  assert.ok(left.includes(`.upgrade-${now - day}-${uuid(11)}.pending`));
+  assert.equal(left.length, 8);
 });
