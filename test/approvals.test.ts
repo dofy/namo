@@ -32,6 +32,18 @@ function fixture(t: { after(fn: () => void): void }) {
   return { root, repo, bare, store, task, approvals, actor };
 }
 
+test('git runner drops Namo secrets from the environment and neutralizes repository askpass', async t => {
+  const f = fixture(t), runner = new ExecFileGitRunner(git);
+  command(f.repo, ['config', 'core.askPass', join(f.root, 'evil-askpass')]);
+  const saved = { FEISHU_APP_SECRET: process.env.FEISHU_APP_SECRET, NAMO_GITHUB_TOKEN: process.env.NAMO_GITHUB_TOKEN };
+  process.env.FEISHU_APP_SECRET = 'feishu-secret-value'; process.env.NAMO_GITHUB_TOKEN = 'github-secret-value';
+  t.after(() => { for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
+  const askPass = await runner.run(f.repo, ['config', '--get', 'core.askPass']);
+  assert.equal(askPass.stdout.trim(), '');
+  const env = await runner.run(f.repo, ['-c', 'alias.show-env=!env', 'show-env']);
+  assert.equal(env.exitCode, 0); assert.doesNotMatch(env.stdout, /feishu-secret-value|github-secret-value/);
+});
+
 test('request preview persists an exact metadata-only target and discloses limited protection', async t => {
   const f = fixture(t);
   const preview = await f.approvals.request(f.task, { remote: 'origin', ref: 'refs/heads/main', configRevision: CONFIG_REVISION });

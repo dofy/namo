@@ -51,14 +51,15 @@ export class ExecFileGitRunner implements GitRunner {
   run(cwd: string, args: string[], timeoutMs = 30_000): Promise<GitCommandResult> {
     const env: NodeJS.ProcessEnv = {};
     for (const [key, value] of Object.entries(process.env)) {
-      if (key.startsWith('GIT_') || key.startsWith('DYLD_') || key.startsWith('LD_') || key === 'PATH' || ['SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'].includes(key.toUpperCase())) continue;
+      // Namo's own secrets (Feishu app secret, GitHub token env and similar) never reach Git, SSH or credential helpers.
+      if (key.startsWith('GIT_') || key.startsWith('DYLD_') || key.startsWith('LD_') || key.startsWith('FEISHU_') || key.startsWith('NAMO_') || key === 'PATH' || ['SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'].includes(key.toUpperCase())) continue;
       env[key] = value;
     }
     env.PATH = [...new Set([dirname(this.gitBin), '/usr/bin', '/bin'])].join(delimiter);
     env.GIT_TERMINAL_PROMPT = '0'; env.GIT_PAGER = 'cat'; env.GIT_EDITOR = 'false'; env.GIT_SEQUENCE_EDITOR = 'false';
-    // Never allow repository or global fsmonitor configuration to execute a
-    // program during otherwise read-only Git inspection.
-    const fixedArgs = ['-c', 'core.fsmonitor=false', ...args];
+    // Never allow repository or global fsmonitor or askpass configuration to
+    // execute a program, for example on an auth challenge during ls-remote.
+    const fixedArgs = ['-c', 'core.fsmonitor=false', '-c', 'core.askPass=', ...args];
     return new Promise(resolveResult => execFile(this.gitBin, fixedArgs, { cwd, env, timeout: timeoutMs, maxBuffer: MAX_OUTPUT, windowsHide: true }, (error, stdout, stderr) => {
       const detail = error as (NodeJS.ErrnoException & { killed?: boolean; signal?: string }) | null;
       resolveResult({ exitCode: error ? typeof detail?.code === 'number' ? detail.code : null : 0,
