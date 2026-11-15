@@ -10,10 +10,44 @@ import { Feedback, recordActivity, progressState } from '../src/feedback.js';
 import { richPost, splitDisplay, fenceState } from '../src/richtext.js';
 import { recordProgress, readProgress, type PublicProgressEvent } from '../src/public-progress.js';
 import { makeRedactor } from '../src/safety.js';
+import { enqueueTitle, titleJobKey, chooseTitleModel } from '../src/title-summary.js';
 
 function fixture(t:{after(fn:()=>void):void}){const { dir, store } = storeFixture(t, 'namo-feedback-');
   store.enqueue({key:'m',messageId:'om_original',chatId:'chat',chatKey:'app:chat',senderId:'owner',text:'work',envelope:{version:1,type:'text',kind:'instruction',scopeKey:'app:chat:thread:t',threadId:'t',materials:[],limitations:[]}});
   const tasks=new Tasks(store),task=tasks.create(store.get('m')!,{cwd:dir,policyHash:'policy'});return {store,tasks,task};}
+
+test('small title model is selected only from the available catalog',()=>{
+  assert.equal(chooseTitleModel([{id:'gpt-6-astra'},{id:'gpt-6-luna'}]),'gpt-6-luna');
+  assert.equal(chooseTitleModel([{id:'gpt-6-luna'}],['gpt-6-astra']),undefined);
+  assert.equal(chooseTitleModel([{id:'gpt-6-astra'}]),undefined);
+});
+
+test('late generated titles update progress and result cards without changing their body',async t=>{
+  const f=fixture(t);f.tasks.start(f.task);f.store.addOutput('m','progress','working');const progress=f.store.nextOutput()!;
+  f.store.sending(progress.id);f.store.sent(progress.id,'progress-card');f.store.db.prepare('UPDATE outbox SET payload=? WHERE id=?').run(JSON.stringify({elements:[]}),progress.id);
+  const patches:{id:string;card:any}[]=[];const feedback=new Feedback(f.store,{async send(){return 'unused';},async updateCard(id,card){patches.push({id,card});}});
+  await feedback.tick({cadenceMs:0});assert.match(patches[0].card.header.title.content,/work/);
+  enqueueTitle(f.store,f.task.id,'task');f.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({state:'completed',title:'整理文档'}),titleJobKey(f.task.id,'task'));
+  await feedback.tick({cadenceMs:0});assert.equal(patches.at(-1)!.card.header.title.content,'⏳ 正在处理 · 整理文档');
+  f.store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(f.task.id);f.store.addOutput('m','result','完成正文');
+  const result=f.store.db.prepare("SELECT * FROM outbox WHERE kind='result'").get() as any;
+  f.store.db.prepare('UPDATE outbox SET payload=? WHERE id=?').run(JSON.stringify({schema:'2.0',header:{title:{tag:'plain_text',content:'✅ 已完成 · 完成正文'}},body:{elements:[{tag:'markdown',content:'完成正文'}]}}),result.id);
+  f.store.sending(result.id);f.store.sent(result.id,'result-card');enqueueTitle(f.store,f.task.id,'result');
+  f.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({state:'completed',title:'文档已整理'}),titleJobKey(f.task.id,'result'));
+  await feedback.tick({progress:false});const patch=patches.find(p=>p.id==='result-card')!;
+  assert.equal(patch.card.header.title.content,'✅ 已完成 · 文档已整理');assert.equal(patch.card.body.elements[0].content,'完成正文');
+  await feedback.tick({progress:false});assert.equal(patches.filter(p=>p.id==='result-card').length,1);
+});
+
+test('an uncertain result-title patch is not replayed',async t=>{
+  const f=fixture(t);f.store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(f.task.id);f.store.addOutput('m','result','完成正文');
+  const out=f.store.nextOutput()!;f.store.db.prepare('UPDATE outbox SET payload=? WHERE id=?').run(JSON.stringify({schema:'2.0',header:{title:{tag:'plain_text',content:'✅ 已完成 · 完成正文'}},body:{elements:[]}}),out.id);
+  f.store.sending(out.id);f.store.sent(out.id,'card');enqueueTitle(f.store,f.task.id,'result');
+  f.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({state:'completed',title:'整理结果'}),titleJobKey(f.task.id,'result'));
+  let patches=0,reads=0;const feedback=new Feedback(f.store,{async send(){return 'unused';},async updateCard(){patches++;throw Error('uncertain');},async readCard(){reads++;return 'different';}});
+  await feedback.tick({progress:false});await feedback.tick({progress:false});await feedback.tick({progress:false});assert.equal(patches,1);assert.equal(reads,1);
+  assert.equal(f.store.db.prepare('SELECT state FROM progress_updates WHERE outboxId=?').get(out.id)?.state,'unknown');
+});
 
 test('feedback starts after durable acceptance, deduplicates and removes after completion',async t=>{
   const f=fixture(t);let adds=0,removes=0;

@@ -21,7 +21,7 @@ const HOST_FILES = ['cli', 'service-bootstrap', 'runtime-host', 'live-upgrade', 
   'github-api','github-access','github-review','approval-service','approvals','recovery','artifact-delivery','inbox-retention',
   'assistant','profiles','model-preferences','task-progress','public-progress','evidence','artifacts','model-catalog',
   'task-context','image-inputs','memory-commands','memory-extractor','materials','task-materials','mcp-oauth',
-  'conversation-control','control-classifier','directory-approval',
+  'conversation-control','control-classifier','directory-approval','title-summary',
   // Row codecs and startup migrations imported by the modules above.
   'record-table','schema-directory-migration'];
 

@@ -19,6 +19,7 @@ import { Profiles, ProfileError } from './profiles.js';
 import { userModel, setUserModel, formatModelReply, ModelPreferenceError } from './model-preferences.js';
 import { listCodexModels } from './codex-connection.js';
 import { ModelCatalog } from './model-catalog.js';
+import { chooseTitleModel, enqueueTitle, type TitlePhase } from './title-summary.js';
 import { formatControlDisplay } from './control-display.js';
 import { resolveCodexBinary } from './codex-installation.js';
 import { RuntimeVersions } from './runtime-version.js';
@@ -97,13 +98,15 @@ export class Engine {
   private controlRunning?: Promise<void>;
   private controlAbort?: AbortController;
   private memoryAbort?: AbortController;
+  private titleRunning?: Promise<void>;
+  private titleAbort?: AbortController;
   private modelCatalog?: ModelCatalog;
   private versions = new RuntimeVersions();
   constructor(readonly store: Store, private runtime: Runtime, private sender: Sender,
     private config: Pick<Config, 'dataDir' | 'concurrency' | 'github' | 'mcpConnections' | 'retention'> & { file?:string; codex?: Config['codex']; agents?: Config['agents']; feishu?: Partial<Config['feishu']> },
     private redact: (s: string) => string = s => s,
     private log: Log = () => {},
-    private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); this.feedback = new Feedback(store, sender,task=>this.taskAccessible(task)); this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined,id=>{const task=this.tasks.get(id);return !!task&&this.taskAccessible(task);});
+    private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); this.feedback = new Feedback(store, sender,task=>this.taskAccessible(task),this.redact); this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined,id=>{const task=this.tasks.get(id);return !!task&&this.taskAccessible(task);});
       if(config.file){const file=config.file;this.approvals=new ApprovalService(store,loadConfig(file),digest(readFileSync(file,'utf8')),()=>digest(readFileSync(file,'utf8')));}
       if(runtime.persistent && config.codex) {
         const codex = config.codex;
@@ -409,6 +412,7 @@ export class Engine {
     this.log('recovered', this.store.recover(this.runtime.persistent));
     this.tasks.recover(this.runtime.persistent);
     this.feedback.recover();
+    this.store.db.prepare("UPDATE settings SET value=? WHERE key LIKE 'title-summary:%' AND json_valid(value) AND json_extract(value,'$.state')='running'").run(JSON.stringify({state:'failed'}));
     this.artifacts.recover();
     if (!paused) this.store.db.prepare("DELETE FROM settings WHERE key='maintenance'").run();
     if(!paused)this.routeQueued();
@@ -427,6 +431,49 @@ export class Engine {
     });
   }
   resume(): void { this.routeQueued(); this.paused = false; void this.pump(); }
+  /** Low-priority, at-most-once title generation; never blocks task delivery. */
+  private startTitleSummary():void {
+    if(this.titleRunning||!this.runtime.summarizeTitle||!this.modelCatalog||!this.config.codex||this.stopped||this.paused||this.configurationDraining||!this.config.feishu?.cards||this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
+    const models=this.modelCatalog.models;if(!models.length)return;
+    const active=new Set([...this.active.values()].map(a=>a.run));
+    const reservations=(this.runtime.reservations?.()??[]).filter(r=>!active.has(r.runId));
+    if(this.active.size+reservations.length+(this.memoryRunning?1:0)+(this.controlRunning?1:0)>=this.config.concurrency)return;
+    const row=this.store.db.prepare(`SELECT s.key FROM settings s JOIN tasks t ON s.key='title-summary:'||t.id||':task' OR s.key='title-summary:'||t.id||':result'
+      WHERE s.key LIKE 'title-summary:%' AND json_valid(s.value) AND json_extract(s.value,'$.state')='pending'
+        AND NOT (s.key='title-summary:'||t.id||':task' AND t.state='queued') ORDER BY s.rowid LIMIT 1`).get();
+    if(!row)return;
+    const key=String(row.key),match=/^title-summary:(N-[A-F0-9]{12}):(task|result)$/.exec(key);
+    if(!match)return;
+    const phase=match[2] as TitlePhase,task=this.tasks.get(match[1]);
+    const fail=()=>{this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({state:'failed'}),key);};
+    if(!task||!this.taskAccessible(task)||(phase==='task'&&task.state!=='running')||(phase==='result'&&task.state!=='succeeded')){fail();return;}
+    if(phase==='result') {
+      const output=this.store.db.prepare("SELECT state,payload FROM outbox WHERE inboxKey=? AND kind='result' AND part=0").get(task.inboxKey);
+      if(!output||['pending','sending','deferred'].includes(String(output.state)))return;
+      let card:{header?:unknown};try{card=JSON.parse(String(output.payload));}catch{fail();return;}
+      if(output.state!=='sent'||!card.header){fail();return;}
+    }
+    // allowedModels governs user-selectable task models; auxiliary titles use
+    // the service account's catalog without changing the task model.
+    const model=chooseTitleModel(models);
+    const value=phase==='task'?this.store.get(task.inboxKey)?.text:this.store.db.prepare("SELECT content FROM output_sources WHERE inboxKey=? AND kind='result'").get(task.inboxKey)?.content;
+    if(!model||typeof value!=='string'||!value.trim()){fail();return;}
+    const allowed=this.store.transaction(()=>{
+      const limit=this.config.codex?.dailyTurnLimit??(this.config.feishu?.access?100:0);
+      if(limit){const quota=`daily-turns:${new Date().toISOString().slice(0,10)}`,saved=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(quota),used=saved?Number(saved.value):0;
+        if(!Number.isSafeInteger(used)||used<0||used>=limit)return false;
+        this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(quota,String(used+1));}
+      this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({state:'running',model}),key);return true;
+    });
+    if(!allowed){fail();return;}
+    this.titleAbort=new AbortController();
+    const text=Array.from(this.redact(value).replace(/https?:\/\/[^\s<>]+/gi,'[链接]')).slice(0,3000).join('');
+    this.titleRunning=this.runtime.summarizeTitle({phase,text,model},this.titleAbort.signal).then(title=>{
+      if(this.stopped||!this.taskAccessible(task)||!title||Array.from(title).length>28){fail();return;}
+      const safe=this.redact(title);if(safe!==title||/[\u0000-\u001f\u007f]/.test(title)){fail();return;}
+      this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({state:'completed',model,title}),key);
+    }).catch(()=>fail()).finally(()=>{this.titleRunning=undefined;this.titleAbort=undefined;void this.pump();});
+  }
   private startControlClassification():void {
     if(this.controlRunning || !this.runtime.classifyControl || !this.config.file || this.stopped || this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
     this.store.db.prepare("DELETE FROM settings WHERE key>=? AND key<? AND NOT EXISTS (SELECT 1 FROM inbox i WHERE 'control-classify:'||i.key=settings.key AND i.state='queued' AND i.taskId IS NULL)").run('control-classify:','control-classify;');
@@ -435,7 +482,7 @@ export class Engine {
     if(!row)return;
     const activeRuns=new Set([...this.active.values()].map(a=>a.run));
     const reserved=(this.runtime.reservations?.()??[]).filter(r=>!activeRuns.has(r.runId));
-    if(this.active.size+reserved.length+(this.memoryRunning?1:0)>=this.config.concurrency){this.memoryAbort?.abort('foreground_control');return;}
+    if(this.active.size+reserved.length+(this.memoryRunning?1:0)+(this.titleRunning?1:0)>=this.config.concurrency){this.memoryAbort?.abort('foreground_control');this.titleAbort?.abort('foreground_control');return;}
     const message=this.store.get(String(row.key))!;
     const pending=this.tasks.pending(message).filter(t=>t.scopeKey===scopeOf(message)&&['queued','running','waiting'].includes(t.state));
     if(!pending.length){this.store.transaction(()=>{this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`control-classify:${message.key}`);this.route(this.store.get(message.key)!,true);});return;}
@@ -581,11 +628,16 @@ export class Engine {
         const ready=this.tasks.candidates().some(t=>!this.active.has(this.slotKey(t))&&!blocked.some(a=>('task' in a?this.slotKey(a.task):a.slotKey??a.chatKey)===this.slotKey(t)||('task' in a?this.tasks.directories(a.task):a.paths?.length?a.paths:[a.cwd]).some(root=>this.tasks.directories(t).some(path=>pathsOverlap(root,path)))));
         if(ready&&this.active.size+reservations.length+1>=this.config.concurrency)this.memoryAbort?.abort('foreground_task');
       }
+      if(this.titleRunning){
+        const activeIds=new Set([...this.active.values()].map(a=>a.run));
+        const reservations=(this.runtime.reservations?.()??[]).filter(r=>!activeIds.has(r.runId));
+        if(this.tasks.candidates().length&&this.active.size+reservations.length+(this.memoryRunning?1:0)+(this.controlRunning?1:0)+1>=this.config.concurrency)this.titleAbort?.abort('foreground_task');
+      }
       this.startControlClassification();
       for (;;) {
         const activeRuns = new Set([...this.active.values()].map(a => a.run));
         const reservations = (this.runtime.reservations?.() ?? []).filter(r => !activeRuns.has(r.runId));
-        if (this.active.size + reservations.length + (this.memoryRunning ? 1 : 0) + (this.controlRunning || this.runtime.classifyControl && this.config.concurrency>1 ? 1 : 0) >= this.config.concurrency) break;
+        if (this.active.size + reservations.length + (this.memoryRunning ? 1 : 0) + (this.titleRunning?1:0) + (this.controlRunning || this.runtime.classifyControl && this.config.concurrency>1 ? 1 : 0) >= this.config.concurrency) break;
         const claimed=this.store.transaction(()=>{
           if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
           const next=this.tasks.candidates().find(t=>!this.active.has(this.slotKey(t))&&![...this.active.values(), ...reservations].some(a=>('task' in a?this.slotKey(a.task):a.slotKey??a.chatKey)===this.slotKey(t)||('task' in a?this.tasks.directories(a.task):a.paths?.length?a.paths:[a.cwd]).some(root=>this.tasks.directories(t).some(path=>pathsOverlap(root,path)))));
@@ -606,7 +658,7 @@ export class Engine {
       const reserved=this.runtime.reservations?.()??[];
       const runs=new Set([...this.active.values()].map(a=>a.run));
       if(!this.configurationDraining&&!this.memoryRunning&&this.autoMemories?.pending()
-        &&this.active.size+reserved.filter(r=>!runs.has(r.runId)).length+(this.controlRunning?1:0)<this.config.concurrency
+        &&this.active.size+reserved.filter(r=>!runs.has(r.runId)).length+(this.controlRunning?1:0)+(this.titleRunning?1:0)<this.config.concurrency
         &&!this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get()) {
         const allowed=this.store.transaction(()=>{
           const limit=this.config.codex?.dailyTurnLimit??(this.config.feishu?.access?100:0);if(!limit)return true;
@@ -620,6 +672,7 @@ export class Engine {
             .catch(()=>this.log('memory_extraction_failed'))
             .finally(()=>{this.memoryRunning=undefined;this.memoryAbort=undefined;void this.pump();});}
       }
+      this.startTitleSummary();
       if (!this.outputBusy) {
         this.outputBusy = true;
         void this.flush().catch(() => this.fatal('outbox_storage_error')).finally(() => { this.outputBusy = false; });
@@ -704,6 +757,7 @@ export class Engine {
           this.tasks.progress();
         } else {
           this.tasks.finish(task, run, this.redact(result.text) + reviewCoverageBrief(this.store,task.id) + (report ? evidenceBrief(report) : ''));
+          if(this.runtime.summarizeTitle&&this.config.feishu?.cards&&this.tasks.get(task.id)?.state==='succeeded')enqueueTitle(this.store,task.id,'result');
         }
         const finished=this.tasks.get(task.id)!;
         for(const image of result.generatedImages??[]) {
@@ -800,6 +854,7 @@ export class Engine {
         if(m.envelope?.chatType==='group' || f?.access && !(this.config.codex?.allowedModels??[]).includes(preference))preference='';
         const configured = this.config.codex && selection ? agentCodexConfig({...this.config,codex:this.config.codex},selection).model : this.config.codex?.model;
         const task=this.tasks.create(m,workspace,ref,selection,preference || configured || null);
+        if(this.runtime.summarizeTitle&&this.config.feishu?.cards)enqueueTitle(this.store,task.id,'task');
         if(delivery)this.artifacts.intent(m,task,delivery[1]);
       });
       if (this.config.feishu?.progressUpdates !== false) {
@@ -888,7 +943,7 @@ export class Engine {
       // Nothing has been transmitted yet, so a preparation fault is a definite
       // failure, never an unknown delivery.
       try {
-        if(this.config.feishu?.cards&&this.sender.sendCard) card=new Cards(this.store).prepare(output);
+        if(this.config.feishu?.cards&&this.sender.sendCard) card=new Cards(this.store,undefined,undefined,undefined,this.redact).prepare(output);
         route = output.route ? JSON.parse(output.route) as DeliveryRoute : undefined;
         plainOnly = output.payload && JSON.parse(output.payload).textOnly;
         const incoming=this.store.get(output.inboxKey);
@@ -928,6 +983,7 @@ export class Engine {
     this.stopped = true; clearInterval(this.interval);
     this.controlAbort?.abort();
     await this.controlRunning;
+    this.titleAbort?.abort();await this.titleRunning;
     const modelDiscovery = this.modelCatalog?.stop();
     this.memoryAbort?.abort();
     const tasks = [...this.active.values()];

@@ -15,6 +15,7 @@ import { Waits } from '../src/waits.js';
 import { Cards, renderTaskCard } from '../src/cards.js';
 import { Feedback } from '../src/feedback.js';
 import { cardMarkdown, resultMarkdown, hasMarkdown, openFence, richPost, splitDisplay } from '../src/richtext.js';
+import { enqueueTitle, savedTitle, titleJobKey } from '../src/title-summary.js';
 
 const answer = { text: 'pong，在。', threadId: 'thread', turnId: 'turn' };
 const message = (key: string, text = 'ping', senderId = 'alice'): Incoming => ({ key, messageId: key, chatKey: 'chat', chatId: 'chat', senderId, text });
@@ -147,6 +148,62 @@ test('latest task is scoped to its owner and topic even after many newer tasks e
 });
 
 const gate = () => { let release!:()=>void; const promise=new Promise<void>(r=>{release=r;}); return {promise,release}; };
+test('background title summaries do not delay the task or result and consume the daily budget once each',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'namo-title-')),store=new Store(join(dir,'db')),first=gate();let finish!:(value:RunResult)=>void;
+  const calls:string[]=[],cards:any[]=[],updates:any[]=[];
+  const runtime:Runtime={persistent:true,run(r){return new Promise((resolve,reject)=>{finish=resolve;r.signal.addEventListener('abort',()=>reject(new RuntimeError('receiver_detached')),{once:true});});},async summarizeTitle(input){calls.push(input.phase);if(input.phase==='task')await first.promise;return input.phase==='task'?'整理项目文档':'文档已更新';}};
+  const parsed=parseConfig({dataDir:dir,concurrency:2,codex:{dailyTurnLimit:3},feishu:{cards:true,allowedUserIds:['alice']}},join(dir,'config.json'));
+  const engine=new Engine(store,runtime,{async send(_c,_text,id){return id;},async sendCard(_c,card,id){cards.push(card);return id;},async updateCard(_id,card){updates.push(card);}},
+    {dataDir:dir,concurrency:2,codex:parsed.codex,feishu:parsed.feishu});
+  (engine as unknown as {modelCatalog:unknown}).modelCatalog={models:[{id:'gpt-6-luna'}],start(){},async stop(){},async refresh(){}};
+  t.after(async()=>{first.release();await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+  engine.start();engine.accept(message('title-task','整理项目文档'));await waitFor(()=>calls.includes('task')&&typeof finish==='function');
+  finish({text:'**完成**\n> [!NOTE] 已处理并验证所有项目文档',threadId:'thread',turnId:'turn'});
+  await waitFor(()=>store.get('title-task')?.state==='replied');assert.equal(calls.includes('result'),false);
+  first.release();const id=store.get('title-task')!.taskId!;
+  await waitFor(()=>savedTitle(store,id,'result')==='文档已更新');await waitFor(()=>updates.some(card=>card.header?.title?.content==='✅ 已完成 · 文档已更新'));
+  const quota=store.db.prepare('SELECT value FROM settings WHERE key=?').get(`daily-turns:${new Date().toISOString().slice(0,10)}`);
+  assert.equal(Number(quota?.value),3);assert.deepEqual(calls,['task','result']);assert.ok(cards.length>0);
+});
+
+test('failed title generation retains the fallback without retry',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'namo-title-fail-')),store=new Store(join(dir,'db'));let finish!:(value:RunResult)=>void,calls=0;
+  const runtime:Runtime={persistent:true,run(r){return new Promise((resolve,reject)=>{finish=resolve;r.signal.addEventListener('abort',()=>reject(new RuntimeError('receiver_detached')),{once:true});});},async summarizeTitle(){calls++;throw Error('model unavailable');}};
+  const parsed=parseConfig({dataDir:dir,concurrency:2,codex:{dailyTurnLimit:2},feishu:{cards:true,allowedUserIds:['alice']}},join(dir,'config.json'));
+  const engine=new Engine(store,runtime,{async send(_c,_text,id){return id;},async sendCard(_c,_card,id){return id;}},{dataDir:dir,concurrency:2,codex:parsed.codex,feishu:parsed.feishu});
+  (engine as unknown as {modelCatalog:unknown}).modelCatalog={models:[{id:'gpt-6-luna'}],start(){},async stop(){},async refresh(){}};
+  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+  engine.start();engine.accept(message('title-fail','整理报告'));await waitFor(()=>calls===1&&typeof finish==='function');const id=store.get('title-fail')!.taskId!;
+  await waitFor(()=>JSON.parse(String(store.db.prepare('SELECT value FROM settings WHERE key=?').get(titleJobKey(id,'task'))?.value)).state==='failed');
+  assert.equal(JSON.parse(String(store.db.prepare('SELECT value FROM settings WHERE key=?').get(titleJobKey(id,'task'))?.value)).state,'failed');
+  finish({text:'完成报告',threadId:'thread',turnId:'turn'});await waitFor(()=>store.get('title-fail')?.state==='replied');
+  await new Promise(resolve=>setTimeout(resolve,350));assert.equal(calls,1);assert.equal(savedTitle(store,id,'task'),undefined);
+});
+
+test('a queued foreground task preempts a background title when capacity is full',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'namo-title-preempt-')),store=new Store(join(dir,'db'));const starts:string[]=[];let titleAborted=false;
+  const runtime:Runtime={persistent:true,run(r){starts.push(r.taskId!);return new Promise((_resolve,reject)=>r.signal.addEventListener('abort',()=>reject(new RuntimeError('receiver_detached')),{once:true}));},
+    summarizeTitle(_input,signal){return new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>{titleAborted=true;reject(Error('cancelled'));},{once:true}));}};
+  const parsed=parseConfig({dataDir:dir,concurrency:2,feishu:{cards:true,allowedUserIds:['alice']}},join(dir,'config.json'));
+  const engine=new Engine(store,runtime,{async send(_c,_text,id){return id;}},{dataDir:dir,concurrency:2,codex:parsed.codex,feishu:parsed.feishu});
+  (engine as unknown as {modelCatalog:unknown}).modelCatalog={models:[{id:'gpt-6-luna'}],start(){},async stop(){},async refresh(){}};
+  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+  engine.start();engine.accept(message('first-title','先处理这件事'));await waitFor(()=>starts.length===1&&!!store.db.prepare("SELECT 1 FROM settings WHERE key LIKE 'title-summary:%' AND json_extract(value,'$.state')='running'").get());
+  engine.accept({...message('second-title','处理第二件事'),chatKey:'other',chatId:'other'});await waitFor(()=>titleAborted&&starts.length===2);
+  const id=store.get('first-title')!.taskId!;assert.equal(JSON.parse(String(store.db.prepare('SELECT value FROM settings WHERE key=?').get(titleJobKey(id,'task'))?.value)).state,'failed');
+});
+
+test('a queued task retains its title request until it starts',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'namo-title-queued-')),store=new Store(join(dir,'db'));let calls=0;
+  store.enqueue(message('queued-title','整理报告'));const task=new Tasks(store).create(store.get('queued-title')!,{cwd:dir,policyHash:'p'});enqueueTitle(store,task.id,'task');
+  const parsed=parseConfig({dataDir:dir,concurrency:2,feishu:{cards:true,allowedUserIds:['alice']}},join(dir,'config.json'));
+  const runtime:Runtime={persistent:true,async run(){return answer;},async summarizeTitle(){calls++;return '整理报告';}};
+  const engine=new Engine(store,runtime,{async send(_c,_text,id){return id;}},{dataDir:dir,concurrency:2,codex:parsed.codex,feishu:parsed.feishu});
+  const internals=engine as unknown as {modelCatalog:unknown;startTitleSummary:()=>void};internals.modelCatalog={models:[{id:'gpt-6-luna'}],start(){},async stop(){},async refresh(){}};
+  t.after(async()=>{await engine.stop();store.close();rmSync(dir,{recursive:true,force:true});});
+  internals.startTitleSummary();assert.equal(calls,0);assert.equal(JSON.parse(String(store.db.prepare('SELECT value FROM settings WHERE key=?').get(titleJobKey(task.id,'task'))?.value)).state,'pending');
+  store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(task.id);internals.startTitleSummary();await waitFor(()=>savedTitle(store,task.id,'task')==='整理报告');assert.equal(calls,1);
+});
 const progressFeedbackMessage = (key:string):Incoming => ({key,messageId:'om_'+key,chatId:'chat',chatKey:'app:chat',senderId:'owner',text:'do work',
   envelope:{version:1,type:'text',kind:'instruction',scopeKey:'app:chat:thread:root',threadId:'root',materials:[],limitations:[]}});
 function progressFeedbackFixture(t:{after(fn:()=>Promise<void>):void},sender:Sender) {

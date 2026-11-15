@@ -43,6 +43,7 @@ export interface Runtime {
   reservations?(): { runId: string; chatKey: string; cwd: string; slotKey?: string; paths?:string[] }[];
   classifyControl?(input: {text:string;now:string;timezone:string;pending:{id:string;state:string;question?:string;waitId?:string}[]}, signal:AbortSignal): Promise<ControlClassification>;
   extractMemory?(input: AutoMemoryInput, signal: AbortSignal): Promise<unknown>;
+  summarizeTitle?(input: {phase:'task'|'result';text:string;model:string},signal:AbortSignal):Promise<string>;
 }
 export class RuntimeError extends Error {
   constructor(readonly code: string, readonly detail?: string) { super(code); }

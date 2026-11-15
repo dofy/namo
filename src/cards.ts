@@ -7,9 +7,32 @@ import { hasExecution, taskStateLabel, taskStatus } from './presentation.js';
 import { progressState, taskElapsed } from './task-progress.js';
 import { cardMarkdown, resultMarkdown, hasMarkdown, openFence } from './richtext.js';
 import { Waits, WaitInputError, linkedExternalWait, type TaskWait } from './waits.js';
+import { makeRedactor } from './safety.js';
+import { savedTitle } from './title-summary.js';
 
 export interface CardEvent { operator?: { open_id?: string; tenant_key?: string }; context?: { open_chat_id?: string; open_message_id?: string }; action?: { value?: { namo?: string } }; }
 const plain=(content:string)=>({tag:'plain_text',content});
+
+/** Short excerpts are derived from the same task and result, not model-generated claims. */
+export function taskTitleSummary(store:Store,task:Task,kind:string,content:string,redact:(text:string)=>string = text=>text):string|undefined {
+  const phase=kind==='result'&&task.state==='succeeded'?'result':'task';
+  const modelTitle=savedTitle(store,task.id,phase);if(modelTitle)return makeRedactor()(redact(modelTitle));
+  const source=kind==='result'&&task.state==='succeeded'?content:store.get(task.inboxKey)?.text??'';
+  const safe=makeRedactor()(redact(source)).replace(/https?:\/\/[^\s<>]+/gi,'[链接]')
+    .replace(/<[^>]*>/g,' ').replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g,c=>c==='\n'?'\n':' ');
+  let fenced=false;const lines:string[]=[];
+  for(const line of safe.split('\n')) {
+    if(/^\s*(?:`{3,}|~{3,})/.test(line)){fenced=!fenced;continue;}if(fenced)continue;
+    let text=line.replace(/^\s*(?:#{1,6}\s*|>\s*|[-*+]\s+|\d+[.)]\s+)/,'')
+      .replace(/^\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/i,'')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g,'$1').replace(/\*\*|__|~~|`/g,'').replace(/\s+/g,' ').trim();
+    if(kind==='result'&&task.state==='succeeded')text=/^(?:.*?)(?:网页标题|页面标题|最终结果|计算结果)(?:为|是)?[：:]\s*(.+)$/.exec(text)?.[1]?.trim()??text;
+    if(text&&!/^(?:已完成|完成|结果|总结|任务结果|处理完成|success|done)[：:。.!！]?$/i.test(text))lines.push(text);
+  }
+  const excerpt=lines[0];if(!excerpt)return;
+  const chars=Array.from(excerpt);if(chars.length<=28)return excerpt;
+  const prefix=chars.slice(0,28).join('').replace(/\s*\[[^\]]*$/,'').trimEnd();return prefix+'…';
+}
 
 /** Only host-generated task rows may introduce Feishu color tags. */
 export function renderTaskListCard(content:string): object | undefined {
@@ -64,7 +87,7 @@ function resultContext(store: Store, task: Task): ResultContext | undefined {
   try { model = new Tasks(store).model(task.id); } catch { /* Legacy invalid metadata remains unknown. */ }
   return { source: 'main', ...(typeof model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model) ? { model } : {}) };
 }
-export function renderTaskCard(t: Task, content: string, kind: string, part: number, actions: { action:string; token:string; label?: string }[] = [], totals?: ReturnType<typeof progressState>['totals'], context?: ResultContext, questions?: TaskWait['questions']): object {
+export function renderTaskCard(t: Task, content: string, kind: string, part: number, actions: { action:string; token:string; label?: string }[] = [], totals?: ReturnType<typeof progressState>['totals'], context?: ResultContext, questions?: TaskWait['questions'], titleSummary?:string): object {
   // Retire the live progress surface without competing with the durable result.
   // Do not claim delivery: the independent result send may still be pending.
   if (kind==='progress' && !['queued','running','waiting'].includes(t.state)) {
@@ -74,7 +97,9 @@ export function renderTaskCard(t: Task, content: string, kind: string, part: num
         ...(totals.failed?[`失败 ${totals.failed} 次`]:[]),...(totals.unknown?[`未确认 ${totals.unknown} 次`]:[])]:[])].join(' · ');
     return {config:{wide_screen_mode:true,update_multi:true},elements:[{tag:'note',elements:[plain(summary)]}]};
   }
-  const title=part?'回复（续）':kind==='external-wait'?'等待外部检查':taskStateLabel(t.state);
+  const state=part?'回复（续）':kind==='external-wait'?'等待外部检查':taskStateLabel(t.state);
+  const icon=part?'📝':kind==='external-wait'?'⏳':({queued:'⏳',running:'⏳',waiting:'💬',succeeded:'✅',failed:'⚠️',cancelled:'⏹️',interrupted:'⚠️',needs_attention:'⚠️'} as Record<string,string>)[t.state]??'ℹ️';
+  const title=titleSummary?`${icon} ${state} · ${titleSummary}`:`${icon} ${state}`;
   if (kind==='result') return {
     schema:'2.0',config:{update_multi:true},
     header:{title:plain(title),template:t.state==='succeeded'?'green':t.state==='cancelled'?'grey':'orange'},
@@ -95,7 +120,7 @@ export function renderTaskCard(t: Task, content: string, kind: string, part: num
       ...(controls.length?[buttons(controls)]:[])]};
 }
 export class Cards {
-  constructor(private store: Store, private canAccess: (task:Task)=>boolean = ()=>true, private directoryDecision?:(id:string,input:Incoming,approve:boolean)=>string, private mcpDecision?:(id:string,input:Incoming,action:'approve'|'reject',always:boolean)=>{ok:boolean;text:string}) {}
+  constructor(private store: Store, private canAccess: (task:Task)=>boolean = ()=>true, private directoryDecision?:(id:string,input:Incoming,approve:boolean)=>string, private mcpDecision?:(id:string,input:Incoming,action:'approve'|'reject',always:boolean)=>{ok:boolean;text:string}, private redact:(text:string)=>string = text=>text) {}
   prepare(output: Outbox): object | undefined {
     if(output.payload) {const p=JSON.parse(output.payload);return p.textOnly||p.noCard?undefined:p;}
     if(!['progress','result'].includes(output.kind) && !output.kind.startsWith('wait:') && !output.kind.startsWith('directory-approval:') && !output.kind.startsWith('mcp-approval:')) return;
@@ -143,7 +168,7 @@ export class Cards {
       const prefix=output.part?this.store.db.prepare('SELECT content FROM outbox WHERE inboxKey=? AND kind=? AND part<? ORDER BY part').all(output.inboxKey,output.kind,output.part).map(row=>String(row.content)).join(''):'';
       const fence=output.kind==='result'?openFence(prefix):undefined;
       const display=(fence?fence+'\n':'')+content;
-      const payload=renderTaskCard(task,display,wait&&linkedExternalWait(this.store,wait.id)?'external-wait':output.kind,output.part,actions,progress?.totals,output.kind==='result'?resultContext(this.store,task):undefined,output.part?undefined:questions);
+      const payload=renderTaskCard(task,display,wait&&linkedExternalWait(this.store,wait.id)?'external-wait':output.kind,output.part,actions,progress?.totals,output.kind==='result'?resultContext(this.store,task):undefined,output.part?undefined:questions,taskTitleSummary(this.store,task,output.kind,output.content,this.redact));
       // Receipt text is not host formatting. Keep it literal beside the
       // structured Markdown progress block, including on the first card.
       if(output.kind==='progress'&&output.content&&['queued','running','waiting'].includes(task.state))(payload as {elements:unknown[]}).elements.unshift({tag:'div',text:plain(output.content)});

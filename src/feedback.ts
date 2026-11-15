@@ -1,9 +1,11 @@
 import type { Store } from './store.js';
 import type { Sender } from './engine.js';
 import type { Task } from './tasks.js';
-import { renderTaskCard } from './cards.js';
+import { renderTaskCard, taskTitleSummary } from './cards.js';
 import { progressState } from './task-progress.js';
 import { Waits } from './waits.js';
+import { savedTitle } from './title-summary.js';
+import { digest } from './paths.js';
 export { progressState, recordActivity, type ActivityPhase } from './task-progress.js';
 
 /** One receiver-owned writer. No retry after uncertain side effects. */
@@ -12,7 +14,7 @@ export class Feedback {
   private reactionBusy = false;
   private finalizers = 0;
   private readRetryAt = new Map<number,number>();
-  constructor(private store: Store, private sender: Sender, private canAccess:(task:Task)=>boolean=()=>true) {}
+  constructor(private store: Store, private sender: Sender, private canAccess:(task:Task)=>boolean=()=>true, private redact:(text:string)=>string=text=>text) {}
   accepted(key: string): void {this.store.db.prepare('INSERT OR IGNORE INTO message_feedback(inboxKey,updatedAt) VALUES(?,?)').run(key,Date.now());}
   recover(): void {
     this.store.db.prepare("UPDATE message_feedback SET state='unknown',error='receiver_stopped' WHERE state IN ('adding','removing')").run();
@@ -22,7 +24,7 @@ export class Feedback {
     // Independent lanes: a slow reaction must never hold up readable progress.
     const work:Promise<void>[]=[];
     if(!this.reactionBusy){this.reactionBusy=true;work.push(this.reactions().finally(()=>{this.reactionBusy=false;}));}
-    if(!this.progressBusy){this.progressBusy=true;work.push((async()=>{if(options.waitCards!==false){await this.approvalCards();await this.waitCards();} if(options.progress!==false) await this.progress(options.cadenceMs??5000,options.heartbeatMs??30000);})().finally(()=>{this.progressBusy=false;}));}
+    if(!this.progressBusy){this.progressBusy=true;work.push((async()=>{if(options.waitCards!==false){await this.approvalCards();await this.waitCards();await this.resultTitles();} if(options.progress!==false) await this.progress(options.cadenceMs??5000,options.heartbeatMs??30000);})().finally(()=>{this.progressBusy=false;}));}
     await Promise.all(work);
   }
   async settle(): Promise<void> {while(this.progressBusy||this.reactionBusy||this.finalizers)await new Promise(r=>setTimeout(r,20));}
@@ -103,6 +105,29 @@ export class Feedback {
       return;
     }
   }
+  /** Update a delivered result only after its background title is durable. */
+  private async resultTitles():Promise<void> {
+    if(!this.sender.updateCard)return;
+    const rows=this.store.db.prepare(`SELECT o.id AS outputId,o.platformId,o.payload,t.* FROM outbox o JOIN tasks t ON t.inboxKey=o.inboxKey
+      JOIN settings s ON s.key='title-summary:'||t.id||':result' WHERE o.kind='result' AND o.part=0 AND o.state='sent' AND o.progressRetired=0 AND o.payload IS NOT NULL
+      AND CASE WHEN json_valid(s.value) THEN json_extract(s.value,'$.state')='completed' ELSE 0 END ORDER BY o.id`).all();
+    for(const row of rows){
+      const task=row as unknown as Task;if(!this.canAccess(task))continue;
+      const last=this.store.db.prepare('SELECT * FROM progress_updates WHERE outboxId=? ORDER BY version DESC LIMIT 1').get(row.outputId);
+      if(last&&['unknown','failed','sending'].includes(String(last.state))){await this.reconcileBlockedUpdate(last,Number(row.outputId),String(row.platformId));continue;}
+      if(last?.state==='sent'){this.retire(Number(row.outputId));continue;}
+      const summary=savedTitle(this.store,task.id,'result');if(!summary)continue;
+      const card=JSON.parse(String(row.payload)) as {header?:{title?:{content?:string}}};
+      if(!card.header?.title){this.retire(Number(row.outputId));continue;}
+      const title=(renderTaskCard(task,'','result',0,[],undefined,undefined,undefined,this.redact(summary)) as {header:{title:{content:string}}}).header.title.content;
+      if(card.header.title.content===title){this.retire(Number(row.outputId));continue;}
+      card.header.title.content=title;const content=JSON.stringify(card),version=Number(last?.version??0)+1;
+      this.store.db.prepare("INSERT INTO progress_updates(outboxId,version,state,phase,content,createdAt,revision) VALUES(?,?,'sending','title',?,?,?)").run(row.outputId,version,content,Date.now(),digest(title));
+      try{await this.sender.updateCard(String(row.platformId),card);this.store.db.prepare("UPDATE progress_updates SET state='sent' WHERE outboxId=? AND version=?").run(row.outputId,version);this.retire(Number(row.outputId));}
+      catch(e){const error=e as {unknown?:boolean;code?:string};this.store.db.prepare('UPDATE progress_updates SET state=?,error=? WHERE outboxId=? AND version=?').run(error.unknown===false?'failed':'unknown',error.code??'update_unknown',row.outputId,version);}
+      return;
+    }
+  }
   /** Serialize wait-card patches in the same receiver-owned lane as progress. */
   private async waitCards(): Promise<void> {
     if(!this.sender.updateCard)return;
@@ -171,18 +196,19 @@ export class Feedback {
         continue;
       }
       const task=row as unknown as Task, state=progressState(this.store,task), now=Date.now();
-      const changed=last?.revision!==state.revision;
+      const summary=taskTitleSummary(this.store,task,'progress',state.content,this.redact),revision=state.revision+':'+digest(summary??'');
+      const changed=last?.revision!==revision;
       if(last&&!changed&&(state.terminal||task.state==='waiting')){
         if(state.terminal)this.retire(Number(row.outputId));
         continue;
       }
       const important=state.terminal||task.state==='waiting';
       if(!important&&now-Number(last?.createdAt??row.acceptedAt??0)<(changed?cadence:heartbeat))continue;
-      const card=renderTaskCard(task,state.content,'progress',0,[],state.totals);
+      const card=renderTaskCard(task,state.content,'progress',0,[],state.totals,undefined,undefined,summary);
       // Preserve only the original authorized action tokens, whose acceptance rechecks current task/version.
       if(!state.terminal){const actions=original.elements?.filter((x:{tag:string})=>x.tag==='action')??[];(card as {elements:unknown[]}).elements.push(...actions);}
       const content=JSON.stringify(card),version=Number(last?.version??0)+1;
-      this.store.db.prepare("INSERT INTO progress_updates(outboxId,version,state,phase,content,createdAt,revision) VALUES(?,?,'sending',?,?,?,?)").run(row.outputId,version,state.phase,content,now,state.revision);
+      this.store.db.prepare("INSERT INTO progress_updates(outboxId,version,state,phase,content,createdAt,revision) VALUES(?,?,'sending',?,?,?,?)").run(row.outputId,version,state.phase,content,now,revision);
       try {await this.sender.updateCard(String(row.platformId),card);this.store.db.prepare("UPDATE progress_updates SET state='sent' WHERE outboxId=? AND version=?").run(row.outputId,version);if(state.terminal)this.retire(Number(row.outputId));}
       catch(e){const error=e as {unknown?:boolean;code?:string};this.store.db.prepare('UPDATE progress_updates SET state=?,error=? WHERE outboxId=? AND version=?').run(error.unknown===false?'failed':'unknown',error.code??'update_unknown',row.outputId,version);}
       // A terminal commit may race this HTTP request. Correct it in this same

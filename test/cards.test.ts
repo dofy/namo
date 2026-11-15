@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { Tasks } from '../src/tasks.js';
-import { Cards, renderTaskCard, structuredResult } from '../src/cards.js';
+import { Cards, renderTaskCard, structuredResult, taskTitleSummary } from '../src/cards.js';
+import { Feedback } from '../src/feedback.js';
+import { makeRedactor } from '../src/safety.js';
 import { Engine, SendError } from '../src/engine.js';
 import { recordProgress, progressTotals, readProgress, type PublicProgressEvent } from '../src/public-progress.js';
 import { progressState, recordActivity } from '../src/feedback.js';
@@ -30,6 +32,40 @@ function fixture(t:{after(fn:()=>void):void}) {
     recordProgress(store,run,{id,kind:'tool',status,text:'命令：'+status,...(outcome?{outcome}:{})});
   return {store,tasks,task,run,start,event};
 }
+
+test('task and result card titles show short, sanitized task and result excerpts',t=>{
+  const f=fixture(t);f.store.db.prepare('UPDATE inbox SET text=? WHERE key=?').run('整理项目文档并验证 SECRET_VALUE https://example.com/private?token=abc','message');
+  const redact=makeRedactor(['SECRET_VALUE']);
+  const taskSummary=taskTitleSummary(f.store,f.task,'progress','',redact)!;
+  assert.match(taskSummary,/整理项目文档/);assert.doesNotMatch(taskSummary,/SECRET_VALUE|example\.com|token=abc/);assert.ok(Array.from(taskSummary).length<=29);
+  f.store.addOutput('message','progress','已收到');const output=f.store.nextOutput()!;
+  const card=new Cards(f.store,undefined,undefined,undefined,redact).prepare(output) as any;
+  assert.match(card.header.title.content,/⏳ 正在处理 · 整理项目文档/);
+  f.store.db.prepare("UPDATE tasks SET state='succeeded' WHERE id=?").run(f.task.id);
+  const task=f.tasks.get(f.task.id)!;const content='**已完成**\n**更新文档和测试**\n\n> [!NOTE] 额外信息';
+  f.store.addOutput('message','result',content);const result=f.store.db.prepare("SELECT * FROM outbox WHERE kind='result'").get() as any;
+  const final=new Cards(f.store).prepare(result) as any;assert.equal(final.header.title.content,'✅ 已完成 · 更新文档和测试');
+  assert.equal(taskTitleSummary(f.store,task,'result','```js\nsecret\n```'),undefined);
+  assert.equal(taskTitleSummary(f.store,task,'result','> [!NOTE] 需要查看详细结果'),'需要查看详细结果');
+  assert.equal(taskTitleSummary(f.store,task,'result','已通过 ego_browser 打开页面，网页标题为：**Example Domain**。'),'Example Domain。');
+  f.store.db.prepare('UPDATE inbox SET text=? WHERE key=?').run('授权按钮验证：请使用 ego-browser 打开 https://example.com，读取网页标题','message');
+  assert.doesNotMatch(taskTitleSummary(f.store,task,'progress','')!,/\[链…/);
+});
+
+test('progress card updates preserve the task-specific title',async t=>{
+  const f=fixture(t);f.store.db.prepare('UPDATE inbox SET text=? WHERE key=?').run('整理并检查文档','message');
+  recordActivity(f.store,f.run,'working');f.store.addOutput('message','progress','已收到');
+  const out=f.store.nextOutput()!;new Cards(f.store).prepare(out);f.store.sending(out.id);f.store.sent(out.id,'card');
+  const patches:any[]=[];const feedback=new Feedback(f.store,{async send(){return 'unused';},async updateCard(_id,card){patches.push(card);}});
+  await feedback.tick({cadenceMs:0});assert.equal(patches.length,1);assert.equal(patches[0].header.title.content,'⏳ 正在处理 · 整理并检查文档');
+});
+
+test('task card titles use distinct status emoji',t=>{
+  const f=fixture(t);
+  for(const [state,expected] of [['queued','⏳ 排队中'],['waiting','💬 等待你补充'],['failed','⚠️ 未完成'],['cancelled','⏹️ 已停止']] as const){
+    const card=renderTaskCard({...f.task,state},'content','result',0) as any;assert.equal(card.header.title.content,expected);
+  }
+});
 
 test('progress uses explicit local time and literal public text within a Markdown layout',t=>{
   const f=fixture(t);recordActivity(f.store,f.run,'working');
@@ -65,7 +101,7 @@ test('terminal summary removes progress and counts tools across runs, not claims
   assert.match(JSON.stringify(card),/处理结束 · 用时：1 分 40 秒 · 工具调用 5 次 · 失败 1 次 · 未确认 2 次/);
   assert.doesNotMatch(JSON.stringify(card),/已完成|执行统计|成功 2|开始时间|停止任务/);
   const result=renderTaskCard(f.tasks.get(f.task.id)!,'actual result','result',0) as any;
-  assert.equal(result.header.title.content,'已完成');assert.match(JSON.stringify(result),/actual result/);
+  assert.equal(result.header.title.content,'✅ 已完成');assert.match(JSON.stringify(result),/actual result/);
 });
 
 test('bounded and legacy projections label incomplete statistics explicitly',t=>{
