@@ -8,16 +8,23 @@ const hash = (value: string | Buffer) => createHash('sha256').update(value).dige
 const quote = (name: string) => '"' + name.replaceAll('"', '""') + '"';
 function syncFile(path: string): void { const fd = openSync(path, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); } }
 function regular(path: string): void { const s = lstatSync(path); if (!s.isFile() || s.isSymbolicLink()) throw new Error('backup_source_invalid'); }
-/** Compare logical data, not SQLite page layout or WAL bytes. No row contents leave this function. */
+/** Compare logical data, not SQLite page layout or WAL bytes. No row contents leave this function.
+ * Rows are streamed in an order defined by their own values, so memory stays
+ * constant and SQLite sorts large tables in its temp store. */
 export function databaseFingerprint(db: DatabaseSync): string {
   const tables = db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' ORDER BY name").all();
   const schema = db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").all();
-  const data = tables.map(table => {
-    const stmt = db.prepare('SELECT * FROM ' + quote(String(table.name))); stmt.setReadBigInts(true);
-    const rows = [...stmt.iterate()].map(row => hash(JSON.stringify(row, (_, v) => typeof v === 'bigint' ? { integer: v.toString() } : v))).sort();
-    return { name: table.name, rows };
-  });
-  return hash(JSON.stringify({ version: db.prepare('PRAGMA user_version').get(), schema, data }));
+  const total = createHash('sha256').update(JSON.stringify({ version: db.prepare('PRAGMA user_version').get(), schema }));
+  for (const table of tables) {
+    const name = String(table.name);
+    // BINARY collation: a NOCASE column must not leave case-only ties to page order.
+    const order = db.prepare(`PRAGMA table_info(${quote(name)})`).all().map(column => `${quote(String(column.name))} COLLATE BINARY`).join(',');
+    const stmt = db.prepare(`SELECT * FROM ${quote(name)}${order ? ` ORDER BY ${order}` : ''}`); stmt.setReadBigInts(true);
+    const rows = createHash('sha256'); let count = 0;
+    for (const row of stmt.iterate()) { rows.update(hash(JSON.stringify(row, (_, v) => typeof v === 'bigint' ? { integer: v.toString() } : v))); count++; }
+    total.update(JSON.stringify({ name, count, rows: rows.digest('hex') }));
+  }
+  return total.digest('hex');
 }
 function healthy(db: DatabaseSync): void {
   const integrity = db.prepare('PRAGMA integrity_check').all();

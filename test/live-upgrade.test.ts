@@ -219,3 +219,14 @@ test('durable row codecs are part of the live-upgrade ABI', () => {
   for (const name of ['record-table', 'business-storage', 'schema-directory-migration'])
     assert.throws(() => assertLiveCompatible(manifest(), manifest(`dist/src/${name}.js`)), /live_upgrade_requires_receiver_restart/);
 });
+
+test('database fingerprint ignores physical row order, including case-only ties', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { databaseFingerprint } = await import('../src/upgrade-backup.js');
+  const build = (rows: string[]) => { const db = new DatabaseSync(':memory:');
+    db.exec('CREATE TABLE t (v TEXT COLLATE NOCASE, n INTEGER) STRICT');
+    for (const v of rows) db.prepare('INSERT INTO t VALUES(?,1)').run(v); return db; };
+  const a = build(['b', 'A', 'a']), b = build(['a', 'b', 'A']), c = build(['a', 'b', 'B']);
+  assert.equal(databaseFingerprint(a), databaseFingerprint(b));
+  assert.notEqual(databaseFingerprint(a), databaseFingerprint(c));
+});
