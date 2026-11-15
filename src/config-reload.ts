@@ -52,6 +52,9 @@ export function watchConfiguration(store:Store, host:RuntimeHost, initial:Config
   commit:(next:Config,revision:string)=>void|Promise<void>,
   report:(state:'pending'|'applied'|'error')=>void) {
   let applied=revision, appliedConfig=initial, pending=false, closed=false, running:Promise<void>|undefined;
+  // A failing revision (for example a wrong appSecret that reconnects the live
+  // transport) is retried with backoff; an edited file is retried immediately.
+  let failure:{revision:string|undefined;until:number;delay:number}|undefined;
   const observe=()=>{
     if(closed)return;
     try { if(needsDirectoryConfigurationMigration(initial.file)||digest(readFileSync(initial.file,'utf8'))!==applied){pending=true;host.drainConfiguration(true);report('pending');} }
@@ -64,11 +67,14 @@ export function watchConfiguration(store:Store, host:RuntimeHost, initial:Config
       ||store.db.prepare("SELECT 1 FROM runner_jobs WHERE state IN ('starting','running','lost') LIMIT 1").get()
       ||store.db.prepare("SELECT 1 FROM outbox WHERE state IN ('pending','sending') LIMIT 1").get()
       ||store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
+    let attempted:string|undefined;
+    try {attempted=digest(readFileSync(initial.file,'utf8'));} catch { /* Reported by the attempt below. */ }
+    if(failure&&failure.revision===attempted&&Date.now()<failure.until)return;
     let unlock:(()=>void)|undefined;
     try {
       unlock=acquireLock(join(initial.dataDir,'config-edit.lock'));
       migrateDirectoryConfiguration(initial.file);
-      const nextRevision=digest(readFileSync(initial.file,'utf8')), next=loadConfig(initial.file);
+      const nextRevision=digest(readFileSync(initial.file,'utf8')), next=loadConfig(initial.file);attempted=nextRevision;
       // Account/data relocation is a migration, not an ordinary settings save.
       if(next.dataDir!==initial.dataDir||next.feishu.appId!==initial.feishu.appId||next.feishu.domain!==initial.feishu.domain)throw Error('configuration_identity_changed');
       if(nextRevision!==digest(readFileSync(initial.file,'utf8')))return;
@@ -79,8 +85,11 @@ export function watchConfiguration(store:Store, host:RuntimeHost, initial:Config
         await commit(next,nextRevision);
         store.transaction(()=>retainModelContexts(store,appliedConfig,next));
       });
-      applied=nextRevision;appliedConfig=next;pending=false;host.drainConfiguration(false);report('applied');
-    } catch {report('error');} finally {unlock?.();}
+      applied=nextRevision;appliedConfig=next;pending=false;failure=undefined;host.drainConfiguration(false);report('applied');
+    } catch {
+      const delay=failure&&failure.revision===attempted?Math.min(failure.delay*2,60_000):1_000;
+      failure={revision:attempted,until:Date.now()+delay,delay};report('error');
+    } finally {unlock?.();}
   };
   const timer=setInterval(()=>{if(!closed&&!running)running=tick().catch(()=>report('error')).finally(()=>{running=undefined;});},250);
   return {observe,stop:async()=>{closed=true;clearInterval(timer);await running;}};

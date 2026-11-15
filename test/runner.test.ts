@@ -204,6 +204,16 @@ test('failed configuration commit retains deferred input and retries without inv
   fail=false;await wait(()=>f.store.get('held')?.state==='replied');assert.equal(f.calls(),1);
 });
 
+test('a failing configuration revision is retried with backoff, and an edit retries at once',async t=>{
+  let watcher:ReturnType<typeof watchConfiguration>|undefined;t.after(async()=>{await watcher?.stop();});
+  const f=fixture(t),host=new RuntimeHost(()=>f.receiver());host.start();let commits=0;
+  watcher=watchConfiguration(f.store,host,f.config,digest(readFileSync(f.file,'utf8')),async next=>()=>f.receiver(next),()=>{commits++;throw Error('test');},()=>{});
+  const raw=JSON.parse(readFileSync(f.file,'utf8'));raw.codex.model='next';writeFileSync(f.file,JSON.stringify(raw));watcher.observe();
+  await wait(()=>commits===1);await new Promise(r=>setTimeout(r,800));assert.equal(commits,1,'no retry inside the first backoff window');
+  await wait(()=>commits===2);await new Promise(r=>setTimeout(r,1500));assert.equal(commits,2,'the second backoff window is longer');
+  raw.codex.model='edited';writeFileSync(f.file,JSON.stringify(raw));await wait(()=>commits===3,1000);
+});
+
 test('cancel remains available while new configuration waits for the old queue',async t=>{
   let watcher:ReturnType<typeof watchConfiguration>|undefined;t.after(async()=>{await watcher?.stop();});
   const f=fixture(t),host=new RuntimeHost(()=>f.receiver());host.start();
