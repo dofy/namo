@@ -135,7 +135,7 @@ test('reauthorization commits a changed scope and credential atomically only aft
  const {storeFixture}=await import('./helpers.js'),{Management}=await import('../src/management.js'),{McpOAuthFlow}=await import('../src/mcp-oauth-flow.js');
  const {dir}=storeFixture(t,'namo-oauth-draft-'),file=join(dir,'config.json');
  const fake=fakeOAuth(),initial=await beginMcpOAuth(resource,redirect,'read',fake.fetcher),oldRef=saveMcpOAuth(dir,await initial.finish('synthetic-code'));
- writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',token:oldRef}]}));
+ writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:'https://old.example/mcp',oauthScope:'read',token:oldRef},{id:'local',type:'stdio',command:'/usr/bin/example',args:[],token:''}]}));
  const before=(await import('node:fs')).readFileSync(file,'utf8'),manager=new Management(file),revision=manager.config().revision;
  const draft={id:'demo',type:'remote',url:resource,oauthScope:'read write'};
  const flow=new McpOAuthFlow(manager,()=> 'http://127.0.0.1:45678',(url,cb,scope)=>beginMcpOAuth(url,cb,scope,fakeOAuth(scope).fetcher));
@@ -146,7 +146,9 @@ test('reauthorization commits a changed scope and credential atomically only aft
  const second=await flow.begin(revision,'demo',draft),state2=new URL(second.url).searchParams.get('state')!;
  assert.equal(await flow.finish(new URLSearchParams({state:state2,code:'synthetic-code',iss:issuer})),true);
  const saved=JSON.parse((await import('node:fs')).readFileSync(file,'utf8'));
- assert.equal(saved.mcpConnections[0].oauthScope,'read write');assert.notEqual(saved.mcpConnections[0].token,oldRef);assert.equal(Object.hasOwn(saved.mcpConnections[0],'enabled'),false);
+ const savedRemote=saved.mcpConnections.find((c:{id:string})=>c.id==='demo');
+ assert.equal(savedRemote.url,resource);assert.equal(savedRemote.oauthScope,'read write');assert.notEqual(savedRemote.token,oldRef);assert.equal(Object.hasOwn(savedRemote,'enabled'),false);
+ assert.deepEqual(saved.mcpConnections.find((c:{id:string})=>c.id==='local'),{id:'local',type:'stdio',command:'/usr/bin/example',args:[],token:''});
 });
 
 test('cancelled OAuth drafts cannot later replace the saved connection',async t=>{

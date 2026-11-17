@@ -356,7 +356,7 @@ export class Management {
     if(!draft||typeof draft!=='object'||Array.isArray(draft)||Object.keys(draft).some(k=>!['id','type','url','oauthScope','ownerUserId'].includes(k)))throw new ManagementError('mcp_invalid_config',400);
     const value=draft as McpConnectionPatch;
     if(id&&(!prior||id!==value.id)||!id&&connections.some(c=>c.id===value.id))throw new ManagementError('mcp_config_changed');
-    let parsed;try{parsed=parseMcpConnections([{...value,token:''}])[0];parseConfig({...raw,mcpConnections:[...connections.filter(c=>c.id!==id),parsed]},this.file);}catch{throw new ManagementError('mcp_invalid_config',400);}
+    let parsed;try{parsed=parseMcpConnections([{...value,token:''}])[0];const existing=connections.filter(c=>c.id!==id).map(c=>{if(c.type!=='stdio')return c;const {url:_url,...local}=c;return local;});parseConfig({...raw,mcpConnections:[...existing,parsed]},this.file);}catch{throw new ManagementError('mcp_invalid_config',400);}
     if(addsDuplicateMcpEndpoint(connections,[...connections.filter(c=>c.id!==id),parsed!]))throw new ManagementError('mcp_duplicate_endpoint',400);
     const {token:_token,...safe}=parsed!;return {...safe,...(Object.hasOwn(value,'ownerUserId')&&!value.ownerUserId?{ownerUserId:''}:{})};
   }
