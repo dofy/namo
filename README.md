@@ -15,7 +15,7 @@ Namo brings an AI agent into the conversations where your work happens. Send it 
 ## What Namo can do
 
 - **Work from chat.** Give Namo a task in Feishu or Lark, follow its progress, and answer questions when it needs more information.
-- **Work with your projects.** Let it use the directories and connected services you authorize, including GitHub and remote MCP tools.
+- **Work with your projects.** Let it use the directories and connected services you authorize, including GitHub, remote MCP services and trusted local stdio MCP tools.
 - **Keep track of work.** Review tasks, sessions, execution evidence, schedules and settings in a local workbench.
 - **Remember useful context.** Use an optional assistant profile and scoped memory to carry relevant context across conversations.
 - **Run on your own machine.** Namo stores task state locally and uses the official Codex service for model inference.
@@ -36,7 +36,11 @@ pnpm cli init
 
 The setup wizard guides you through Codex login, directory access and connecting your bot. It can install a macOS background service; otherwise, use `pnpm cli start` to run in the foreground. Open the local workbench with `pnpm cli ui`.
 
-To use `namo` outside the repository, run `pnpm pack` followed by `npm install -g ./namo-0.6.1.tgz`. You can then use `namo init`, `namo ui` and `namo docs` directly.
+To use `namo` outside the repository, run `pnpm pack` followed by `npm install -g ./namo-0.6.2.tgz`. You can then use `namo init`, `namo ui` and `namo docs` directly.
+
+## Connect Inkflit
+
+In **Settings → Connections → MCP**, choose **Add local MCP**. Set the ID to `inkflit`, the executable to `/Applications/Inkflit.app/Contents/MacOS/Inkflit`, and arguments to `["--mcp"]`, then save and test. You can also add local MCPs in `namo config`. Namo and Inkflit must run as the same user on the same Mac. Only configure trusted programs: they run with the Namo user’s OS permissions, and all admitted bot users can call their tools.
 
 ## Learn more
 

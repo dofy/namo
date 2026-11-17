@@ -15,7 +15,7 @@ Namo 把 AI 助手带进日常工作的对话中。给它发一条消息，或�
 ## Namo 能做什么
 
 - **在聊天中协作**：通过飞书或 Lark 交代任务、查看进度，在需要时回答它的问题。
-- **处理项目工作**：使用你授权的目录和连接服务，包括 GitHub 与远程 MCP 工具。
+- **处理项目工作**：使用你授权的目录和连接服务，包括 GitHub、远程 MCP 和可信的本地 stdio MCP 工具。
 - **跟踪工作进展**：在本地工作台查看任务、会话、执行证据和定时任务，管理设置。
 - **记住有用的上下文**：按需设置助手档案和范围记忆，在不同对话中使用相关信息。
 - **运行在自己的机器上**：任务状态保存在本地，模型推理使用官方 Codex 服务。
@@ -36,7 +36,11 @@ pnpm cli init
 
 初始化向导会引导你登录 Codex、设置可访问目录并连接机器人。向导支持安装 macOS 后台服务；如果没有安装，可用 `pnpm cli start` 前台运行。使用 `pnpm cli ui` 打开本地工作台。
 
-要在任意目录使用 `namo` 命令，运行 `pnpm pack`，再运行 `npm install -g ./namo-0.6.1.tgz`。之后可直接使用 `namo init`、`namo ui` 和 `namo docs`。
+要在任意目录使用 `namo` 命令，运行 `pnpm pack`，再运行 `npm install -g ./namo-0.6.2.tgz`。之后可直接使用 `namo init`、`namo ui` 和 `namo docs`。
+
+## 连接 Inkflit
+
+在**设置 → 连接设置 → MCP 连接**中选择**添加本地 MCP**：ID 填写 `inkflit`，可执行文件填写 `/Applications/Inkflit.app/Contents/MacOS/Inkflit`，参数填写 `["--mcp"]`，保存后测试连接。也可以在 `namo config` 中配置本地 MCP。Namo 和 Inkflit 需在同一台 Mac 以同一用户运行。请只添加可信程序：它们以 Namo 的系统用户权限运行，所有获准对话的成员都能调用其工具。
 
 ## 了解更多
 

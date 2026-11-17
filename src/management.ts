@@ -34,7 +34,7 @@ import { CodexUpdates } from './codex-updates.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
 import { Browse, BrowseError } from './browse.js';
 import { isOAuthReference, resolveMcpCredential, discoverMcpOAuthScopes } from './mcp-oauth.js';
-import { parseMcpConnections, publicMcpConnections, remoteRead } from './mcp-connections.js';
+import { parseMcpConnections, publicMcpConnections, remoteRead, stdioRead } from './mcp-connections.js';
 import { parseGitHubAccessConfig, publicGitHubAccess } from './github-access.js';
 import { FeishuTransport } from './feishu.js';
 import { discoverLocalGh, type LocalGhConfig } from './github-local.js';
@@ -332,9 +332,9 @@ export class Management {
     const connection=loadConfig(this.file).mcpConnections?.find(c=>c.id===id);
     if(!connection)throw new ManagementError('mcp_connection_not_found',400);
     try {
-      const signal=AbortSignal.timeout(30000),credential=await resolveMcpCredential(this.dataDir,connection.token,connection.url,signal,undefined,connection.oauthScope);
+      const signal=AbortSignal.timeout(30000),credential=connection.type==='stdio'?{token:''}:await resolveMcpCredential(this.dataDir,connection.token,connection.url,signal,undefined,connection.oauthScope);
       // Admin diagnostics may list tools before the connection is enabled for tasks.
-      const result=await this.deps.mcpReader({...connection,token:credential.token},{operation:'list'},signal);
+      const result=await (connection.type==='stdio'?stdioRead:this.deps.mcpReader)({...connection,token:credential.token},{operation:'list'},signal);
       if(this.source().revision!==revision)throw new ManagementError('mcp_config_changed');
       return {toolCount:Array.isArray(result)?result.length:0};
     } catch(error) {if(error instanceof ManagementError)throw error;throw new ManagementError('mcp_connection_failed',400);}
@@ -425,14 +425,14 @@ export class Management {
         if(!Array.isArray(patch.mcpConnections)||patch.mcpConnections.length>20)throw new ManagementError('mcp_invalid_config',400);
         const previous=parseMcpConnections(raw.mcpConnections);
         next.mcpConnections=patch.mcpConnections.map((entry:any)=>{
-          if(!entry||typeof entry!=='object'||Array.isArray(entry)||Object.keys(entry).some(k=>!['id','type','url','oauthScope','ownerUserId','newToken','clearToken'].includes(k))
+          if(!entry||typeof entry!=='object'||Array.isArray(entry)||Object.keys(entry).some(k=>!['id','type','url','command','args','oauthScope','ownerUserId','newToken','clearToken'].includes(k))
             ||entry.newToken!==undefined&&typeof entry.newToken!=='string'||entry.clearToken!==undefined&&typeof entry.clearToken!=='boolean'
             ||entry.clearToken&&entry.newToken||!internalOAuth&&typeof entry.newToken==='string'&&isOAuthReference(entry.newToken))throw new ManagementError('mcp_invalid_config',400);
           const prior=previous.find(v=>v.id===entry.id);
           if(prior?.token&&(prior.type!==entry.type||prior.type==='remote'&&prior.url!==entry.url)&&!entry.clearToken&&!entry.newToken)throw new ManagementError('mcp_credential_target_changed',400);
           if(prior?.token&&isOAuthReference(prior.token)&&(prior.oauthScope??'')!==(entry.oauthScope??'')&&!entry.clearToken&&!entry.newToken)throw new ManagementError('mcp_credential_target_changed',400);
           const owner=entry.ownerUserId===undefined?prior?.ownerUserId:entry.ownerUserId;
-          return {id:entry.id,type:entry.type,...(owner?{ownerUserId:owner}:{}),...(entry.type==='remote'?{url:entry.url,...(entry.oauthScope?{oauthScope:entry.oauthScope}:{})}:{}),
+          return {id:entry.id,type:entry.type,...(owner?{ownerUserId:owner}:{}),...(entry.type==='remote'?{url:entry.url,...(entry.oauthScope?{oauthScope:entry.oauthScope}:{})}:entry.type==='stdio'?{command:entry.command,args:entry.args}:{}),
             token:entry.clearToken?'':entry.newToken||prior?.token||''};
         });
       }

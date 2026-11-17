@@ -189,6 +189,16 @@ test('tool definition changes never reach the direct remote dispatch',async t=>{
 });
 
 
+test('equivalent tool schemas with reordered JSON keys remain callable',async t=>{
+ const f=fixture(t);f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);
+ const tool={name:'update',description:'original',inputSchema:{type:'object',properties:{x:{type:'string',description:'value'}}},approvalRequired:false};
+ let dispatched=false;const reader=async(_c:any,r:any,_s:AbortSignal,before?:(value:unknown)=>void)=>{
+  if(r.operation==='list')return [tool];
+  before?.({approvalRequired:false,inputSchema:{properties:{x:{description:'value',type:'string'}},type:'object'},description:'original',name:'update'});dispatched=true;return {ok:true};
+ };
+ await mcpRead(f.store,f.file,f.task,{operation:'call',connection:'linear',tool:'update'},new AbortController().signal,reader);assert.equal(dispatched,true);
+});
+
 test('admin can test a disabled connection without enabling task access or invoking tools',async t=>{
  const f=fixture(t);f.edit(c=>{c.mcpConnections[0].token='';});
  let calls=0;
@@ -275,4 +285,31 @@ test('legacy executing and unknown MCP records block repeat dispatch after an up
   assert.throws(()=>beginMcpOperation(f.store,f.task,'linear',url,'update_issue',args),/mcp_operation_outcome_unknown/);
   assert.equal(f.store.db.prepare("SELECT 1 FROM settings WHERE key LIKE 'mcp-operation:%'").get(),undefined);
  }
+});
+
+test('local stdio connections use managed authorization, operation receipts and configuration validation',async t=>{
+ const f=fixture(t),server=join(f.dir,'local-mcp.cjs'),marker=join(f.dir,'called');
+ writeFileSync(server,`const rl=require('node:readline').createInterface({input:process.stdin});const fs=require('node:fs');rl.on('line',line=>{const m=JSON.parse(line);if(m.id===undefined)return;let result={};if(m.method==='initialize')result={protocolVersion:'2025-11-25',capabilities:{tools:{}},serverInfo:{name:'test',version:'1'}};if(m.method==='tools/list')result={tools:[{name:'write',description:'write test',inputSchema:{type:'object'}}]};if(m.method==='tools/call'){fs.writeFileSync(process.argv[2],'called');result={content:[{type:'text',text:'ok'}]}}process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n')});`);
+ const view=f.manager.config(),local={id:'local',type:'stdio' as const,url:'',command:process.execPath,args:[server,marker]};
+ const old=view.mcpConnections.map(({credentialConfigured:_a,credentialSource:_b,...v}:any)=>v);
+ const saved=f.manager.save(view.revision,{mcpConnections:[...old,local]});
+ assert.equal((await f.manager.testMcp(saved.revision,'local')).toolCount,1);
+ assert.deepEqual((await mcpRead(f.store,f.file,f.task,{operation:'connections'},new AbortController().signal) as any).connections.map((v:any)=>v.id),['linear','local']);
+ f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);
+ const result=await mcpRead(f.store,f.file,f.task,{connection:'local',operation:'call',tool:'write',arguments:{}},new AbortController().signal);
+ assert.match(JSON.stringify(result),/ok/);assert.equal(readFileSync(marker,'utf8'),'called');
+ assert.equal(JSON.parse(String(f.store.db.prepare("SELECT value FROM settings WHERE key LIKE 'mcp-operation:%'").get()!.value)).state,'completed');
+ f.edit(c=>{c.mcpConnections[1].args=['changed'];});assert.throws(()=>assertMcpDelivery(f.store,loadConfig(f.file),f.task),/mcp_access_changed/);
+ for(const invalid of [{command:'node',args:[]},{command:'/tmp/example',args:['a\n']},{command:'/tmp/example',args:[],token:'secret_token'}])assert.throws(()=>parseMcpConnections([{id:'bad',type:'stdio',token:'',...invalid}]));
+});
+
+test('Namo managed task can search a real Inkflit MCP without modifying notes', {skip:!process.env.INKFLIT_QA_EXE}, async t=>{
+ const f=fixture(t),command=process.env.INKFLIT_QA_EXE!;
+ f.edit(c=>{c.mcpConnections.push({id:'inkflit',type:'stdio',command,args:['--mcp'],token:''});});
+ f.store.db.prepare("UPDATE tasks SET state='running' WHERE id=?").run(f.task.id);
+ const signal=AbortSignal.timeout(30000),applied=loadConfig(f.file);
+ const list=await mcpRead(f.store,f.file,f.task,{connection:'inkflit',operation:'list'},signal,undefined,applied) as any;
+ assert.ok(list.data.some((tool:any)=>tool.name==='search_notes'));
+ const result=await mcpRead(f.store,f.file,f.task,{connection:'inkflit',operation:'call',tool:'search_notes',arguments:{query:'__namo_test_9f7e4_avoids_real_content__'}},signal,undefined,applied) as any;
+ assert.notEqual(result.data.isError,true);
 });

@@ -6,9 +6,18 @@ import type { McpConnectionPatch, McpConnectionView } from './ui-contract.js';
 import { terminalOAuth } from './terminal-config.js';
 import { beginMcpOAuth } from './mcp-oauth.js';
 
-const safe=(c:McpConnectionView):McpConnectionPatch=>({id:c.id,type:c.type,url:c.url,...(c.oauthScope?{oauthScope:c.oauthScope}:{}),...(c.ownerUserId?{ownerUserId:c.ownerUserId}:{})});
+const safe=(c:McpConnectionView):McpConnectionPatch=>({id:c.id,type:c.type,url:c.url,...(c.type==='stdio'?{command:c.command,args:c.args}:{}),...(c.oauthScope?{oauthScope:c.oauthScope}:{}),...(c.ownerUserId?{ownerUserId:c.ownerUserId}:{})});
 
-async function editor(manager:Management,ui:ConfigPrompter,previous?:McpConnectionView):Promise<boolean> {
+async function editor(manager:Management,ui:ConfigPrompter,previous?:McpConnectionView,local=false):Promise<boolean> {
+ if(local||previous?.type==='stdio') {
+  const view=manager.config();
+  return editForm(ui,previous?.id??t('mcp.addLocal'),{id:previous?.id??'',command:previous?.command??'',args:JSON.stringify(previous?.args??[])},[...(!previous?[{key:'id',label:t('terminal.mcpId'),kind:'text' as const}]:[]),{key:'command',label:t('mcp.localCommand'),kind:'text'},{key:'args',label:t('mcp.localArgs'),kind:'text'}],async(d:Draft)=>{
+   let args:unknown;try{args=JSON.parse(String(d.args));}catch{throw new ManagementError(t('mcp.localArgsInvalid'),400);}
+   if(!Array.isArray(args)||args.some(a=>typeof a!=='string'))throw new ManagementError(t('mcp.localArgsInvalid'),400);
+   const values=(view.mcpConnections as McpConnectionView[]).filter(c=>c.id!==previous?.id).map(safe);
+   values.push({id:String(d.id),type:'stdio',url:'',command:String(d.command),args});manager.save(view.revision,{mcpConnections:values});
+  });
+ }
  const view=manager.config(),revision=view.revision;
  const fields:Field[]=[...(!previous?[{key:'id',label:t('terminal.mcpId'),kind:'text' as const}]:[]),{key:'url',label:t('terminal.mcpUrl'),kind:'text'},
   {key:'scope',label:t('terminal.scope'),kind:'text',clearable:true},{key:'method',label:t('terminal.mcpMethod'),kind:'choice',choices:[
@@ -34,10 +43,11 @@ export async function manageMcp(manager:Management,ui:ConfigPrompter):Promise<st
   const view=manager.config(),connections=view.mcpConnections as McpConnectionView[];
   ui.screen?.();
   const choice=await ui.select(t('terminal.mcpManage'),[...(connections.length?connections.map(c=>({value:c.id,label:`${c.id} · ${c.credentialSource??(c.credentialConfigured?'token':'anonymous')}`,availableActions:['edit','test','scope','remove']})):[{value:'$empty',label:t('terminal.listEmpty'),disabled:true}]),
-   ...(connections.length?[{value:'edit',label:t('terminal.mcpEditSelected'),action:true,shortcut:'E',targeted:true},{value:'test',label:t('terminal.mcpTestSelected'),action:true,shortcut:'T',targeted:true},{value:'scope',label:t('terminal.mcpScopeSelected'),action:true,shortcut:'O',targeted:true},{value:'remove',label:t('terminal.mcpRemoveSelected'),action:true,shortcut:'D',targeted:true}]:[]),{value:'$add',label:t('terminal.mcpAddAction'),action:true,shortcut:'A'},{value:'$import',label:t('terminal.mcpImport'),action:true,shortcut:'I'}],active);
+   ...(connections.length?[{value:'edit',label:t('terminal.mcpEditSelected'),action:true,shortcut:'E',targeted:true},{value:'test',label:t('terminal.mcpTestSelected'),action:true,shortcut:'T',targeted:true},{value:'scope',label:t('terminal.mcpScopeSelected'),action:true,shortcut:'O',targeted:true},{value:'remove',label:t('terminal.mcpRemoveSelected'),action:true,shortcut:'D',targeted:true}]:[]),{value:'$add',label:t('terminal.mcpAddAction'),action:true,shortcut:'A'},{value:'$addlocal',label:t('mcp.addLocal'),action:true},{value:'$import',label:t('terminal.mcpImport'),action:true,shortcut:'I'}],active);
   const target=parseSelectedAction(choice),selected=target?.[1]??choice;
   if(connections.some(c=>c.id===selected))active=selected;
   try {
+   if(selected==='$addlocal'){ui.info(t('mcp.localWarning'));if(await editor(manager,ui,undefined,true))return t('terminal.saved');continue;}
    if(selected==='$add'){if(await editor(manager,ui))return t('terminal.saved');continue;}
    if(selected==='$import') {
     const catalog=manager.codexMcpCatalog(),entries=catalog.entries.filter(entry=>entry.importable);
@@ -50,7 +60,7 @@ export async function manageMcp(manager:Management,ui:ConfigPrompter):Promise<st
     try {
      if(action==='edit'){if(await editor(manager,ui,item))return t('terminal.saved');continue;}
      if(action==='test'){const result=await manager.testMcp(view.revision,item.id);return t('terminal.mcpResult',result.toolCount);}
-     if(action==='scope'){const result=await manager.mcpOAuthScopes(view.revision,item.url);return t('terminal.mcpScopesResult',result.scopes.join(' '));}
+     if(action==='scope'&&item.type==='remote'){const result=await manager.mcpOAuthScopes(view.revision,item.url);return t('terminal.mcpScopesResult',result.scopes.join(' '));}
      if(action==='remove'){ui.screen?.();if(await ui.confirm(t('terminal.mcpRemoveConfirm',item.id))){manager.save(view.revision,{mcpConnections:connections.filter(c=>c.id!==item.id).map(safe)});return t('terminal.mcpRemoved');}}
     }catch(error){if(!(error instanceof Back))throw error;}
   }catch(error){if(!(error instanceof Back))throw error;}

@@ -9,33 +9,38 @@ import { NAMO_VERSION } from './version.js';
 import { isOAuthReference, resolveMcpCredential, LEGACY_LINEAR_URL } from './mcp-oauth.js';
 import { publicHttpsUrl, publicNetwork } from './mcp-public-network.js';
 import { beginMcpOperation } from './mcp-operation.js';
+import { isAbsolute } from 'node:path';
+import { Readable } from 'node:stream';
 
-export interface McpConnection { id:string; type:'remote'; token:string; url:string; oauthScope?:string; ownerUserId?:string }
+export interface McpConnection { id:string; type:'remote'|'stdio'; token:string; url:string; command?:string; args?:string[]; oauthScope?:string; ownerUserId?:string }
 export type McpConnectionView = Omit<McpConnection,'token'> & {credentialConfigured:boolean;credentialSource?:'oauth'};
 export class McpAccessError extends Error { constructor(readonly code:string){super(code);} }
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+// JSON object key order is not meaningful; native MCP servers may serialize schemas in a different order each time.
+const toolHash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value,(_key,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v)).digest('hex');
 export function parseMcpConnections(raw:unknown):McpConnection[] {
   if(raw===undefined)return [];
   if(!Array.isArray(raw)||raw.length>20)throw new McpAccessError('mcp_invalid_config');
   const ids=new Set<string>();
   return raw.map((v:any)=>{
-    if(!v||typeof v!=='object'||Array.isArray(v)||Object.keys(v).some(k=>!['id','type','token','url','oauthScope','ownerUserId'].includes(k))
-      ||typeof v.id!=='string'||!/^[a-z][a-z0-9_-]{0,47}$/.test(v.id)||ids.has(v.id)||!['linear','remote'].includes(v.type)
+    if(!v||typeof v!=='object'||Array.isArray(v)||Object.keys(v).some(k=>!['id','type','token','url','command','args','oauthScope','ownerUserId'].includes(k))
+      ||typeof v.id!=='string'||!/^[a-z][a-z0-9_-]{0,47}$/.test(v.id)||ids.has(v.id)||!['linear','remote','stdio'].includes(v.type)
       ||typeof v.token!=='string'||v.token.length>4096||v.token!==''&&(v.token.length<8||!/^[A-Za-z0-9_.~+\/-]+=*$/.test(v.token))
       ||v.type==='linear'&&(v.url!==undefined||v.oauthScope!==undefined)
-      ||v.type==='remote'&&(typeof v.url!=='string'||v.url.length>2048||v.url.includes('?'))
+      ||v.type==='remote'&&(typeof v.url!=='string'||v.url.length>2048||v.url.includes('?')||v.command!==undefined||v.args!==undefined)
+      ||v.type==='stdio'&&(typeof v.command!=='string'||!isAbsolute(v.command)||v.command.length>2048||/[\x00-\x1f]/.test(v.command)||!Array.isArray(v.args)||v.args.length>32||v.args.some((a:unknown)=>typeof a!=='string'||a.length>4096||/[\x00-\x1f]/.test(a))||v.url!==undefined||v.token!==''||v.oauthScope!==undefined)
       ||v.oauthScope!==undefined&&(typeof v.oauthScope!=='string'||v.oauthScope.length>512||!/^[\x21\x23-\x5b\x5d-\x7e ]*$/.test(v.oauthScope)))throw new McpAccessError('mcp_invalid_config');
-    const url=v.type==='linear'?LEGACY_LINEAR_URL:v.url;
-    try{publicHttpsUrl(url);}catch{throw new McpAccessError('mcp_invalid_config');}
+    const url=v.type==='linear'?LEGACY_LINEAR_URL:v.type==='stdio'?'':v.url;
+    try{if(v.type!=='stdio')publicHttpsUrl(url);}catch{throw new McpAccessError('mcp_invalid_config');}
     ids.add(v.id);
     const ownerUserId=v.ownerUserId===undefined||v.ownerUserId===''?undefined:identityList([v.ownerUserId])[0];
-    return {id:v.id,type:'remote' as const,token:v.token,url,...(ownerUserId?{ownerUserId}:{}),...(v.type==='linear'?{oauthScope:'read'}:v.oauthScope?{oauthScope:v.oauthScope}: {})};
+    return {id:v.id,type:v.type==='stdio'?'stdio' as const:'remote' as const,token:v.token,url,...(v.type==='stdio'?{command:v.command,args:v.args}:{}),...(ownerUserId?{ownerUserId}:{}),...(v.type==='linear'?{oauthScope:'read'}:v.oauthScope?{oauthScope:v.oauthScope}: {})};
   });
 }
 export const publicMcpConnections=(values:McpConnection[]):McpConnectionView[]=>values.map(({token,...v})=>({...v,credentialConfigured:!!token,...(isOAuthReference(token)?{credentialSource:'oauth' as const}:{})}));
 function authorized(store:Store,c:Config,task:Task,id:string):{connection:McpConnection;scope:string;identity:string} {
   const message=store.get(task.inboxKey),connection=c.mcpConnections?.find(x=>x.id===id);
-  if(!message||message.senderId!==task.ownerId||!connection?.token||!admitted(c.feishu,message.senderId,message.chatId,message.envelope?.tenantKey))throw new McpAccessError('mcp_access_denied');
+  if(!message||message.senderId!==task.ownerId||(!connection||(connection.type==='remote'&&!connection.token))||!admitted(c.feishu,message.senderId,message.chatId,message.envelope?.tenantKey))throw new McpAccessError('mcp_access_denied');
   return {connection,scope:hash({connection,appId:c.feishu.appId,access:c.feishu.access,allowedUsers:c.feishu.allowedUserIds,allowedChats:c.feishu.allowedChatIds,taskId:task.id,owner:task.ownerId,chat:message.chatId}),
     identity:hash({resource:connection,appId:c.feishu.appId,tenant:message.envelope?.tenantKey,owner:task.ownerId,chat:message.chatId})};
 }
@@ -102,15 +107,15 @@ export async function mcpRead(store:Store,file:string,task:Task,raw:unknown,sign
   const {connection,scope,identity}=authorized(store,c,task,id);
   if(applied&&authorized(store,applied,task,id).scope!==scope)throw new McpAccessError('mcp_access_changed');
   remember(store,task,id,identity);
-  const credential=await resolveMcpCredential(c.dataDir,connection.token,connection.url,signal,undefined,connection.oauthScope);
-  const transport=remoteReader??reader;
+  const credential=connection.type==='stdio'?{token:'',secrets:[] as string[]}:await resolveMcpCredential(c.dataDir,connection.token,connection.url,signal,undefined,connection.oauthScope);
+  const transport=connection.type==='stdio'?stdioRead:remoteReader??reader;
   const request={operation:v.operation as 'list'|'call',...(typeof v.tool==='string'?{tool:v.tool}:{}),...(v.arguments?{arguments:v.arguments as Record<string,unknown>}: {})};
   let finalize:((outcome:'completed'|'unknown')=>void)|undefined,toolFingerprint:string|undefined;
   if(request.operation==='call') {
     const discovered=await transport({...connection,token:credential.token},{operation:'list'},signal);
     const selected=Array.isArray(discovered)?discovered.find((tool:any)=>tool?.name===request.tool):undefined;
     if(!selected)throw new McpAccessError('mcp_tool_not_found');
-    toolFingerprint=hash(selected);
+    toolFingerprint=toolHash(selected);
     const argumentText=JSON.stringify(request.arguments??{});
     if(makeRedactor([c.feishu.appSecret,c.github?.token??'',...(c.mcpConnections??[]).map(item=>item.token),...credential.secrets])(argumentText)!==argumentText)throw new McpAccessError('mcp_secret_in_arguments');
   }
@@ -119,8 +124,8 @@ export async function mcpRead(store:Store,file:string,task:Task,raw:unknown,sign
     result=await transport({...connection,token:credential.token},request,signal,tool=>{
       if(signal.aborted||store.get(task.inboxKey)?.cancelRequested||store.db.prepare('SELECT state FROM tasks WHERE id=?').get(task.id)?.state!=='running')throw new McpAccessError('mcp_cancelled');
       if(authorized(store,loadConfig(file),task,id).scope!==scope)throw new McpAccessError('mcp_access_changed');
-      if(hash(tool)!==toolFingerprint)throw new McpAccessError('mcp_tool_changed');
-      try {finalize=beginMcpOperation(store,task,id,connection.url,request.tool!,request.arguments??{});}
+      if(toolHash(tool)!==toolFingerprint)throw new McpAccessError('mcp_tool_changed');
+      try {finalize=beginMcpOperation(store,task,id,connection.type==='stdio'?JSON.stringify([connection.command,connection.args]):connection.url,request.tool!,request.arguments??{});}
       catch(error) {if(error instanceof Error&&error.message==='mcp_operation_outcome_unknown')throw new McpAccessError(error.message);throw error;}
     });
     finalize?.('completed');
@@ -158,4 +163,25 @@ export async function remoteRead(connection:McpConnection,request:{operation:'li
     return await client.callTool({name:request.tool!,arguments:request.arguments??{}},undefined,{signal:timeout,timeout:30000});
   } catch(error){if(error instanceof McpAccessError)throw error;throw new McpAccessError('mcp_connection_failed');}
   finally{await client.close().catch(()=>{});await network.close().catch(()=>{});}
+}
+
+/** A configured local server runs with the Namo user's OS permissions. */
+export async function stdioRead(connection:McpConnection,request:{operation:'list'|'call';tool?:string;arguments?:Record<string,unknown>},signal:AbortSignal,beforeCall?:(tool:unknown)=>void):Promise<unknown> {
+  if(connection.type!=='stdio'||!connection.command||!connection.args)throw new McpAccessError('mcp_invalid_config');
+  const timeout=AbortSignal.any([signal,AbortSignal.timeout(30000)]);
+  const [{Client},{StdioClientTransport}]=await Promise.all([import('@modelcontextprotocol/sdk/client/index.js'),import('@modelcontextprotocol/sdk/client/stdio.js')]);
+  const client=new Client({name:'namo',version:NAMO_VERSION},{capabilities:{}});
+  const transport=new StdioClientTransport({command:connection.command,args:connection.args,stderr:'pipe',maxBufferSize:1048576});
+  if(transport.stderr instanceof Readable)transport.stderr.resume();
+  try {
+    await client.connect(transport,{signal:timeout,timeout:30000});
+    const tools=[];let cursor:string|undefined;
+    for(let page=0;page<10;page++){const result=await client.listTools(cursor?{cursor}:undefined,{signal:timeout,timeout:30000});tools.push(...result.tools);if(tools.length>200)throw new McpAccessError('mcp_tool_list_too_large');if(!result.nextCursor)break;if(result.nextCursor===cursor||page===9)throw new McpAccessError('mcp_tool_list_too_large');cursor=result.nextCursor;}
+    const normalized=tools.map(({name,description,inputSchema})=>({name,description,inputSchema,approvalRequired:false}));
+    if(request.operation==='list')return normalized;
+    const selected=normalized.find(t=>t.name===request.tool);if(!selected)throw new McpAccessError('mcp_tool_not_found');
+    beforeCall?.(selected);
+    return await client.callTool({name:request.tool!,arguments:request.arguments??{}},undefined,{signal:timeout,timeout:30000});
+  } catch(error){if(error instanceof McpAccessError)throw error;throw new McpAccessError('mcp_connection_failed');}
+  finally{await client.close().catch(()=>{});}
 }

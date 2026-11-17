@@ -28,8 +28,8 @@ export interface ConfigValues {
   progressIntervalMs?: number;
   progressHeartbeatMs?: number;
 }
-export interface McpConnectionView { id:string; type:'remote'; url:string; oauthScope?:string; ownerUserId?:string; credentialConfigured:boolean; credentialSource?:'oauth' }
-export interface McpConnectionPatch { id:string; type:'remote'; url:string; oauthScope?:string; ownerUserId?:string; newToken?:string; clearToken?:boolean }
+export interface McpConnectionView { id:string; type:'remote'|'stdio'; url:string; command?:string; args?:string[]; oauthScope?:string; ownerUserId?:string; credentialConfigured:boolean; credentialSource?:'oauth' }
+export interface McpConnectionPatch { id:string; type:'remote'|'stdio'; url:string; command?:string; args?:string[]; oauthScope?:string; ownerUserId?:string; newToken?:string; clearToken?:boolean }
 export interface ConfigView {
   revision: string;
   mcpConnections: McpConnectionView[];

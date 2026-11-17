@@ -19,7 +19,7 @@ This guide covers setup, capabilities, operation and execution boundaries. For m
 - **Local workbench:** a dashboard, searchable task and session lists, user/status/date filters, pagination, details, profiles, assistant settings, memory review, configuration and connection diagnostics.
 - **Concise chat replies:** durable acceptance reactions, original-message/topic routing, safe rich text and a single updatable progress card. A small model can summarize titles in the background; failures retain text excerpts and model turns count toward the daily limit. Buttons require the Feishu callback subscription.
 - **Controlled continuations:** exact-head GitHub check waits (public, or explicitly configured private repositories) can resume the same task without model polling; requested Git pushes execute directly and record the exact task, commit, remote and branch.
-- **Remote MCP:** explicitly authorize public HTTPS connections; requested reads and writes execute directly within the external account permissions. OAuth and Bearer authorization are supported.
+- **MCP:** Connect public HTTPS services with OAuth or Bearer authorization, or trusted local stdio programs through the workbench or `namo config`. Local processes run with the Namo user’s OS permissions; admitted bot members can invoke their tools.
 - **Local service management:** guided setup, isolated official Codex login, diagnostics, immutable service releases and macOS background service commands.
 
 The workbench and CLI support **English and Simplified Chinese**. They follow the system language by default and fall back to English for unsupported languages. Task content, user input and execution logs retain their original language.
@@ -48,7 +48,7 @@ To build a local CLI package:
 
 ```sh
 pnpm pack
-npm install -g ./namo-0.6.1.tgz
+npm install -g ./namo-0.6.2.tgz
 namo init
 ```
 
