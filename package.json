@@ -1,7 +1,9 @@
 {
-  "name": "namo",
+  "name": "@dofy/namo",
   "version": "0.6.2",
-  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "engines": {
     "node": ">=24.15"

@@ -32,7 +32,14 @@ Organization setup: open **Connections** in the workbench to configure organizat
 
 Requirements: **Node.js 24.15+**, the official Codex CLI and a Feishu or Lark internal app with bot capabilities. Use the official Codex authentication and provider.
 
-Until a package is published, build from source with **pnpm 12.15.0**:
+Install the npm package and start setup:
+
+```sh
+npm install -g @dofy/namo
+namo init
+```
+
+For development, build from source with **pnpm 12.15.0**:
 
 ```sh
 git clone https://github.com/dofy/namo.git
@@ -48,7 +55,7 @@ To build a local CLI package:
 
 ```sh
 pnpm pack
-npm install -g ./namo-0.6.2.tgz
+npm install -g ./dofy-namo-0.6.2.tgz
 namo init
 ```
 
@@ -83,7 +90,7 @@ NAMO_LANG=zh-CN namo ui
 
 Create and publish an internal Feishu or Lark app with a bot, and set its availability to the intended users. Configure a long connection and subscribe to `im.message.receive_v1`. The documented message scopes are `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly` and `im:message:send_as_bot`; card buttons also require `card.action.trigger`. Follow the setup wizard to pair the user with its one-time code. Organization access can be configured later in the workbench. Do not run another receiver for the same app at the same time.
 
-After initialization, run `pnpm cli start` in the foreground if you did not install the background service. `pnpm cli ui` opens the local workbench without starting a receiver; keep that terminal process open while using it. For a packaged installation, the equivalent commands are `namo start` and `namo ui`.
+After initialization, run `namo start` in the foreground if you did not install the background service. `namo ui` opens the local workbench without starting a receiver; keep that terminal process open while using it. From a source checkout, the equivalent commands are `pnpm cli start` and `pnpm cli ui`.
 
 ### Service maintenance
 

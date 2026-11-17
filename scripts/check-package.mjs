@@ -35,6 +35,7 @@ try {
   const manifest=JSON.parse(run('tar',['-xOf',tarball,'package/package.json']));
   const source=JSON.parse(readFileSync(join(root,'package.json'),'utf8'));
   assert.equal(manifest.name,source.name); assert.equal(manifest.version,source.version);
+  assert.equal(manifest.name,'@dofy/namo'); assert.notEqual(manifest.private,true); assert.equal(manifest.publishConfig?.access,'public');
   assert.deepEqual(manifest.dependencies,source.dependencies); assert.equal(manifest.bin.namo,'bin/namo.js');
   const html=run('tar',['-xOf',tarball,'package/dist/ui/index.html']);
   const assets=[...html.matchAll(/(?:src|href)="(\/assets\/[^\"]+)"/g)].map(match=>match[1]);

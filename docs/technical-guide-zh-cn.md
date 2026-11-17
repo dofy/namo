@@ -30,7 +30,14 @@ PDF / Office / 音视频材料解析、自主派工和离线消息补拉仍不�
 
 需要 **Node.js 24.15+**、官方 Codex CLI，以及已启用机器人能力的飞书或 Lark 企业自建应用。使用官方 Codex 认证和服务入口。
 
-npm 发布前，使用 **pnpm 12.15.0** 从源码构建：
+安装 npm 包并开始初始化：
+
+```sh
+npm install -g @dofy/namo
+namo init
+```
+
+开发时使用 **pnpm 12.15.0** 从源码构建：
 
 ```sh
 git clone https://github.com/dofy/namo.git
@@ -46,7 +53,7 @@ pnpm cli init
 
 ```sh
 pnpm pack
-npm install -g ./namo-0.6.2.tgz
+npm install -g ./dofy-namo-0.6.2.tgz
 namo init
 ```
 
@@ -81,7 +88,7 @@ NAMO_LANG=zh-CN namo ui
 
 创建并发布飞书或 Lark 企业自建应用，启用机器人，并设置目标用户的应用可用范围。配置长连接，订阅 `im.message.receive_v1`；文档列出的消息权限为 `im:message.p2p_msg:readonly`、`im:message.group_at_msg:readonly` 和 `im:message:send_as_bot`，卡片按钮还需订阅 `card.action.trigger`。按向导使用一次性配对码完成用户配对；组织接入可在初始化后通过工作台配置。不要为同一个应用同时运行另一个接收端。
 
-初始化后，如未安装后台服务，使用 `pnpm cli start` 前台运行。`pnpm cli ui` 打开本地工作台，不启动接收端；使用工作台期间需保持该终端进程运行。安装本地 CLI 包后，对应命令为 `namo start` 和 `namo ui`。
+初始化后，如未安装后台服务，使用 `namo start` 前台运行。`namo ui` 打开本地工作台，不启动接收端；使用工作台期间需保持该终端进程运行。源码目录中对应命令为 `pnpm cli start` 和 `pnpm cli ui`。
 
 ### 服务维护
 

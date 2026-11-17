@@ -278,13 +278,14 @@ test('MCP actions use the selected connection directly',async()=>{
  assert.ok(optionsSeen.some(o=>o.value==='$import'&&o.action&&o.shortcut==='I'));
 });
 
-test('empty MCP list exposes add and import without selected-item actions',async()=>{
+test('empty MCP list exposes remote, local and import actions without selected-item actions',async()=>{
  const {manageMcp}=await import('../src/terminal-mcp.js');const {Back}=await import('../src/config-prompts.js');let options:import('../src/config-prompts.js').Option[]=[];
  const ui={select:async(_label:string,items:import('../src/config-prompts.js').Option[])=>{options=items;throw new Back();},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
  const manager={config:()=>({revision:'r',mcpConnections:[]})} as unknown as import('../src/management.js').Management;
  await assert.rejects(manageMcp(manager,ui),Back);
  assert.equal(options.filter(o=>!o.action).length,1);assert.equal(options.find(o=>!o.action)?.disabled,true);
- assert.deepEqual(options.filter(o=>o.action).map(o=>o.shortcut),['A','I']);
+ assert.deepEqual(options.filter(o=>o.action).map(o=>o.value),['$add','$addlocal','$import']);
+ assert.deepEqual(options.filter(o=>o.action).map(o=>o.shortcut),['A',undefined,'I']);
 });
 
 test('MCP removal confirmation names the selected connection',async()=>{

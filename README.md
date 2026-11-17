@@ -24,7 +24,16 @@ Namo is an early-access project. You host and maintain the service yourself; bac
 
 ## Get started
 
-You need Node.js 24.15 or newer, pnpm 12.15.0, the official Codex CLI, and a Feishu or Lark app with bot capabilities. Namo is not yet published on npm, so start from source:
+You need Node.js 24.15 or newer, the official Codex CLI, and a Feishu or Lark app with bot capabilities. Install and initialize Namo:
+
+```sh
+npm install -g @dofy/namo
+namo init
+```
+
+The setup wizard guides you through Codex login, directory access and connecting your bot. It can install a macOS background service; otherwise, use `namo start` to run in the foreground. Open the local workbench with `namo ui`.
+
+For development, build from source with pnpm 12.15.0:
 
 ```sh
 git clone https://github.com/dofy/namo.git
@@ -33,10 +42,6 @@ pnpm install --frozen-lockfile
 pnpm run build
 pnpm cli init
 ```
-
-The setup wizard guides you through Codex login, directory access and connecting your bot. It can install a macOS background service; otherwise, use `pnpm cli start` to run in the foreground. Open the local workbench with `pnpm cli ui`.
-
-To use `namo` outside the repository, run `pnpm pack` followed by `npm install -g ./namo-0.6.2.tgz`. You can then use `namo init`, `namo ui` and `namo docs` directly.
 
 ## Connect Inkflit
 

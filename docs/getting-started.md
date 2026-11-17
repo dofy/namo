@@ -1,18 +1,17 @@
 # 使用指南
 
-Namo 将飞书 / Lark 聊天连接到本机官方 Codex。当前为早期版本，尚未发布 npm；后台服务管理支持 macOS，其他平台未完成完整验收。
+Namo 将飞书 / Lark 聊天连接到本机官方 Codex。当前为早期版本；后台服务管理支持 macOS，其他平台未完成完整验收。
 
 ## 安装与初始化
 
-准备 Node.js 24.15+、pnpm 12.15.0、官方 Codex CLI，以及飞书企业自建应用。
+准备 Node.js 24.15+、官方 Codex CLI，以及飞书企业自建应用。
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm run build
-pnpm cli init
+npm install -g @dofy/namo
+namo init
 ```
 
-需要安装本机命令时，运行 `pnpm pack`，再用 `npm install -g` 安装生成的 `.tgz` 文件（文件名以打包输出为准）。源码开发方式见[技术实现](architecture.md#开发与验证)。
+源码开发需要 pnpm 12.15.0，具体方式见[技术实现](architecture.md#开发与验证)。
 
 `init` 在交互终端中依次完成：目录白名单 → 应用凭据 → 独立 Codex 登录 → 飞书连接与用户配对 → 可选真实收发测试 → 可选后台服务。Secret 不回显，取消后可续做；已有配置和用户保留。不要同时运行同一应用的其他接收端。
 

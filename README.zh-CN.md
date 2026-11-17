@@ -24,7 +24,16 @@ Namo 目前处于早期可用阶段，需要你自行托管和维护。后台服
 
 ## 快速开始
 
-准备 Node.js 24.15 或更高版本、pnpm 12.15.0、官方 Codex CLI，以及启用机器人能力的飞书或 Lark 应用。Namo 尚未发布到 npm，可先从源码开始：
+准备 Node.js 24.15 或更高版本、官方 Codex CLI，以及启用机器人能力的飞书或 Lark 应用。安装并初始化 Namo：
+
+```sh
+npm install -g @dofy/namo
+namo init
+```
+
+初始化向导会引导你登录 Codex、设置可访问目录并连接机器人。向导支持安装 macOS 后台服务；如果没有安装，可用 `namo start` 前台运行。使用 `namo ui` 打开本地工作台。
+
+开发时可使用 pnpm 12.15.0 从源码构建：
 
 ```sh
 git clone https://github.com/dofy/namo.git
@@ -33,10 +42,6 @@ pnpm install --frozen-lockfile
 pnpm run build
 pnpm cli init
 ```
-
-初始化向导会引导你登录 Codex、设置可访问目录并连接机器人。向导支持安装 macOS 后台服务；如果没有安装，可用 `pnpm cli start` 前台运行。使用 `pnpm cli ui` 打开本地工作台。
-
-要在任意目录使用 `namo` 命令，运行 `pnpm pack`，再运行 `npm install -g ./namo-0.6.2.tgz`。之后可直接使用 `namo init`、`namo ui` 和 `namo docs`。
 
 ## 连接 Inkflit
 
