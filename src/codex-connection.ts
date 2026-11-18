@@ -25,11 +25,14 @@ export class Rpc {
     const executable = bin.includes('/') ? resolve(bin)
       : (process.env.PATH ?? '').split(delimiter).map(dir => join(dir, bin)).find(existsSync);
     const files: Record<string, string | Record<string, string>> = {
-      ':root': 'deny', ':minimal': 'read',
+      ':root': extraction ? 'deny' : 'read', ':minimal': 'read',
       ':workspace_roots': sandbox === 'workspace-write' && policy?.allowLocalCommits
         ? { '.': 'write', '.git': 'write' } : access,
     };
     for (const path of policy?.readPaths ?? []) files[path] = 'read';
+    if (!extraction && sandbox === 'workspace-write') {
+      for (const path of ['/tmp', tmpdir()]) if (existsSync(path)) { files[path] = 'write'; files[realpathSync(path)] = 'write'; }
+    }
     if(!extraction)for (const path of policy?.directories ?? []) files[path] = sandbox==='workspace-write'?{'.':'write','.git':'write'}:'read';
     // The sandboxed instruction loader re-executes Codex. Standalone installs
     // outside system directories need explicit read/execute access to the
@@ -59,6 +62,8 @@ export class Rpc {
       ...(extraction ? ['-c','features.shell_tool=false','-c','features.plugins=false','-c','features.apps=false','-c','features.hooks=false',
         '-c','mcp_servers={}','-c','web_search="disabled"'] : [])], {
       env: { ...codexEnvironment(home), npm_config_script_shell: '/bin/sh',
+        CARGO_HOME: join(tmpdir(), 'namo-cargo-home'),
+        GOCACHE: join(tmpdir(), 'namo-go-cache'), GOTELEMETRY: 'off',
         npm_config_userconfig: '/dev/null', npm_config_cache: join(tmpdir(), 'feishu-codex-bot-npm'),
         pnpm_config_script_shell: '/bin/sh', pnpm_config_npmrc_auth_file: '/dev/null',
         pnpm_config_cache_dir: join(tmpdir(), 'namo-pnpm-cache'),

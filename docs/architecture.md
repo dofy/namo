@@ -55,7 +55,7 @@ flowchart TB
 | Codex 协议 | [connection](../src/codex-connection.ts)、[runtime](../src/runtime.ts) | 官方 provider、独立认证、目录白名单；修订回执未知时不自动重送 |
 | 受限浏览器原型 | [ego-browser-prototype](../src/ego-browser-prototype.ts)、[worker](../src/runner-worker.ts) | 私聊配对用户逐任务批准或显式持久授权；固定操作、宿主持有空间绑定；能力外操作和结果不明均不自动执行或重试 |
 | 人工 / 外部等待 | [waits](../src/waits.ts)、[external-waits](../src/external-waits.ts) | 等待释放执行资源，保留聊天顺序；回答绑定身份和版本；GitHub 固定 HEAD，恢复只消费一次 |
-| 身份与资源 | [access](../src/access.ts)、[path-policy](../src/path-policy.ts)、[skill-access](../src/skill-access.ts) | 组织准入保留；已准入成员共享目录与 MCP；续接与交付重验权限；Skills 仅只读开放启用的具体目录 |
+| 身份与资源 | [access](../src/access.ts)、[path-policy](../src/path-policy.ts)、[skill-access](../src/skill-access.ts) | 组织准入保留；已准入成员共享写目录与 MCP；续接与交付重验权限；Skills 保留个人启停设置 |
 | 档案与记忆 | [assistant](../src/assistant.ts)、[memory](../src/memory.ts)、[extractor](../src/memory-extractor.ts) | 档案显式启用；长期事实带来源和范围；人工纠正、停用、删除不能被自动恢复 |
 | 材料与产物 | [materials](../src/materials.ts)、[image-inputs](../src/image-inputs.ts)、[artifacts](../src/artifacts.ts) | 有界读取授权原消息；图片和交付文件冻结内容；正文不能生成授权，拒绝越界及敏感路径 |
 | 展示与投递 | [public-progress](../src/public-progress.ts)、[feedback](../src/feedback.ts)、[recovery](../src/recovery.ts) | 只展示公开进展与有界证据；结果先保存再发送；未知投递不重试模型或盲重发 |
@@ -83,7 +83,7 @@ flowchart TB
 
 新业务表使用 STRICT 类型、外键和状态约束；状态队列、归属查询和历史排序有对应索引。JSON 仅用于有界列表、证据和冻结快照；这些业务记录不再存入 `settings`。
 
-**目录。** `codex.directories` 是唯一外部目录白名单，所有准入成员及群聊均可读写；MCP 保存授权后统一可用，请求的读写操作直接执行而不逐次审批，不再配置资源受众、项目或任务启用开关。新任务的 cwd 始终为独立会话目录，白名单目录只用于用户要求的文件操作。初始化必须明确输入白名单，不能默认采用进程当前目录；新实例的数据与工作目录默认在系统用户级 Namo 目录。旧配置只在兼容读取入口转换为目录列表，保存时移除旧字段并生成私有备份；旧 `readPaths` 不升级为写权限。`task_directories` 冻结每个任务的 cwd 与完整可写目录集；运行及失联占位均按这些路径互斥。共享白名单时，不同聊天也会因可写目录重叠而串行。
+**目录。** 普通任务可读取本机文件，Namo 配置、数据、独立登录目录和显式拒绝路径除外；已准入成员可写入 `codex.directories`、独立任务工作目录和系统临时目录。主机其他用户配置和凭据文件如未明确拒绝，也可能被读取；只应准入可信成员。MCP 保存授权后统一可用，请求的读写操作直接执行而不逐次审批。新任务的 cwd 始终为独立会话目录；初始化必须明确输入可写目录，不能默认采用进程当前目录。旧配置只在兼容读取入口转换为目录列表，保存时移除旧字段并生成私有备份；旧 `readPaths` 不升级为写权限。`task_directories` 冻结每个任务的 cwd 与完整可写目录集；运行及失联占位均按这些路径互斥。共享白名单时，不同聊天也会因可写目录重叠而串行。记忆提取仍使用独立的受限只读策略。
 
 **上下文。** 每次运行冻结输入、可写目录、权限、助手设置和记忆版本。普通配置保存不改变既有运行及已创建的排队任务；接收器暂缓创建新任务，待旧队列完成后自动切换配置并处理已持久化的新请求。仅默认模型变化保留原生上下文；目录或执行策略变化时，在同一工作线内重建模型会话并携带有界历史摘录，旧任务保持原记录；组织授权撤销仍会阻断执行及交付。worker 通过私有管道接收生效配置，模型不继承宿主飞书 / GitHub 凭据。
 

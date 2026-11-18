@@ -83,11 +83,22 @@ createInterface({input:process.stdin}).on('line',line=>{
     const result = await rpc.request('command/exec', { command: ['/bin/true'] });
     const args: string[] = JSON.parse(result.stdout);
     const filesystem = args.find(v => v.startsWith('permissions.feishu-bot.filesystem='))!;
+    assert.ok(filesystem.includes('\":root\"=\"read\"'));
+    assert.ok(filesystem.includes(`${JSON.stringify(f.home)}=\"deny\"`));
     assert.ok(filesystem.includes(`${JSON.stringify(dirname(enabled))}="read"`));
     assert.equal(filesystem.includes(JSON.stringify(dirname(disabled))), false);
     assert.ok(args.some(v => v.startsWith('skills.config=') && v.includes(JSON.stringify(disabled)) && v.includes('enabled=false')));
     assert.equal(args.some(v => v.includes('mcp_servers.private')), false);
   } finally { await rpc.close(); }
+  const writer = await connectCodex({ ...f.policy, bin, sandbox: 'workspace-write', allowLocalCommits: true }, f.dir);
+  try {
+    const result = await writer.request('command/exec', { command: ['/bin/true'] });
+    const args: string[] = JSON.parse(result.stdout);
+    const filesystem = args.find(v => v.startsWith('permissions.feishu-bot.filesystem='))!;
+    assert.ok(filesystem.includes('\":root\"=\"read\"'));
+    assert.ok(filesystem.includes(`${JSON.stringify(realpathSync(tmpdir()))}=\"write\"`));
+    assert.ok(filesystem.includes(`${JSON.stringify(f.home)}=\"deny\"`));
+  } finally { await writer.close(); }
 });
 
 test('browser prototype fixes operation shape and never accepts a caller space or script', async () => {

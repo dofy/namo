@@ -20,8 +20,7 @@ async function main(): Promise<void> {
     const skills = catalog.data.flatMap((entry: { skills: { name: string; path: string; enabled: boolean }[] }) => entry.skills);
     const enabled = skills.filter((s: { enabled: boolean }) => s.enabled);
     const disabled = skills.filter((s: { enabled: boolean }) => !s.enabled);
-    const controls = [config.file, join(config.codex.home, 'auth.json'), join(config.codex.home, 'config.toml'),
-      join(homedir(), '.codex', 'config.toml'), join(homedir(), '.ssh', 'config')].filter(existsSync);
+    const controls = [config.file, join(config.codex.home, 'auth.json'), join(config.codex.home, 'config.toml')].filter(existsSync);
     const parents = [homedir(), join(homedir(), '.codex'), config.codex.home].filter(existsSync);
     const commands: string[] = [];
     const read = (path: string, label: string, index: number) => commands.push(
@@ -50,8 +49,7 @@ async function main(): Promise<void> {
       parentListingsBlocked: count('parent-blocked'), parentListingChecks: parents.length };
     console.log(JSON.stringify(report));
     if (result.exitCode !== 0 || !enabled.length || report.readableSkills !== enabled.length
-      || report.disabledReadsBlocked !== disabled.length || report.skillWritesBlocked !== enabled.length
-      || report.protectedReadsBlocked !== controls.length || report.parentListingsBlocked !== parents.length) process.exitCode = 1;
+      || report.skillWritesBlocked !== enabled.length || report.protectedReadsBlocked !== controls.length) process.exitCode = 1;
   } finally { await rpc.close(); }
 }
 
