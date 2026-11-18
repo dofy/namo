@@ -1,5 +1,14 @@
 # Release notes
 
+## 0.7.0 — 2026-11-18
+
+- Ordinary tasks can read local files unless explicitly blocked and can write
+  to authorized directories and the system temporary directory. Namo's own
+  configuration, data and isolated login remain protected.
+- Local toolchains can access their installed binaries and runtime libraries.
+  Admitted users may read other applications' credentials unless those paths
+  are explicitly denied; admit only trusted users.
+
 ## 0.4.1 — 2026-10-30
 
 - Clarify the MCP connection editor with separate connection, authorization and

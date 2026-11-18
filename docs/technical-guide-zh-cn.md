@@ -53,7 +53,7 @@ pnpm cli init
 
 ```sh
 pnpm pack
-npm install -g ./dofy-namo-0.6.2.tgz
+npm install -g ./dofy-namo-0.7.0.tgz
 namo init
 ```
 
