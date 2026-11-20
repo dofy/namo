@@ -40,7 +40,7 @@ Tests are archived by feature with shared fixtures in `test/helpers.ts`. Add bou
 - Vite root is `ui/`, output `dist/ui`, `publicDir: false`, env prefix `NAMO_UI_PUBLIC_`.
 - The workbench changelog is **generated at UI build time** from Git by `scripts/changelog.ts` into `__NAMO_CHANGELOG__`: bounded by `package.json` version changes on main, only merged `feat`/`fix`/`perf`/`style` commits, committed content only. Bump `package.json` and rebuild — do not hand-edit sources or the Git index. Shallow clones fall back to stored history, which is why CI uses `fetch-depth: 0`.
 - `check-package.mjs` runs `pnpm pack` and asserts an exact **allowlist** of packaged paths. New runtime files or asset extensions require updating both its regexes and `files` in `package.json`.
-- CI (`.github/workflows/ci.yml`): ubuntu + macOS, Node 24, frozen install, `pnpm test`, then `check-package.mjs`. Real Codex/Feishu acceptance stays local, never in CI.
+- CI (`.github/workflows/ci.yml`): ubuntu + macOS, Node 26, frozen install, `pnpm test`, then `check-package.mjs`. Real Codex/Feishu acceptance stays local, never in CI.
 
 ## Never commit or print
 

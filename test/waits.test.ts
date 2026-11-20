@@ -308,7 +308,7 @@ test('wait choices render as answers above task controls, persist across restart
   assert.deepEqual(groups[1].actions.map((a:any)=>a.text.content),['查看详情','停止任务']);
   assert.doesNotMatch(f.payload.elements[0].text.content,/WAIT-|N-|\/resume/);
   const resumed=new Store(f.file);try {
-    const cards=new Cards(resumed);assert.equal(cards.accept(f.event('answer:0')).toast.type,'info');
+    const cards=new Cards(resumed);assert.deepEqual(cards.accept(f.event('answer:0')).toast,{type:'info',content:'已选择：中文'});
     assert.equal(cards.accept(f.event('answer:0')).toast.content,'这次操作已经处理，可以询问最新任务状态');
     assert.equal(cards.accept(f.event('answer:1')).toast.type,'error');
   }finally{resumed.close();}
@@ -352,13 +352,18 @@ test('bad structured choices are rejected before creating any durable wait',t=>{
 test('a real card callback reaches the scheduler and resumes the same task and thread only once',async t=>{
   const {Engine}=await import('../src/engine.js');
   const dir=mkdtempSync(join(tmpdir(),'namo-choice-engine-')),s=new Store(join(dir,'bot.sqlite'));let calls=0;
+  const patches:{messageId:string;card:object}[]=[];
   const engine=new Engine(s,{async run(r){
     calls++;r.onThread('thread-choice');r.onTurn(`turn-${calls}`);
     if(calls===1){const request={threadId:'thread-choice',turnId:'turn-1',callId:'call',question:'中文还是英文？',choices:['中文','英文']};
       return {text:'',threadId:'thread-choice',turnId:'turn-1',waiting:{...request,id:r.onWait!(request)}};}
     assert.equal(r.threadId,'thread-choice');assert.equal(JSON.parse(r.prompt).reply,'中文');
     return {text:'已选择中文。',threadId:'thread-choice',turnId:'turn-2'};
-  }},{async send(_c,_t,id){return id;},async sendCard(_c,_p,id){return id;}},{dataDir:dir,concurrency:1,feishu:{cards:true}});
+  }},{
+    async send(_c,_t,id){return id;},
+    async sendCard(_c,_p,id){return id;},
+    async updateCard(messageId,card){patches.push({messageId,card});},
+  },{dataDir:dir,concurrency:1,feishu:{cards:true}});
   t.after(async()=>{await engine.stop();s.close();rmSync(dir,{recursive:true,force:true});});
   const until=async(fn:()=>boolean)=>{const end=Date.now()+6000;while(!fn()){if(Date.now()>end)throw Error('timeout');await new Promise(r=>setTimeout(r,10));}};
   engine.start();engine.accept({key:'first',messageId:'first',chatKey:'chat',chatId:'chat',senderId:'alice',text:'choose'});
@@ -366,8 +371,39 @@ test('a real card callback reaches the scheduler and resumes the same task and t
   const action=s.db.prepare("SELECT a.token,o.platformId FROM card_actions a JOIN outbox o ON o.id=a.outboxId WHERE a.action='answer:0'").get()!;
   const event={operator:{open_id:'alice'},context:{open_chat_id:'chat',open_message_id:String(action.platformId)},action:{value:{namo:String(action.token)}}};
   engine.acceptCard(event);engine.acceptCard(event);
-  await until(()=>s.get('first')?.state==='replied');
+  await until(()=>s.get('first')?.state==='replied'&&patches.some(p=>p.messageId===action.platformId));
+  const waitCard=patches.find(p=>p.messageId===action.platformId)!.card as {
+    header:{title:{content:string}}; elements:{tag:string;actions?:{text:{content:string}}[]}[];
+  };
+  assert.equal(waitCard.header.title.content,'已回答');
+  assert.match(JSON.stringify(waitCard),/已选择：中文/);
+  assert.deepEqual(waitCard.elements.flatMap(element=>element.actions?.map(button=>button.text.content)??[]),['查看详情']);
+  assert.doesNotMatch(JSON.stringify(waitCard),/点击下面的答案/);
   assert.equal(calls,2);assert.equal(s.db.prepare("SELECT COUNT(*) n FROM outbox WHERE kind='result' AND state='sent'").get()?.n,1);
+});
+
+test('a closed single-choice card removes its buttons after a text reply or cancellation', async t => {
+  for (const end of ['reply','cancel'] as const) await t.test(end,async child=>{
+    const f=waitChoicesFixture(child,['中文','英文']);
+    if(end==='reply') {
+      const input={...f.s.get('original')!,key:'text-reply',messageId:'text-reply',text:'自由文字回答'};
+      assert.ok(f.s.enqueue(input));
+      f.waits.answer(f.waits.get(f.id)!,input,input.text);
+    } else {
+      assert.equal(f.cards.accept(f.event('cancel')).toast.type,'info');
+    }
+    const patches:object[]=[];
+    const feedback=new Feedback(f.s,{
+      async send(){throw Error('unexpected send');},
+      async updateCard(id,card){assert.equal(id,'platform-wait');patches.push(card);},
+    });
+    await feedback.tick({progress:false});
+    await feedback.tick({progress:false});
+    assert.equal(patches.length,1);
+    const card=JSON.stringify(patches[0]);
+    assert.match(card,end==='reply'?/已通过文字回复/:/等待已结束/);
+    assert.doesNotMatch(card,/自由文字回答|点击下面的答案|停止任务|"content":"中文"|"content":"英文"/);
+  });
 });
 
 test('a temporary language answer resumes only its task and never changes preferences for the next task',async t=>{

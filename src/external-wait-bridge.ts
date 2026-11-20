@@ -67,8 +67,7 @@ export async function pollAndResume(store: Store, adapter: GitHubObservationAdap
   const currentTime = () => clock ? clock() : now + Math.max(0, Date.now() - wallStartedAt);
   await waits.pollOpen(adapter, now, 4, currentTime);
   const actions: ExternalPollAction[] = [];
-  for (const external of waits.list()) {
-    if (!['ready','timed_out','stale_head'].includes(external.state)) continue;
+  for (const external of waits.settlementCandidates()) {
     const taskWaitId = taskWaitForExternal(store, external.id);
     if (!taskWaitId) { actions.push({ externalWaitId: external.id, action: 'deferred' }); continue; }
     if (external.state === 'timed_out' || external.state === 'stale_head') {

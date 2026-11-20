@@ -21,7 +21,7 @@ function message(key: string, text = 'ORIGINAL_EXTERNAL_WAIT_MARKER'): Incoming 
       materials: [], limitations: [] } };
 }
 
-function fixture(t: any, callId = 'call-one') {
+function fixture(t: any, callId = 'call-one', park = true) {
   const dir = mkdtempSync(join(tmpdir(), 'namo-external-bridge-')), database = join(dir, 'bot.sqlite');
   let store = new Store(database);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -32,7 +32,7 @@ function fixture(t: any, callId = 'call-one') {
     question: 'untrusted model summary is ignored', external };
   const id = requestWait(store, task.id, runId, request, 1_000);
   const waiting: WaitResult = { ...request, id };
-  new Waits(store).park(tasks.get(task.id)!, runId, waiting);
+  if (park) new Waits(store).park(tasks.get(task.id)!, runId, waiting);
   return { dir, get store(){return store;}, get tasks(){return tasks;}, taskId: task.id, runId, request, id, externalId: linkedExternalWait(store, id)!,
     restart(){store.close();store=new Store(database);tasks=new Tasks(store);} };
 }
@@ -106,12 +106,27 @@ test('timeout and stale HEAD end visibly without queuing another model run', asy
   assert.equal(timed.tasks.get(timed.taskId)?.state, 'needs_attention');
   assert.equal(timed.store.db.prepare('SELECT COUNT(*) AS n FROM task_runs WHERE taskId=?').get(timed.taskId)?.n, beforeRuns);
   assert.match(String(timed.store.db.prepare("SELECT content FROM outbox WHERE inboxKey='first' AND kind='result'").get()?.content), /等待已超时/);
+  assert.deepEqual(await pollAndResume(timed.store, adapter('pending'), 62_000), []);
 
   const stale = fixture(t, 'call-stale');
   const staleActions = await pollAndResume(stale.store, adapter('passing', 'b'.repeat(40)), 2_000);
   assert.deepEqual(staleActions, [{ externalWaitId: stale.externalId, taskWaitId: stale.id, action: 'stale_head' }]);
   assert.equal(stale.tasks.get(stale.taskId)?.state, 'needs_attention');
   assert.match(String(stale.store.db.prepare("SELECT content FROM outbox WHERE inboxKey='first' AND kind='result'").get()?.content), /HEAD 已变化/);
+  assert.deepEqual(await pollAndResume(stale.store, adapter('pending'), 3_000), []);
+});
+
+test('a timeout before the worker parks remains eligible for settlement after restart', async t => {
+  const f = fixture(t, 'call-timeout-before-park', false);
+  assert.deepEqual(await pollAndResume(f.store, adapter('pending'), 61_001),
+    [{ externalWaitId:f.externalId, taskWaitId:f.id, action:'deferred' }]);
+  assert.equal(new Waits(f.store).get(f.id)?.state, 'requested');
+  f.restart();
+  const waits = new Waits(f.store);
+  waits.park(f.tasks.get(f.taskId)!, f.runId, { ...f.request, id:f.id });
+  assert.deepEqual(await pollAndResume(f.store, adapter('pending'), 62_000),
+    [{ externalWaitId:f.externalId, taskWaitId:f.id, action:'timed_out' }]);
+  assert.equal(waits.get(f.id)?.state, 'timed_out');
 });
 
 test('a passing observation that returns after expiry times out without queuing a model resume', async t => {

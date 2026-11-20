@@ -1,6 +1,6 @@
 import { chatWorkspace } from '../src/safety.js';
 import { waitFor } from './helpers.js';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -655,11 +655,19 @@ test('approved directory cannot be swapped before configuration is saved',t=>{
  assert.equal(getDirectoryRequest(f.store,id)?.state,'failed');assert.equal(loadConfig(f.file).codex.directories?.includes(dir),false);
 });
 
+async function serveBrowserFixture(t: TestContext, project: string): Promise<void> {
+  const server = createServer((_req, res) => res.end('<title>Namo test page</title><p>Browser fixture</p>'));
+  t.after(() => new Promise<void>((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+    server.closeAllConnections();
+  }));
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  writeFileSync(join(project, 'browser-url'), `http://127.0.0.1:${(server.address() as { port: number }).port}/`);
+}
+
 test('detached browser worker waits for the owner, survives receiver restart, and resumes once', { skip: process.platform !== 'darwin' || !existsSync(join(process.env.HOME ?? '', '.local/bin/ego-browser')) }, async t => {
   const f=fixture(t), receiver=f.receiver(); receiver.start();
-  const server=createServer((_req,res)=>res.end('<title>Namo test page</title><p>Browser fixture</p>')).listen(0,'127.0.0.1');
-  await new Promise<void>(resolve=>server.once('listening',resolve));t.after(()=>server.close());
-  writeFileSync(join(f.project,'browser-url'),`http://127.0.0.1:${(server.address() as {port:number}).port}/`);
+  await serveBrowserFixture(t, f.project);
   receiver.accept(message('browser-task','browser-check'));
   await wait(()=>!!f.store.db.prepare("SELECT 1 FROM settings WHERE key LIKE 'mcp-approval:%'").get());
   const row=f.store.db.prepare("SELECT key FROM settings WHERE key LIKE 'mcp-approval:%'").get()!;
@@ -681,9 +689,7 @@ test('detached browser worker waits for the owner, survives receiver restart, an
 
 test('additional browser capability needs a second exact approval', { skip: process.platform !== 'darwin' || !existsSync(join(process.env.HOME ?? '', '.local/bin/ego-browser')) }, async t => {
   const f=fixture(t), receiver=f.receiver();receiver.start();
-  const server=createServer((_req,res)=>res.end('<title>Namo test page</title><p>Browser fixture</p>')).listen(0,'127.0.0.1');
-  await new Promise<void>(resolve=>server.once('listening',resolve));t.after(()=>server.close());
-  writeFileSync(join(f.project,'browser-url'),`http://127.0.0.1:${(server.address() as {port:number}).port}/`);
+  await serveBrowserFixture(t, f.project);
   receiver.accept(message('browser-extra-task','browser-extra'));
   const approvals=()=>f.store.db.prepare("SELECT key,value FROM settings WHERE key LIKE 'mcp-approval:%'").all().map(r=>({id:String(r.key).slice('mcp-approval:'.length),...JSON.parse(String(r.value))}));
   await wait(()=>approvals().length===1);
@@ -709,9 +715,7 @@ test('browser tool is unavailable to group chats', { skip: process.platform !== 
 
 test('permanent browser grant persists across workers, includes press, and revocation restores confirmation', { skip: process.platform !== 'darwin' || !existsSync(join(process.env.HOME ?? '', '.local/bin/ego-browser')) }, async t => {
  const f=fixture(t), receiver=f.receiver();receiver.start();
- const server=createServer((_req,res)=>res.end('<title>Namo test page</title><p>Browser fixture</p>')).listen(0,'127.0.0.1');
- await new Promise<void>(resolve=>server.once('listening',resolve));t.after(()=>server.close());
- writeFileSync(join(f.project,'browser-url'),`http://127.0.0.1:${(server.address() as {port:number}).port}/`);
+ await serveBrowserFixture(t, f.project);
  const approvals=()=>f.store.db.prepare("SELECT key,value FROM settings WHERE key LIKE 'mcp-approval:%'").all().map(r=>({id:String(r.key).slice('mcp-approval:'.length),...JSON.parse(String(r.value))}));
  receiver.accept(message('always-first','browser-extra'));await wait(()=>approvals().length===1);
  receiver.accept(message('always-approve',`永久允许 ${approvals()[0].id}`));
@@ -727,9 +731,7 @@ test('permanent browser grant persists across workers, includes press, and revoc
 
 test('press confirmation can enable the permanent browser option for subsequent tasks', { skip: process.platform !== 'darwin' || !existsSync(join(process.env.HOME ?? '', '.local/bin/ego-browser')) }, async t => {
  const f=fixture(t),receiver=f.receiver();receiver.start();
- const server=createServer((_req,res)=>res.end('<title>Namo test page</title><p>Browser fixture</p>')).listen(0,'127.0.0.1');
- await new Promise<void>(resolve=>server.once('listening',resolve));t.after(()=>server.close());
- writeFileSync(join(f.project,'browser-url'),`http://127.0.0.1:${(server.address() as {port:number}).port}/`);
+ await serveBrowserFixture(t, f.project);
  const approvals=()=>f.store.db.prepare("SELECT key,value FROM settings WHERE key LIKE 'mcp-approval:%'").all().map(r=>({id:String(r.key).slice('mcp-approval:'.length),...JSON.parse(String(r.value))}));
  receiver.accept(message('press-always-first','browser-extra'));await wait(()=>approvals().length===1);
  receiver.accept(message('press-always-once',`确认操作 ${approvals()[0].id}`));await wait(()=>approvals().length===2,15000);

@@ -1,5 +1,16 @@
 # Release notes
 
+## 0.7.1 — Unreleased
+
+- The local workbench stays available when a configured working directory is
+  missing, so the directory can be repaired from Settings.
+- Foreground tasks and background model calls share daily turn accounting.
+  Completed runs clear their reservations while retaining the recorded usage.
+- GitHub check polling skips waits that are already settled.
+- CI builds and tests on Node.js 26. The CLI supports Node.js 24.15 and newer.
+  Installing this update for an existing background service requires a receiver
+  restart.
+
 ## 0.7.0 — 2026-11-18
 
 - Ordinary tasks can read local files unless explicitly blocked and can write

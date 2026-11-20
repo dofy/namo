@@ -8,6 +8,8 @@ import { savedTitle } from './title-summary.js';
 import { digest } from './paths.js';
 export { progressState, recordActivity, type ActivityPhase } from './task-progress.js';
 
+const waitCardUpdateAgeMs = 14 * 86_400_000;
+
 /** One receiver-owned writer. No retry after uncertain side effects. */
 export class Feedback {
   private progressBusy = false;
@@ -133,38 +135,52 @@ export class Feedback {
     if(!this.sender.updateCard)return;
     const rows=this.store.db.prepare(`SELECT o.id AS outputId,o.platformId,o.payload,o.kind,t.* FROM outbox o
       JOIN tasks t ON t.inboxKey=o.inboxKey JOIN task_waits w ON o.kind='wait:'||w.id
-      WHERE o.state='sent' AND o.progressRetired=0 AND o.payload IS NOT NULL AND w.choices LIKE '{%' ORDER BY o.id`).all();
+      WHERE o.state='sent' AND o.part=0 AND o.progressRetired=0 AND o.payload IS NOT NULL
+        AND COALESCE(o.acceptedAt,o.createdAt)>=?
+        AND (w.choices LIKE '{%' OR (w.choices LIKE '[%' AND w.state NOT IN ('requested','open')))
+      ORDER BY o.id`).all(Date.now()-waitCardUpdateAgeMs);
     for(const row of rows){
       const task=row as unknown as Task;
       if(!this.canAccess(task))continue;
       const wait=new Waits(this.store).get(String(row.kind).slice(5));
-      if(!wait?.questions || !wait.answers)continue;
+      if(!wait || (!wait.choices && !wait.questions))continue;
       const last=this.store.db.prepare('SELECT * FROM progress_updates WHERE outboxId=? ORDER BY version DESC LIMIT 1').get(row.outputId);
       if(last && ['unknown','failed','sending'].includes(String(last.state))) {
         await this.reconcileBlockedUpdate(last,Number(row.outputId),String(row.platformId));
         continue;
       }
       const revision=JSON.stringify({answers:wait.answers,state:wait.state});
-      if(last?.revision===revision || !last && wait.state==='open' && wait.answers.every(value=>value===null))continue;
+      if(last?.revision===revision || !last && wait.state==='open' && wait.answers?.every(value=>value===null))continue;
       const card=JSON.parse(String(row.payload)) as {header?: {title?: {content?:string}; template?:string}; elements?: any[]};
       if(!Array.isArray(card.elements)){this.retire(Number(row.outputId));continue;}
+      const statusLine=(content:string)=>({tag:'div',text:{tag:'plain_text',content}});
+      const answered=wait.state==='answered';
       if(wait.state!=='open') {
-        if(card.header?.title)card.header.title.content=wait.state==='answered'?'已回答':'等待已结束';
-        if(card.header)card.header.template=wait.state==='answered'?'green':'grey';
-        card.elements[0]={tag:'div',text:{tag:'plain_text',content:wait.state==='answered'?'已收到回答。':'本次等待已结束。'}};
+        if(card.header?.title)card.header.title.content=answered?'已回答':'等待已结束';
+        if(card.header)card.header.template=answered?'green':'grey';
+        card.elements[0]=statusLine(wait.choices?wait.question:answered?'已收到回答。':'本次等待已结束。');
       }
+      // A single-choice callback stores its exact choice as the durable reply.
+      // Only render values from the original menu, never an arbitrary text reply.
+      const reply=wait.choices&&answered&&wait.replyInboxKey?this.store.get(wait.replyInboxKey)?.text.trim():undefined;
+      const choice=wait.choices?.find(label=>label===reply);
       const actions=this.store.db.prepare('SELECT token,action FROM card_actions WHERE outboxId=?').all(row.outputId);
       const lookup=new Map(actions.map(a=>[String(a.token),String(a.action)]));
       card.elements=card.elements.flatMap(element=>{
         if(element.tag!=='action' || !Array.isArray(element.actions))return [element];
-        const question=element.actions.map((button:any)=>/^answer:(\d+):(\d+)$/.exec(lookup.get(String(button.value?.namo))??'')).find(Boolean);
-        if(question){
-          const i=Number(question[1]),selected=wait.answers![i];
-          if(selected!==null)return [{tag:'div',text:{tag:'plain_text',content:`✓ 已选择：${wait.questions![i].choices[selected]}`}}];
-          return wait.state==='open'?[element]:[{tag:'div',text:{tag:'plain_text',content:wait.state==='answered'?'已通过文字回复':'未选择'}}];
+        const buttonActions:string[]=element.actions.map((button:{value?:{namo?:string}})=>lookup.get(button.value?.namo??'')??'');
+        if(wait.choices&&buttonActions.some(action=>/^answer:\d+$/.test(action))) {
+          if(choice)return [statusLine(`✓ 已选择：${choice}`)];
+          return [statusLine(answered?'已通过文字回复':'本次等待已结束。')];
+        }
+        const question=buttonActions.map(action=>/^answer:(\d+):(\d+)$/.exec(action)).find(Boolean);
+        if(question&&wait.answers&&wait.questions){
+          const i=Number(question[1]),selected=wait.answers[i];
+          if(selected!==null)return [statusLine(`✓ 已选择：${wait.questions[i].choices[selected]}`)];
+          return wait.state==='open'?[element]:[statusLine(answered?'已通过文字回复':'未选择')];
         }
         if(wait.state==='open')return [element];
-        const controls=element.actions.filter((button:any)=>lookup.get(String(button.value?.namo))!=='cancel');
+        const controls=element.actions.filter((_button:unknown,index:number)=>buttonActions[index]!=='cancel');
         return controls.length?[{...element,actions:controls}]:[];
       });
       const content=JSON.stringify(card),version=Number(last?.version??0)+1;

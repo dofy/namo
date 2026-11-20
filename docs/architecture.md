@@ -68,6 +68,8 @@ flowchart TB
 
 **数据与恢复。** SQLite 保存 inbox、task、run、wait、outbox 和审计。取消、回答、恢复以事务顺序决定归属；心跳过期不转移执行权，失联进程及后代核对完成前保留目录占位。模型完成、平台接受、用户收件是三类事实，不能相互推断。
 
+[模型日额度](../src/daily-turns.ts) 按 UTC 统计前台任务和后台模型调用。接收器切换时，只有确认未交给 runner 的运行才退回额度；已结束运行的占位记录可清理，累计调用次数继续保留。
+
 开发期采用 v13 基线，不再维护 v0–12 的兼容转换。v13 / v14 / v15 可在停机备份后迁移到 v16。空库在一个事务中初始化，失败整体回滚；不兼容旧库明确拒绝写入，绝不自动删库。重建步骤见[运维指南](operations.md)。
 
 | 数据域 | 独立表与约束 |
@@ -132,7 +134,7 @@ pnpm run smoke:codex
 
 工作台更新日志在前端构建时自动从 Git 生成：以主线 `package.json` 的版本变化为边界，纳入合并进来的 `feat`、`fix`、`perf`、`style` 提交说明。新版本更新 `package.json` 后正常构建即可，不修改源码或 Git 索引；只包含已提交内容，显示提交说明原文，并过滤疑似敏感信息。已整理的历史版本保留中英文说明。没有完整仓库历史（包括浅克隆）的构建回退到随代码保存的历史记录，并在较新版本提示无法生成详情；分发包运行时不需要 Git。CI 获取完整历史以生成日志。
 
-[CI](../.github/workflows/ci.yml) 在 main 推送与 PR 上运行 Node.js 24 的 Linux / macOS 构建和现有测试，再用 `node scripts/check-package.mjs` 核对包的运行文件、UI 资源及排除项；同一命令可本地复验。真实 Codex / 飞书验收保留在本机，不放入 CI。
+[CI](../.github/workflows/ci.yml) 在 main 推送与 PR 上运行 Node.js 26 的 Linux / macOS 构建和现有测试，再用 `node scripts/check-package.mjs` 核对包的运行文件、UI 资源及排除项；同一命令可本地复验。真实 Codex / 飞书验收保留在本机，不放入 CI。
 
 图标统一来自 Lucide；字体现有许可证见 [assets/fonts](../assets/fonts/README.md)，Logo 使用 [namo-logo.png](../assets/namo-logo.png)。UI 文案使用稳定英文 message ID，两套语言占位符保持一致。
 
