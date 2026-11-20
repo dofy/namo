@@ -236,7 +236,7 @@ export class Cards {
             this.store.db.prepare('UPDATE card_actions SET usedAt=? WHERE token=?').run(Date.now(),token);
           });
         }catch(e){if(e instanceof WaitInputError)return result(e.message,true);throw e;}
-        return result('回答已保存，继续原任务');
+        return result(`已选择：${choice}`);
       }
       if(a.action==='cancel'&&(!['queued','running','waiting'].includes(task.state)||a.inputVersion!==a.currentVersion)) return result('任务已变化，请查看最新状态后操作',true);
       if(a.action==='cancel'&&!tasks.cancel(task)) return result('运行已结束或失联，没有再发出停止请求；请查看任务状态，失联运行需在本机核对',true);
