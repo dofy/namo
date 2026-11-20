@@ -117,7 +117,34 @@ test('user model HTTP endpoint requires the local session and origin',async t=>{
  assert.equal((await post(cookie)).status,409);
 });
 test('invalid configuration and unapproved fields cannot overwrite saved configuration',t=>{const f=fixture(t),before=readFileSync(f.file,'utf8'),revision=f.manager.config().revision;assert.throws(()=>f.manager.save(revision,{directories:['/missing-namo-directory']}),/校验/);assert.throws(()=>f.manager.save(revision,{dataDir:'/tmp'}),/不允许/);assert.throws(()=>f.manager.save(revision,{sandbox:'danger-full-access'}),/校验/);assert.equal(readFileSync(f.file,'utf8'),before);});
-test('UI can repair an invalid project path without changing identity or data directory',t=>{const f=fixture(t);writeFileSync(f.file,JSON.stringify({...f.raw,codex:{...f.raw.codex,directories:['/not-a-directory']}}));assert.equal(f.manager.config().valid,false);f.manager.save(f.manager.config().revision,{directories:[f.project]});assert.equal(f.manager.config().valid,true);assert.equal(JSON.parse(readFileSync(f.file,'utf8')).feishu.appId,f.raw.feishu.appId);});
+test('UI can open and repair an invalid project path without changing identity or data directory', async t => {
+ const f = fixture(t);
+ const missing = join(f.dir, 'missing');
+ writeFileSync(f.file, JSON.stringify({...f.raw, codex:{...f.raw.codex, directories:[missing], dailyTurnLimit:7}}));
+ const ui = await startUi(f.manager);
+ t.after(() => ui.close());
+ const post = (path: string, body: unknown, cookie = '') => fetch(ui.url + path, {
+  method:'POST', headers:{'Content-Type':'application/json', Origin:ui.url, Cookie:cookie}, body:JSON.stringify(body),
+ });
+ const login = await post('/api/session', {code:new URL(ui.entryUrl).hash.slice(1)});
+ assert.equal(login.status, 200);
+ const cookie = login.headers.get('set-cookie')!.split(';', 1)[0];
+ const before = await fetch(ui.url + '/api/state', {headers:{Cookie:cookie}});
+ assert.equal(before.status, 200);
+ const state = await before.json();
+ assert.equal(state.config.valid, false);
+ assert.deepEqual(state.config.values.directories, [missing]);
+ assert.equal(state.database.usage, undefined);
+ assert.equal((await post('/api/config', {revision:state.config.revision, patch:{directories:[f.project]}}, cookie)).status, 200);
+ const after = await fetch(ui.url + '/api/state', {headers:{Cookie:cookie}});
+ assert.equal(after.status, 200);
+ const repaired = await after.json();
+ assert.equal(repaired.config.valid, true);
+ assert.equal(repaired.database.usage.limit, 7);
+ const saved = JSON.parse(readFileSync(f.file, 'utf8'));
+ assert.equal(saved.feishu.appId, f.raw.feishu.appId);
+ assert.equal(saved.dataDir, f.data);
+});
 test('reading old schema does not migrate it and management writes fail closed',t=>{const f=fixture(t),s=new Store(join(f.data,'bot.sqlite'));s.db.exec('DROP TABLE reconciliations; DROP TABLE card_actions; PRAGMA user_version=1');s.close();const before=readFileSync(join(f.data,'bot.sqlite'));const state=f.manager.state();assert.equal(state.database.schema,1);assert.equal(state.recoveryAvailable,false);for(const read of [()=>f.manager.approvals(),()=>f.manager.detail('N-AAAAAAAAAAAA'),()=>f.manager.browse('tasks'),()=>f.manager.memories()])assert.throws(read,/数据库版本不兼容/);assert.throws(()=>f.manager.cancel('N-AAAAAAAAAAAA',1,'id'),/数据库版本不兼容/);assert.deepEqual(readFileSync(join(f.data,'bot.sqlite')),before);});
 test('apply requires confirmation, known running version, current revision and an idle queue',async t=>{
  let actions=0;const f=fixture(t,{status:()=>({running:true,installed:true,registered:true,mode:'background',pid:process.pid}),action:async()=>{actions++;return {};},wait:async()=>true});const rev=f.manager.config().revision;

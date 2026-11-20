@@ -50,6 +50,7 @@ import { conversationControl } from './conversation-control.js';
 import type { ControlClassification } from './control-classifier.js';
 import { applyDirectoryRequests, decideDirectory, getDirectoryRequest } from './directory-approval.js';
 import { redactExpiredInbox } from './inbox-retention.js';
+import { DailyTurns } from './daily-turns.js';
 
 export interface DeliveryRoute { messageId: string; thread: boolean; }
 export interface Sender {
@@ -70,7 +71,8 @@ export class SendError extends Error {
   constructor(readonly unknown: boolean, readonly code: string) { super(code); }
 }
 type Log = (event: string, fields?: Record<string, unknown>) => void;
-interface Active { key: string; task: Task; run: string; cwd: string; abort: AbortController; promise: Promise<void>; controls?: RunControls; steering?: Promise<void>; }
+interface Active { key: string; task: Task; run: string; abort: AbortController; promise: Promise<void>; controls?: RunControls; steering?: Promise<void>; }
+type RunnerReservations = ReturnType<NonNullable<Runtime['reservations']>>;
 
 export class Engine {
   private active = new Map<string, Active>();
@@ -78,7 +80,30 @@ export class Engine {
     const m=this.store.get(task.inboxKey);
     return m?.envelope?.chatType==='group' ? JSON.stringify(['group',task.chatKey,task.scopeKey,task.ownerId]) : task.chatKey;
   }
+  private detachedReservations(): RunnerReservations {
+    const activeRuns = new Set(Array.from(this.active.values(), slot => slot.run));
+    return (this.runtime.reservations?.() ?? []).filter(reservation => !activeRuns.has(reservation.runId));
+  }
+  private nextRunnableTask(reservations: RunnerReservations): Task | undefined {
+    const candidates = this.tasks.candidates();
+    if (!candidates.length) return;
+    const occupied = new Set(this.active.keys());
+    const blockedPaths = Array.from(this.active.values(), slot => this.tasks.directories(slot.task)).flat();
+    for (const reservation of reservations) {
+      occupied.add(reservation.slotKey ?? reservation.chatKey);
+      blockedPaths.push(...(reservation.paths?.length ? reservation.paths : [reservation.cwd]));
+    }
+    return candidates.find(task => {
+      if (occupied.has(this.slotKey(task))) return false;
+      if (!blockedPaths.length) return true;
+      return this.tasks.directories(task).every(path => !blockedPaths.some(root => pathsOverlap(root, path)));
+    });
+  }
+  private get dailyTurnLimit(): number {
+    return this.config.codex?.dailyTurnLimit ?? (this.config.feishu?.access ? 100 : 0);
+  }
   private tasks: Tasks;
+  private readonly dailyTurns: DailyTurns;
   private outputBusy = false;
   private stopped = false;
   private started = false;
@@ -106,7 +131,11 @@ export class Engine {
     private config: Pick<Config, 'dataDir' | 'concurrency' | 'github' | 'mcpConnections' | 'retention'> & { file?:string; codex?: Config['codex']; agents?: Config['agents']; feishu?: Partial<Config['feishu']> },
     private redact: (s: string) => string = s => s,
     private log: Log = () => {},
-    private onFatal: (code: string) => void = () => {}) { this.tasks = new Tasks(store); this.feedback = new Feedback(store, sender,task=>this.taskAccessible(task),this.redact); this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined,id=>{const task=this.tasks.get(id);return !!task&&this.taskAccessible(task);});
+    private onFatal: (code: string) => void = () => {}) {
+      this.tasks = new Tasks(store);
+      this.dailyTurns = new DailyTurns(store);
+      this.feedback = new Feedback(store, sender,task=>this.taskAccessible(task),this.redact);
+      this.artifacts = new ArtifactDelivery(store,sender,config.codex?.denyPaths,config.codex?.explicitDenyPaths?{dataDir:config.dataDir,explicitDenyPaths:config.codex.explicitDenyPaths}:undefined,id=>{const task=this.tasks.get(id);return !!task&&this.taskAccessible(task);});
       if(config.file){const file=config.file;this.approvals=new ApprovalService(store,loadConfig(file),digest(readFileSync(file,'utf8')),()=>digest(readFileSync(file,'utf8')));}
       if(runtime.persistent && config.codex) {
         const codex = config.codex;
@@ -411,6 +440,7 @@ export class Engine {
     this.approvals?.start();
     this.log('recovered', this.store.recover(this.runtime.persistent));
     this.tasks.recover(this.runtime.persistent);
+    this.dailyTurns.pruneFinishedReservations();
     this.feedback.recover();
     this.store.db.prepare("UPDATE settings SET value=? WHERE key LIKE 'title-summary:%' AND json_valid(value) AND json_extract(value,'$.state')='running'").run(JSON.stringify({state:'failed'}));
     this.artifacts.recover();
@@ -435,8 +465,7 @@ export class Engine {
   private startTitleSummary():void {
     if(this.titleRunning||!this.runtime.summarizeTitle||!this.modelCatalog||!this.config.codex||this.stopped||this.paused||this.configurationDraining||!this.config.feishu?.cards||this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
     const models=this.modelCatalog.models;if(!models.length)return;
-    const active=new Set([...this.active.values()].map(a=>a.run));
-    const reservations=(this.runtime.reservations?.()??[]).filter(r=>!active.has(r.runId));
+    const reservations=this.detachedReservations();
     if(this.active.size+reservations.length+(this.memoryRunning?1:0)+(this.controlRunning?1:0)>=this.config.concurrency)return;
     const row=this.store.db.prepare(`SELECT s.key FROM settings s JOIN tasks t ON s.key='title-summary:'||t.id||':task' OR s.key='title-summary:'||t.id||':result'
       WHERE s.key LIKE 'title-summary:%' AND json_valid(s.value) AND json_extract(s.value,'$.state')='pending'
@@ -459,10 +488,8 @@ export class Engine {
     const value=phase==='task'?this.store.get(task.inboxKey)?.text:this.store.db.prepare("SELECT content FROM output_sources WHERE inboxKey=? AND kind='result'").get(task.inboxKey)?.content;
     if(!model||typeof value!=='string'||!value.trim()){fail();return;}
     const allowed=this.store.transaction(()=>{
-      const limit=this.config.codex?.dailyTurnLimit??(this.config.feishu?.access?100:0);
-      if(limit){const quota=`daily-turns:${new Date().toISOString().slice(0,10)}`,saved=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(quota),used=saved?Number(saved.value):0;
-        if(!Number.isSafeInteger(used)||used<0||used>=limit)return false;
-        this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(quota,String(used+1));}
+      const charge=this.dailyTurns.charge(this.dailyTurnLimit);
+      if (charge.state==='invalid'||charge.state==='exhausted')return false;
       this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({state:'running',model}),key);return true;
     });
     if(!allowed){fail();return;}
@@ -480,17 +507,23 @@ export class Engine {
     const row=this.store.db.prepare(`SELECT i.key FROM inbox i JOIN settings s ON s.key='control-classify:'||i.key
       WHERE i.state='queued' AND i.taskId IS NULL ORDER BY i.seq LIMIT 1`).get();
     if(!row)return;
-    const activeRuns=new Set([...this.active.values()].map(a=>a.run));
-    const reserved=(this.runtime.reservations?.()??[]).filter(r=>!activeRuns.has(r.runId));
+    const reserved=this.detachedReservations();
     if(this.active.size+reserved.length+(this.memoryRunning?1:0)+(this.titleRunning?1:0)>=this.config.concurrency){this.memoryAbort?.abort('foreground_control');this.titleAbort?.abort('foreground_control');return;}
     const message=this.store.get(String(row.key))!;
     const pending=this.tasks.pending(message).filter(t=>t.scopeKey===scopeOf(message)&&['queued','running','waiting'].includes(t.state));
-    if(!pending.length){this.store.transaction(()=>{this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`control-classify:${message.key}`);this.route(this.store.get(message.key)!,true);});return;}
-    const input={text:message.text,now:new Date().toISOString(),timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,pending:pending.map(t=>{const w=t.state==='waiting'?new Waits(this.store).current(t.id):undefined;return {id:t.id,state:t.state,...(w?{question:w.question,waitId:w.id}:{})};})};
-    const limit=this.config.codex?.dailyTurnLimit??(this.config.feishu?.access?100:0),quota=`daily-turns:${new Date().toISOString().slice(0,10)}`;
-    if(limit>0){const saved=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(quota),used=saved?Number(saved.value):0;
-      if(!Number.isSafeInteger(used)||used>=limit){this.store.transaction(()=>{this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`control-classify:${message.key}`);this.route(this.store.get(message.key)!,true);});return;}
-      this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(quota,String(used+1));
+    const input = {
+      text: message.text,
+      now: new Date().toISOString(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      pending: pending.map(task => {
+        const wait = task.state === 'waiting' ? new Waits(this.store).current(task.id) : undefined;
+        return { id: task.id, state: task.state, ...(wait ? { question: wait.question, waitId: wait.id } : {}) };
+      }),
+    };
+    const limit = this.dailyTurnLimit;
+    const charge = pending.length && limit ? this.store.transaction(() => this.dailyTurns.charge(limit)) : undefined;
+    if(!pending.length||charge?.state==='invalid'||charge?.state==='exhausted'){
+      this.store.transaction(()=>{this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`control-classify:${message.key}`);this.route(this.store.get(message.key)!,true);});return;
     }
     this.controlAbort=new AbortController();
     this.controlRunning=this.runtime.classifyControl(input,this.controlAbort.signal).then(result=>{
@@ -622,50 +655,43 @@ export class Engine {
       void this.feedback.tick({waitCards:!!this.config.feishu?.cards,progress:this.config.feishu?.progressUpdates,cadenceMs:this.config.feishu?.progressIntervalMs,heartbeatMs:this.config.feishu?.progressHeartbeatMs}).catch(()=>this.fatal('feedback_storage_error'));
       // Extraction is background work: yield its slot when a user task arrives.
       if(this.memoryRunning){
-        const activeIds=new Set([...this.active.values()].map(a=>a.run));
-        const reservations=(this.runtime.reservations?.()??[]).filter(r=>!activeIds.has(r.runId));
-        const blocked=[...this.active.values(),...reservations];
-        const ready=this.tasks.candidates().some(t=>!this.active.has(this.slotKey(t))&&!blocked.some(a=>('task' in a?this.slotKey(a.task):a.slotKey??a.chatKey)===this.slotKey(t)||('task' in a?this.tasks.directories(a.task):a.paths?.length?a.paths:[a.cwd]).some(root=>this.tasks.directories(t).some(path=>pathsOverlap(root,path)))));
-        if(ready&&this.active.size+reservations.length+1>=this.config.concurrency)this.memoryAbort?.abort('foreground_task');
+        const reservations=this.detachedReservations();
+        if(this.active.size+reservations.length+1>=this.config.concurrency&&this.nextRunnableTask(reservations))this.memoryAbort?.abort('foreground_task');
       }
       if(this.titleRunning){
-        const activeIds=new Set([...this.active.values()].map(a=>a.run));
-        const reservations=(this.runtime.reservations?.()??[]).filter(r=>!activeIds.has(r.runId));
+        const reservations=this.detachedReservations();
         if(this.tasks.candidates().length&&this.active.size+reservations.length+(this.memoryRunning?1:0)+(this.controlRunning?1:0)+1>=this.config.concurrency)this.titleAbort?.abort('foreground_task');
       }
       this.startControlClassification();
       for (;;) {
-        const activeRuns = new Set([...this.active.values()].map(a => a.run));
-        const reservations = (this.runtime.reservations?.() ?? []).filter(r => !activeRuns.has(r.runId));
+        const reservations = this.detachedReservations();
         if (this.active.size + reservations.length + (this.memoryRunning ? 1 : 0) + (this.titleRunning?1:0) + (this.controlRunning || this.runtime.classifyControl && this.config.concurrency>1 ? 1 : 0) >= this.config.concurrency) break;
         const claimed=this.store.transaction(()=>{
           if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
-          const next=this.tasks.candidates().find(t=>!this.active.has(this.slotKey(t))&&![...this.active.values(), ...reservations].some(a=>('task' in a?this.slotKey(a.task):a.slotKey??a.chatKey)===this.slotKey(t)||('task' in a?this.tasks.directories(a.task):a.paths?.length?a.paths:[a.cwd]).some(root=>this.tasks.directories(t).some(path=>pathsOverlap(root,path)))));
+          const next=this.nextRunnableTask(reservations);
           if(!next)return;
-          const limit=this.config.codex?.dailyTurnLimit??(this.config.feishu?.access?100:0),day=new Date().toISOString().slice(0,10),key=`daily-turns:${day}`;
-          if(limit>0){const row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key),used=row?Number(row.value):0;
-            if(!Number.isSafeInteger(used)||used<0)throw new Error('daily_turn_count_invalid');
-            if(used>=limit){this.store.addOutput(next.inboxKey,`quota:${day}`,`今日模型执行次数已达到服务上限（${limit} 次，按 UTC 日期统计）。任务已保留排队，将在下一 UTC 日自动继续；也可取消。`);return;}
-            this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,String(used+1));}
+          const limit=this.dailyTurnLimit;
+          const charge=this.dailyTurns.charge(limit);
+          if (charge.state==='invalid')throw new Error('daily_turn_count_invalid');
+          if (charge.state==='exhausted') {
+            this.store.addOutput(next.inboxKey,`quota:${charge.day}`,`今日模型执行次数已达到服务上限（${limit} 次，按 UTC 日期统计）。任务已保留排队，将在下一 UTC 日自动继续；也可取消。`);
+            return;
+          }
           const run=this.tasks.start(next);
-          if(limit>0)this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run(`daily-turn-run:${run}`,day);
+          if(charge.state==='charged')this.dailyTurns.reserve(run,charge.day);
           return {next,run};
         });
         if (!claimed) break;
         const {next,run}=claimed;
         this.track(next, run);
       }
-      const reserved=this.runtime.reservations?.()??[];
-      const runs=new Set([...this.active.values()].map(a=>a.run));
       if(!this.configurationDraining&&!this.memoryRunning&&this.autoMemories?.pending()
-        &&this.active.size+reserved.filter(r=>!runs.has(r.runId)).length+(this.controlRunning?1:0)+(this.titleRunning?1:0)<this.config.concurrency
+        &&this.active.size+this.detachedReservations().length+(this.controlRunning?1:0)+(this.titleRunning?1:0)<this.config.concurrency
         &&!this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get()) {
         const allowed=this.store.transaction(()=>{
-          const limit=this.config.codex?.dailyTurnLimit??(this.config.feishu?.access?100:0);if(!limit)return true;
-          const key=`daily-turns:${new Date().toISOString().slice(0,10)}`,row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(key),used=row?Number(row.value):0;
-          if(!Number.isSafeInteger(used)||used<0)throw new Error('daily_turn_count_invalid');
-          if(used>=limit)return false;
-          this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,String(used+1));return true;
+          const charge=this.dailyTurns.charge(this.dailyTurnLimit);
+          if(charge.state==='invalid')throw new Error('daily_turn_count_invalid');
+          return charge.state!=='exhausted';
         });
         if(allowed){this.memoryAbort=new AbortController();
           this.memoryRunning=this.autoMemories.tick(this.memoryAbort.signal)
@@ -687,7 +713,7 @@ export class Engine {
     const promise = Promise.resolve().then(() => this.execute(task, run, abort.signal))
       .catch(() => this.fatal('execution_storage_error'))
       .finally(() => { this.active.delete(slotKey); void this.pump(); });
-    this.active.set(slotKey, { key: task.inboxKey, task, run, cwd: task.cwd, abort, promise });
+    this.active.set(slotKey, { key: task.inboxKey, task, run, abort, promise });
   }
   private async execute(task: Task, run: string, signal: AbortSignal): Promise<void> {
     const m = this.store.get(task.inboxKey)!;
@@ -759,6 +785,7 @@ export class Engine {
           this.tasks.finish(task, run, this.redact(result.text) + reviewCoverageBrief(this.store,task.id) + (report ? evidenceBrief(report) : ''));
           if(this.runtime.summarizeTitle&&this.config.feishu?.cards&&this.tasks.get(task.id)?.state==='succeeded')enqueueTitle(this.store,task.id,'result');
         }
+        this.dailyTurns.clearReservation(run);
         const finished=this.tasks.get(task.id)!;
         for(const image of result.generatedImages??[]) {
           try { this.artifacts.enqueueGenerated(m,finished,run,image); }
@@ -778,12 +805,7 @@ export class Engine {
         this.store.transaction(()=>{
           const inbox=this.store.get(task.inboxKey);
           if(!runnerJob(this.store,run)&&inbox?.state==='running'&&!inbox.cancelRequested){
-            const reservation=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`daily-turn-run:${run}`);
-            if(reservation&&/^\d{4}-\d{2}-\d{2}$/.test(String(reservation.value))){
-              const counter=`daily-turns:${String(reservation.value)}`,row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(counter),used=Number(row?.value);
-              if(Number.isSafeInteger(used)&&used>0)this.store.db.prepare('UPDATE settings SET value=? WHERE key=?').run(String(used-1),counter);
-              this.store.db.prepare('DELETE FROM settings WHERE key=?').run(`daily-turn-run:${run}`);
-            }
+            this.dailyTurns.refundUndispatched(run);
             this.store.db.prepare("UPDATE task_runs SET state='not_started',error='receiver_detached_before_dispatch',finishedAt=? WHERE id=? AND state='running'").run(Date.now(),run);
             this.store.db.prepare("UPDATE tasks SET state='queued',startedAt=NULL,error=NULL WHERE id=? AND state='running'").run(task.id);
             this.store.db.prepare("UPDATE inbox SET state='queued',error=NULL WHERE key=? AND state='running'").run(task.inboxKey);
@@ -802,6 +824,7 @@ export class Engine {
         evidence?.finish(false);
         const report = evidence?.report ?? readEvidence(this.store, task.id).find(r => r.runId === run);
         this.tasks.finish(task, run, text + (report ? evidenceBrief(report) : ''), code);
+        this.dailyTurns.clearReservation(run);
       });
       this.log('turn_failed', { messageId: m.messageId, code });
     }

@@ -173,12 +173,8 @@ async function beforeDeadline<T>(promise: Promise<T>, deadlineMs: number): Promi
   } finally { if (timer) clearTimeout(timer); }
 }
 
-function decode(value: unknown): ExternalWait | undefined {
-  if (typeof value !== 'string') return;
+function validateStoredWait(wait: ExternalWait): ExternalWait | undefined {
   try {
-    const parsed: unknown = JSON.parse(value);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
-    const wait = parsed as ExternalWait;
     if (wait.version !== 1 || !/^EXT-[A-F0-9]{16}$/.test(wait.id)
       || ![wait.taskId, wait.runId, wait.threadId, wait.turnId, wait.callId, wait.ownerId, wait.chatId].every(validIdentity)
       || !['open','ready','consumed','timed_out','cancelled','stale_head'].includes(wait.state)
@@ -210,14 +206,23 @@ export class ExternalWaits {
   get(id: string): ExternalWait | undefined {
     if (!/^EXT-[A-F0-9]{16}$/.test(id)) return;
     const row = externalWaits(this.store.db).get(id);
-    return row ? decode(JSON.stringify(row)) : undefined;
+    return row ? validateStoredWait(row) : undefined;
   }
 
   list(taskId?: string, state?: ExternalWaitState): ExternalWait[] {
     return externalWaits(this.store.db).list([taskId ? 'taskId=?' : '1', state ? 'state=?' : '1'].join(' AND '),
-      [...(taskId ? [taskId] : []), ...(state ? [state] : [])], 'ORDER BY id').flatMap(row => {
-        const wait = decode(JSON.stringify(row)); return wait ? [wait] : [];
-      });
+      [...(taskId ? [taskId] : []), ...(state ? [state] : [])], 'ORDER BY id')
+      .map(validateStoredWait).filter(wait => wait !== undefined);
+  }
+
+  settlementCandidates(): ExternalWait[] {
+    // A result can arrive before the worker parks. Keep requested waits
+    // eligible for another cycle, and skip history once its linked wait closes.
+    return externalWaits(this.store.db).list(`state IN ('ready','timed_out','stale_head') AND id IN (
+      SELECT l.externalWaitId FROM tasks t JOIN task_waits w ON w.taskId=t.id
+      JOIN external_wait_links l ON l.taskWaitId=w.id
+      WHERE t.state IN ('running','waiting') AND w.state IN ('requested','open')
+    )`, [], 'ORDER BY id').map(validateStoredWait).filter(wait => wait !== undefined);
   }
 
   request(context: ExternalWaitContext, request: ExternalWaitRequest, now = Date.now()): ExternalWait {

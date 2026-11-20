@@ -38,6 +38,7 @@ import { parseMcpConnections, publicMcpConnections, remoteRead, stdioRead } from
 import { parseGitHubAccessConfig, publicGitHubAccess } from './github-access.js';
 import { FeishuTransport } from './feishu.js';
 import { discoverLocalGh, type LocalGhConfig } from './github-local.js';
+import { DailyTurns, dailyTurnDay } from './daily-turns.js';
 
 export class ManagementError extends Error { constructor(message:string,readonly status=409){super(message);} }
 export interface ManagementDeps {
@@ -114,13 +115,17 @@ export class Management {
         restrictedChats:Array.isArray(f.allowedChatIds)?f.allowedChatIds.length:0,access:f.access??null,allowedUserIds:f.allowedUserIds??[],allowedChatIds:f.allowedChatIds??[]},file:this.file};
   }
   state():any {
-    const day=new Date().toISOString().slice(0,10),limit=loadConfig(this.file).codex.dailyTurnLimit??0;
+    const day=dailyTurnDay();
+    let limit: number | undefined;
+    try { limit=loadConfig(this.file).codex.dailyTurnLimit??0; }
+    catch { /* Keep the repair form available when execution settings are invalid. */ }
     const db=this.read(s=>{
       const schema=Number(s.db.prepare('PRAGMA user_version').get()?.user_version);
       if(schema!==SCHEMA_VERSION)return {schema,tasks:[],issues:[],workstreams:[]};
       return {schema,tasks:s.db.prepare('SELECT id,workstreamId,cwd,state,inputVersion,startedAt,finishedAt,error FROM tasks ORDER BY rowid DESC LIMIT 50').all(),
         workstreams:s.db.prepare('SELECT id,cwd,createdAt FROM workstreams ORDER BY createdAt DESC LIMIT 30').all(),
-        issues:schema===SCHEMA_VERSION?new Recovery(s).list():[],queue:s.status(),usage:{day,turns:Number(s.db.prepare('SELECT value FROM settings WHERE key=?').get(`daily-turns:${day}`)?.value??0),limit}};
+        issues:new Recovery(s).list(),queue:s.status(),
+        ...(limit===undefined?{}:{usage:{day,turns:new DailyTurns(s).used(day),limit}})};
     });
     return this.sanitize({service:this.status(),config:this.config(),database:db??{schema:0,tasks:[],issues:[],workstreams:[]},recoveryAvailable:db?.schema===SCHEMA_VERSION,profiles:this.profiles(),assistant:db?.schema===SCHEMA_VERSION?this.read(s=>new AssistantSettings(s).read()):undefined});
   }

@@ -110,11 +110,16 @@ test('an active persistent worker is reattached without starting another model t
   const make = () => new Engine(store, runtime, { async send(_chat, _text, id) { return id; } }, { dataDir: dir, concurrency: 1 });
   const host = new RuntimeHost(make); host.start(); host.accept(input('active'));
   await until(() => launches === 1);
+  const runId = String(store.db.prepare('SELECT id FROM task_runs').get()?.id);
+  const marker = `daily-turn-run:${runId}`;
+  store.db.prepare('INSERT INTO settings VALUES(?,?)').run(marker, '2026-01-01');
   await host.replace(make, () => {});
   await until(() => observations === 2);
   assert.equal(launches, 1); assert.equal(store.get('active')?.state, 'running');
+  assert.ok(store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(marker));
   complete(); await until(() => store.get('active')?.state === 'replied');
   assert.equal(store.db.prepare('SELECT COUNT(*) n FROM task_runs').get()?.n, 1);
+  assert.equal(store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(marker), undefined);
   await host.stop();
 });
 
@@ -125,8 +130,20 @@ test('receiver switch requeues a claim that never created a runner reservation',
  });dispatched++;r.onThread('thread');r.onTurn('turn');return {text:'done',threadId:'thread',turnId:'turn'};}};
  const make=()=>new Engine(store,runtime,{async send(_chat,_text,id){return id;}},{dataDir:dir,concurrency:1,codex:{bin:'codex',home:join(dir,'home'),sandbox:'read-only',timeoutMs:10000,dailyTurnLimit:1}});
  const host=new RuntimeHost(make);host.start();host.accept(input('undispatched'));await until(()=>attempted===1);
+ const pending=store.db.prepare("SELECT key,value FROM settings WHERE key LIKE 'daily-turn-run:%'").get();
+ assert.ok(pending);
  await host.replace(make,()=>{});await until(()=>store.get('undispatched')?.state==='replied');
  assert.equal(dispatched,1);assert.equal(store.db.prepare("SELECT COUNT(*) n FROM task_runs WHERE state='not_started'").get()?.n,1);
+ assert.equal(store.db.prepare("SELECT COUNT(*) n FROM settings WHERE key LIKE 'daily-turn-run:%'").get()?.n,0);
+ const used=()=>store.db.prepare("SELECT SUM(CAST(value AS INTEGER)) n FROM settings WHERE key LIKE 'daily-turns:%'").get()?.n;
+ assert.equal(used(),1);
+ // A release from before reservation cleanup could leave a marker on a finished run.
+ const finished=store.db.prepare("SELECT id FROM task_runs WHERE state='succeeded'").get();
+ assert.ok(finished);
+ store.db.prepare('INSERT INTO settings VALUES(?,?)').run(`daily-turn-run:${finished.id}`,pending.value!);
+ await host.replace(make,()=>{});
+ assert.equal(store.db.prepare("SELECT COUNT(*) n FROM settings WHERE key LIKE 'daily-turn-run:%'").get()?.n,0);
+ assert.equal(used(),1);
  await host.stop();
 });
 
@@ -216,7 +233,7 @@ test('durable row codecs are part of the live-upgrade ABI', () => {
   const manifest = (changed?: string) => ({ format: 1, id: 'x', entry: 'dist/src/cli.js', worker: 'dist/src/runner-worker.js', packageVersion: '0', runtimeDependencies: [],
     files: files.map(file => file.path === changed ? { ...file, sha256: 'b'.repeat(64) } : file) }) as unknown as Parameters<typeof assertLiveCompatible>[0];
   assert.doesNotThrow(() => assertLiveCompatible(manifest(), manifest('dist/src/runtime.js')));
-  for (const name of ['record-table', 'business-storage', 'schema-directory-migration'])
+  for (const name of ['record-table', 'business-storage', 'schema-directory-migration', 'daily-turns'])
     assert.throws(() => assertLiveCompatible(manifest(), manifest(`dist/src/${name}.js`)), /live_upgrade_requires_receiver_restart/);
 });
 
