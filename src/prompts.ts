@@ -26,7 +26,7 @@ export class TerminalPrompter implements Prompter {
       this.muted = true;
     }
     try {
-      const value = await this.rl.question(secret ? '' : `${label}${initial ? ` [${initial}]` : ''}${separator}`);
+      const value = await this.rl.question(secret ? '' : `${label}${initial ? ` [${initial}]` : ''}${separator}`, { signal: this.signal });
       return value.trim() || initial;
     } catch { throw new Cancelled(); }
     finally { if (secret) { this.muted = false; process.stdout.write('\n'); } }
