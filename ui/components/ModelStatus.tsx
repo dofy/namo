@@ -6,12 +6,15 @@ import { t as tr } from '../i18n';
 export function ModelStatus({config,personal}:{config:ConfigView;personal:string}) {
   const active=config.application==='applied'?config.activeModelDefault:undefined;
   const known=!!active;
-  const model=known?(personal||active.model||tr('model.codexDefault')):tr('model.unconfirmed');
-  const source=known?(personal?tr('model.sourcePersonal'):active.profile!=='codex'?tr('model.sourceProfile',active.profile):active.model?tr('model.serviceDefault'):tr('model.codexDefault')):tr('model.unconfirmed');
+  const claude=config.agentConnections?.profiles.some(p=>p.id===active?.profile && p.adapter==='claude');
+  const personalModel=claude?'':personal;
+  const inheritedModel=tr(claude?'claude.modelDefault':'model.codexDefault');
+  const model=known?(personalModel||active.model||inheritedModel):tr('model.unconfirmed');
+  const source=known?(personalModel?tr('model.sourcePersonal'):active.profile!=='codex'?tr('model.sourceProfile',active.profile):active.model?tr('model.serviceDefault'):inheritedModel):tr('model.unconfirmed');
   const explanation=config.application==='pending'?tr('model.pending')
     :config.application==='stopped'?tr('model.stopped')
     :!known?tr('model.unknown')
-    :!personal&&!active.model?tr('model.resolvedAtStart'):tr('model.appliesToNewTasks');
+    :!claude&&!personalModel&&!active.model?tr('model.resolvedAtStart'):tr('model.appliesToNewTasks');
   return <div className="model-status" aria-label={tr('model.effective')}>
     <dl><div><dt>{tr('model.effective')}</dt><dd>{model}</dd></div>
       <div><dt>{tr('model.source')}</dt><dd>{source}</dd></div></dl>

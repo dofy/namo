@@ -32,8 +32,7 @@ function JobStatus({job,maxAttempts}:{job:MemoryExtractionJob;maxAttempts:number
     {job.state==='failed'&&<Text as="p" size="1" color="gray">{tr('memory.extraction.diagnose')}</Text>}
   </div>;
 }
-export function MemoryExtractionStatus({value}:{value:MemoryExtractionView}) {
-  const latest=value.recent[0];
+export function MemoryExtractionStatus({ value }: { value: MemoryExtractionView }) {
   return <section className="memory-extraction" aria-label={tr('memory.extraction.title')}>
     <SectionHeading icon="activity" title={tr('memory.extraction.title')} description={tr('memory.extraction.help')} />
     <Flex gap="2" wrap="wrap" role="status">
@@ -41,11 +40,10 @@ export function MemoryExtractionStatus({value}:{value:MemoryExtractionView}) {
       <Badge color="blue">{tr('memory.extraction.runningCount',value.running)}</Badge>
       <Badge color={value.failed?'red':'gray'}>{tr('memory.extraction.failedCount',value.failed)}</Badge>
     </Flex>
-    {latest?<JobStatus job={latest} maxAttempts={value.maxAttempts}/>:<Text as="p" size="2" color="gray">{tr('memory.extraction.noJobs')}</Text>}
-    {value.recent.length>1&&<details>
-      <summary>{tr('memory.extraction.recent',value.recent.length)}</summary>
-      {value.recent.slice(1).map(job=><JobStatus key={job.id} job={job} maxAttempts={value.maxAttempts}/>)}
-      {value.hasMore&&<Text as="p" size="1" color="gray">{tr('memory.extraction.limited')}</Text>}
-    </details>}
+    {value.recent.length > 0 ? <details>
+      <summary>{tr('memory.extraction.recent', value.recent.length)}</summary>
+      {value.recent.map(job => <JobStatus key={job.id} job={job} maxAttempts={value.maxAttempts} />)}
+      {value.hasMore && <Text as="p" size="1" color="gray">{tr('memory.extraction.limited')}</Text>}
+    </details> : <Text as="p" size="2" color="gray">{tr('memory.extraction.noJobs')}</Text>}
   </section>;
 }

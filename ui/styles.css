@@ -537,8 +537,35 @@ html { scroll-padding-bottom:180px; }
 .settings-page .setting-options { margin-top: 12px; }
 .connections-page .connection { border: 0; padding: 0; margin: 0; align-items: flex-start; flex-wrap: wrap; }
 .connections-page .connection > .panel-heading { flex: 1 1 280px; }
+.default-executor { display: grid; grid-template-columns: minmax(0, 1fr) clamp(12rem, 25%, 17rem); align-items: center; gap: 12px 24px; }
+.default-executor p { margin-bottom: 0; }
+.executor-connections {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 370px), 1fr));
+  align-items: start; gap: var(--section-gap); margin-top: var(--section-gap);
+}
+.executor-connections > .page-panel { margin: 0; container-type: inline-size; }
+.executor-disclosure { margin-top: 16px; border-top: 1px solid var(--namo-border-soft); }
+.executor-disclosure + .executor-disclosure { margin-top: 8px; }
+.executor-disclosure > summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  list-style: none; padding: 8px 8px 0 0;
+}
+.executor-disclosure > summary::-webkit-details-marker { display: none; }
+.executor-disclosure[open] > summary > .ui-icon { transform: rotate(90deg); }
+.executor-detail-content { overflow-wrap: anywhere; }
+.executor-detail-content > p:last-child { margin-bottom: 0; }
+.executor-connections .executor-detail-content .diagnostics { margin-top: 0; }
+@container (max-width: 23rem) {
+  .executor-actions .rt-Button { padding-inline: 8px; }
+}
+.claude-connection-fields.form-grid { grid-template-columns: minmax(0, 1fr); }
+@container (min-width: 27rem) {
+  .claude-connection-fields.form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .claude-connection-fields > .gateway-field { grid-column: 1 / -1; }
+}
 .connection-help { padding-top: 18px; border-top: 1px solid var(--namo-border-soft); }
 .connection-help .guide { margin: 18px 0 0; }
+.executor-connections :is(.connection-help, .executor-detail-content) > code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .connections-page .diagnostics:empty { display: none; }
 .connections-page .diagnostics:not(:empty) { margin-top: 20px; }
 .connections-page .steps { margin: 0; }
@@ -598,6 +625,7 @@ html { scroll-padding-bottom:180px; }
   .workbench-main .save-bar > button { flex: 1 1 auto; white-space: normal; height: auto; min-height: 32px; }
   .connections-page .connection { gap: 16px; }
   .connections-page .connection > .panel-heading { flex: 0 1 auto; width: 100%; }
+  .default-executor { grid-template-columns: minmax(0, 1fr); }
   .operations-panel .operations-info { grid-template-columns: minmax(0, 1fr); }
   .operations-panel .operations-info dd { margin-bottom: 8px; }
   .changelog-entry { grid-template-columns: minmax(0, 1fr); gap: 18px; }

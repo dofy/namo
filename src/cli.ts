@@ -20,6 +20,7 @@ import { REPOSITORY_URL } from './repository.js';
 import { NAMO_VERSION } from './version.js';
 import { startCodexAutoUpdates } from './codex-updates.js';
 import { queuedConfiguration, watchConfiguration } from './config-reload.js';
+import { runtimeSecrets } from './runtime-config.js';
 
 process.umask(0o077);
 const args = process.argv.slice(2);
@@ -91,13 +92,14 @@ async function main(): Promise<void> {
     process.once('SIGINT', () => void close()); process.once('SIGTERM', () => void close()); return;
   }
   let configRevision = digest(readFileSync(file,'utf8'));
-  let config = loadConfig(file); redact = makeRedactor([config.feishu.appSecret,config.github?.token??'',...(config.mcpConnections??[]).map(c=>c.token)]);
-  const redactionSecrets=new Set([config.feishu.appSecret,config.github?.token??'',...(config.mcpConnections??[]).map(c=>c.token)]);
+  let config = loadConfig(file);
+  const redactionSecrets=new Set(runtimeSecrets(config));
+  redact=makeRedactor([...redactionSecrets]);
   if (configRevision !== digest(readFileSync(file,'utf8'))) throw new Error(tr('cli.configurationChangingPleaseRetry'));
   if (command === 'login') { await loginAgent(config,requestedProfile,args.includes('--device-auth')); return; }
   if (command === 'service') { console.log(JSON.stringify(await serviceAction(positional[1],config),null,2)); return; }
   ({config,revision:configRevision}=queuedConfiguration(config));
-  for(const value of [config.feishu.appSecret,config.github?.token??'',...(config.mcpConnections??[]).map(c=>c.token)])redactionSecrets.add(value);
+  for(const value of runtimeSecrets(config))redactionSecrets.add(value);
   redact=makeRedactor([...redactionSecrets]);
   const dbFile = join(config.dataDir,'bot.sqlite');
   const { validateFeishu } = await import('./config.js'); validateFeishu(config);
@@ -165,7 +167,7 @@ async function main(): Promise<void> {
       return startupRelease&&id ? loadLiveFactory(startupRelease,runtimeRelease(config.dataDir,id),nextOptions) : ()=>createLiveRuntime(nextOptions);
     },async(next,revision)=>{
       await stopUpdates?.();
-      for(const value of [next.feishu.appSecret,next.github?.token??'',...(next.mcpConnections??[]).map(c=>c.token)])redactionSecrets.add(value);
+      for(const value of runtimeSecrets(next))redactionSecrets.add(value);
       redact=makeRedactor([...redactionSecrets]);
       if(applied.feishu.appSecret!==next.feishu.appSecret){
         transport!.close(); const candidate=new FeishuTransport(next.feishu,log);

@@ -1,4 +1,4 @@
-import type { ApprovalAction, ApprovalList, ApprovalView, McpConnectionPatch, CodexUpdateStatus, ServiceLog, MigrationInspection, ServiceAccessPatch } from '../src/ui-contract';
+import type { AgentConfigPatch, ApprovalAction, ApprovalList, ApprovalView, McpConnectionPatch, CodexUpdateStatus, ServiceLog, MigrationInspection, ServiceAccessPatch } from '../src/ui-contract';
 import { t as tr, getLocale } from './i18n';
 import type { ApplyResult, AssistantView, AssistantValues, BrowseOptions, ConfigValues, ConfigView, GitHubConfigPatch, Dashboard, Diagnostic, Issue, ManagementState, MemoryMutation, MemoryViewState, PageResult, ProfileValues, ResolutionAction, ScheduleListItem, SessionSummary, TaskDetail, TaskList, UserProfile } from '../src/ui-contract';
 
@@ -16,6 +16,7 @@ async function request<T>(path: string, body?: unknown, signal?: AbortSignal): P
   return data as T;
 }
 export const api = {
+  saveAgents: (revision: string, patch: AgentConfigPatch) => request<ConfigView>('/api/config', { revision, patch }),
   chooseDirectory:()=>request<{status:'selected';path:string}|{status:'cancelled'|'unavailable'}>('/api/choose-directory',{}),
   directories: (path?:string,signal?:AbortSignal)=>request<{path:string;parent:string|null;selectable:boolean;directories:{name:string;path:string}[]}>(`/api/directories${path===undefined?'':`?path=${encodeURIComponent(path)}`}`,undefined,signal),
   organization:()=>request<{tenantKey:string;name:string}>('/api/organization',{}),
@@ -54,7 +55,7 @@ export const api = {
   resolve: (issue: Issue, action: ResolutionAction, note: string) => request('/api/resolve', {
     subject: issue.subject, stamp: issue.stamp, action, note, requestId: crypto.randomUUID(), acknowledgeDuplicate: action === 'retry',
   }),
-  diagnose: (live = false) => request<Diagnostic[]>('/api/diagnose', { live, confirmed: live }),
+  diagnose: (live = false, profile?: string) => request<Diagnostic[]>('/api/diagnose', { live, confirmed: live, profile }),
   logs: () => request<ServiceLog[]>('/api/logs'),
   approvals: () => request<ApprovalList>('/api/approvals'),
   approval: (input: ApprovalAction) => request<ApprovalView>('/api/approvals', input),

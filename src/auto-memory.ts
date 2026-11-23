@@ -251,7 +251,7 @@ export class AutoMemories {
     finally {
       clearTimeout(timer); signal?.removeEventListener('abort', abort);
       // Abort requests cancellation; it does not prove the adapter released its
-      // Codex process. Keep the lease and scheduling slot until cleanup settles.
+      // model process. Keep the lease and scheduling slot until cleanup settles.
       // Extractor adapters must honor the AbortSignal with bounded cleanup.
       await work.catch(() => undefined);
     }

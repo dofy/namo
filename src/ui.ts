@@ -181,7 +181,7 @@ export async function startUi(manager:Management,options:{chooseDirectory?:()=>P
         if(path==='/api/mcp-test')return send(200,await manager.testMcp(input.revision,input.id));
         if(path==='/api/config')return send(200,await manager.saveGitHub(input.revision,input.patch));
         if(path==='/api/apply')return send(200,await manager.apply(input.revision,input.confirmed===true));
-        if(path==='/api/diagnose')return send(200,await manager.diagnose(input.live===true,input.confirmed===true));
+        if(path==='/api/diagnose')return send(200,await manager.diagnose(input.live===true,input.confirmed===true,input.profile));
         if(path==='/api/migration-inspect')return send(200,manager.inspectMigration(input));
         if(path==='/api/approvals')return send(200,await manager.approval(input));
         if(path==='/api/profiles')return send(200,manager.saveProfile(input.configRevision,input.userId,input.version,input.patch));

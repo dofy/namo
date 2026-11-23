@@ -5,7 +5,7 @@
 <h1 align="center">Namo</h1>
 
 <p align="center"><strong>A little fox on your machine, helping you get work done.</strong><br />
-A self-hosted AI work companion for Feishu and Lark, powered by Codex.</p>
+A self-hosted AI work companion for Feishu and Lark with Codex and Claude Code support.</p>
 
 <p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a><br />
 <a href="https://github.com/dofy/namo">GitHub</a> · <a href="https://github.com/dofy/namo/issues">Issues</a></p>
@@ -18,20 +18,24 @@ Namo brings an AI agent into the conversations where your work happens. Send it 
 - **Work with your projects.** Let it use the directories and connected services you authorize, including GitHub, remote MCP services and trusted local stdio MCP tools.
 - **Keep track of work.** Review tasks, sessions, execution evidence, schedules and settings in a local workbench.
 - **Remember useful context.** Use an optional assistant profile and scoped memory to carry relevant context across conversations.
-- **Run on your own machine.** Namo stores task state locally and uses the official Codex service for model inference.
+- **Run on your own machine.** Namo stores task state locally and uses the official Codex or Claude Code CLI for execution.
 
 Namo is an early-access project. You host and maintain the service yourself; background service management currently supports macOS. Other platforms can run in the foreground but have not completed full platform acceptance.
 
 ## Get started
 
-You need Node.js 24.15 or newer, the official Codex CLI, and a Feishu or Lark app with bot capabilities. Install and initialize Namo:
+You need Node.js 24.15 or newer, either the official Codex CLI or Claude Code 2.1.330 or newer, and a Feishu or Lark app with bot capabilities.
 
 ```sh
 npm install -g @dofy/namo
 namo init
 ```
 
-The setup wizard guides you through Codex login, directory access and connecting your bot. It can install a macOS background service; otherwise, use `namo start` to run in the foreground. Open the local workbench with `namo ui`.
+The setup wizard lets you choose a backend, sign in, grant directory access and connect your bot. It can install a macOS background service. To run in the foreground, use `namo start`.
+
+Open **Connections** in `namo ui` to enable Claude Code or change the default backend. Use `namo login --profile claude` for Claude account sign-in, or enter a custom gateway’s Base URL and credential. In a Feishu or Lark direct chat, use `/agent claude` and `/agent codex` to switch. Namo resumes each backend’s own workstream when you switch back.
+
+Codex and Claude Code share the same scoped long-term memory. The default backend handles automatic extraction while Namo is idle.
 
 For development, build from source with pnpm 12.15.0:
 

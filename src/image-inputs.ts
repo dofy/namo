@@ -129,7 +129,7 @@ function imageRoot(dataDir:string):string {
   if(lstatSync(root).isSymbolicLink()||realpathSync(root)!==root)throw Error('image_storage_invalid');return root;
 }
 /** Revalidate only a host-created exact image; never accept arbitrary model paths. */
-export function verifyImageInput(dataDir:string,input:ImageInput):void {
+export function verifyImageInput(dataDir:string,input:ImageInput):Buffer {
   if(!input||!validId(input.id)||!validId(input.sha256)||!['image/png','image/jpeg'].includes(input.mime)
     ||!Number.isSafeInteger(input.bytes)||input.bytes<1||input.bytes>IMAGE_LIMITS.perImageBytes)throw Error('image_snapshot_invalid');
   const expected=join(imageRoot(dataDir),`${input.id}.${input.mime==='image/png'?'png':'jpg'}`);
@@ -138,6 +138,7 @@ export function verifyImageInput(dataDir:string,input:ImageInput):void {
   try {const stat=fstatSync(fd);if(!stat.isFile()||stat.size!==input.bytes)throw Error('image_snapshot_changed');
     const bytes=readFileSync(fd);if(hash(bytes)!==input.sha256)throw Error('image_snapshot_changed');
     const shape=inspectImage(bytes);if(shape.mime!==input.mime||shape.width!==input.width||shape.height!==input.height)throw Error('image_snapshot_invalid');
+    return bytes;
   }finally{closeSync(fd);}
 }
 

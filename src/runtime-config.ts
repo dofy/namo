@@ -1,9 +1,14 @@
 import { readFileSync } from 'node:fs';
 import type { Config } from './config.js';
+import { claudeGatewaySecrets } from './agent-registry.js';
 import { digest } from './paths.js';
 import { codexEnvironment } from './safety.js';
 
-/** The host worker resolves service credentials; the model still gets codexEnvironment only. */
+export function runtimeSecrets(config: Config): string[] {
+  return [config.feishu.appSecret, config.github?.token ?? '', ...(config.mcpConnections ?? []).map(c => c.token), ...claudeGatewaySecrets(config.agents)];
+}
+
+/** Resolve host credentials without inheriting ambient model-provider configuration. */
 export function workerEnvironment(config: Config): NodeJS.ProcessEnv {
   const raw = JSON.parse(readFileSync(config.file, 'utf8'));
   const env = codexEnvironment(config.codex.home);
