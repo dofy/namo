@@ -14,13 +14,13 @@ This guide covers setup, capabilities, operation and execution boundaries. For m
 - **Questions and answers:** the agent can pause for your input; answer by replying to the question or choosing a matching card option.
 - **Independent runners:** active tasks run separately from the receiver. Uncertain or interrupted work is retained for review instead of blindly rerunning it.
 - **Execution evidence:** file patches, command exit codes, artifact checks and Git HEAD snapshots, with capture limits made explicit.
-- **Assistant and scoped memory:** opt-in assistant identity and style, automatic extraction of sourced long-term facts with scope and privacy controls, explicit correction/disable/delete, and bounded handoffs. Memories never grant operation authority.
-- **Materials and artifacts:** bounded reading of merged-forward text and direct UTF-8 text files, plus authorized delivery of selected task files. Direct PNG/JPEG images are passed to Codex as bounded, immutable image inputs.
+- **Assistant and scoped memory:** opt-in assistant identity and style, sourced long-term facts with privacy controls, explicit correction, disabling and deletion, and bounded handoffs. Codex and Claude Code share scoped memory, and the default backend handles automatic extraction. Memories never grant operation authority.
+- **Materials and artifacts:** bounded reading of merged-forward text and direct UTF-8 text files, plus authorized delivery of selected task files. The selected backend receives direct PNG/JPEG images as bounded, immutable inputs.
 - **Local workbench:** a dashboard, searchable task and session lists, user/status/date filters, pagination, details, profiles, assistant settings, memory review, configuration and connection diagnostics.
 - **Concise chat replies:** durable acceptance reactions, original-message/topic routing, safe rich text and a single updatable progress card. A small model can summarize titles in the background; failures retain text excerpts and model turns count toward the daily limit. Buttons require the Feishu callback subscription.
 - **Controlled continuations:** exact-head GitHub check waits (public, or explicitly configured private repositories) can resume the same task without model polling; requested Git pushes execute directly and record the exact task, commit, remote and branch.
 - **MCP:** Connect public HTTPS services with OAuth or Bearer authorization, or trusted local stdio programs through the workbench or `namo config`. Local processes run with the Namo user’s OS permissions; admitted bot members can invoke their tools.
-- **Local service management:** guided setup, isolated official Codex login, diagnostics, immutable service releases and macOS background service commands.
+- **Local service management:** guided setup, isolated executor login, diagnostics, immutable service releases and macOS background service commands.
 
 The workbench and CLI support **English and Simplified Chinese**. They follow the system language by default and fall back to English for unsupported languages. Task content, user input and execution logs retain their original language.
 
@@ -30,7 +30,7 @@ Organization setup: open **Connections** in the workbench to configure organizat
 
 ## Get started
 
-Requirements: **Node.js 24.15+**, the official Codex CLI and a Feishu or Lark internal app with bot capabilities. Use the official Codex authentication and provider.
+Requirements include **Node.js 24.15+**, either the official Codex CLI or Claude Code 2.1.330+, and a Feishu or Lark internal app with bot capabilities.
 
 Install the npm package and start setup:
 
@@ -49,7 +49,7 @@ pnpm run build
 pnpm cli init
 ```
 
-The resumable wizard guides you through Codex detection, isolated login, a required directory whitelist, app credentials and user pairing. A live model/messaging check is optional and may use account quota.
+The resumable wizard guides you through executor selection, isolated login, a required directory whitelist, app credentials and user pairing. A live model and messaging check is optional and may use account quota. To configure Claude Code with a custom gateway or switch executors in a direct chat, see the [operations guide](operations.md#claude-code-与执行器切换).
 
 To build a local CLI package:
 

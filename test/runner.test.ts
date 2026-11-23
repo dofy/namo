@@ -23,6 +23,8 @@ import { Cards } from '../src/cards.js';
 import { queuedConfiguration, watchConfiguration } from '../src/config-reload.js';
 import { RuntimeHost } from '../src/runtime-host.js';
 import { setUserModel } from '../src/model-preferences.js';
+import { loginAgent, probeAgent, runtimeFor } from '../src/agents.js';
+import { memoryJobs } from '../src/business-storage.js';
 
 const wait = (condition: () => boolean, timeoutMs = 7000) => waitFor(condition, timeoutMs);
 const fake = `#!/usr/bin/env node
@@ -104,6 +106,240 @@ function organization(f: ReturnType<typeof fixture>, github?: object) {
   writeFileSync(f.file, JSON.stringify(raw)); Object.assign(f.config, loadConfig(f.file));
   const input = message('organization'); input.envelope!.tenantKey = 'tenant'; return input;
 }
+
+test('Claude Code runs in the persistent worker and switching restores each native session', async t => {
+  const f = fixture(t), bin = join(f.dir, 'claude.mjs'), log = join(f.dir, 'claude-turns');
+  writeFileSync(bin, `#!${process.execPath}
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const args = process.argv.slice(2), credential = join(process.env.CLAUDE_CONFIG_DIR, 'fixture-auth');
+if (args[0] === '--version') { console.log('2.1.330 (Claude Code)'); process.exit(0); }
+if (args[0] === 'auth') {
+  if (args[1] === 'login') writeFileSync(credential, 'fixture');
+  else console.log(JSON.stringify({ loggedIn: existsSync(credential) }));
+  process.exit(0);
+}
+let stdin = '';
+for await (const chunk of process.stdin) stdin += chunk;
+const input = JSON.parse(stdin), id = input.session_id, output = value => console.log(JSON.stringify(value));
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input, home: process.env.HOME,
+  config: process.env.CLAUDE_CONFIG_DIR, codexHome: process.env.CODEX_HOME, anthropicKey: !!process.env.ANTHROPIC_API_KEY,
+  feishuSecret: !!process.env.FEISHU_APP_SECRET }) + '\\n');
+output({ type: 'system', subtype: 'init', session_id: id, model: 'claude-sonnet-test' });
+const text = input.message.content[0].text;
+if (text === 'hold') { process.on('SIGTERM', () => {}); setInterval(() => {}, 20); }
+else output({ type: 'result', subtype: 'success', is_error: false, session_id: id, result: 'Claude reply' });
+`, { mode: 0o700 });
+  const raw = JSON.parse(readFileSync(f.file, 'utf8'));
+  raw.agents = { profiles: { claude: { adapter: 'claude', enabled: true, bin, model: 'sonnet' } } };
+  raw.codex.denyPaths = [join(raw.codex.directories[0], 'private.txt')];
+  writeFileSync(f.file, JSON.stringify(raw));
+  const config = loadConfig(f.file);
+  assert.equal((await probeAgent(config, 'claude')).find(row => row.id === 'agent.auth')?.status, 'fail');
+  await assert.rejects(loginAgent(config, 'claude', true));
+  await loginAgent(config, 'claude');
+  assert.equal((await probeAgent(config, 'claude')).find(row => row.id === 'agent.auth')?.status, 'ok');
+  const engine = f.receiver(config), identity = { channel: 'feishu' as const, appId: 'app', userId: 'alice' };
+  setUserModel(f.store, identity, 'codex-only');
+  engine.start();
+  const send = async (key: string, input: string) => {
+    assert.equal(engine.accept(message(key, input)), true);
+    await wait(() => f.store.get(key)?.state === 'replied');
+    return f.store.get(key)!;
+  };
+  const codexFirst = await send('codex-first', 'instant');
+  await send('to-claude', '/agent claude');
+  const first = f.tasks.get((await send('claude-first', 'hello')).taskId!)!;
+  assert.equal(f.tasks.selection(first.id)?.adapter, 'claude');
+  assert.equal(f.tasks.model(first.id), 'sonnet');
+  const thread = f.tasks.thread(first);
+  assert.match(thread ?? '', /^[0-9a-f-]{36}$/);
+  await send('to-codex', '/agent codex');
+  const codexAgain = await send('codex-again', 'instant');
+  assert.equal(f.tasks.get(codexAgain.taskId!)?.workstreamId, f.tasks.get(codexFirst.taskId!)?.workstreamId);
+  await send('back-to-claude', '/agent claude');
+  const again = f.tasks.get((await send('claude-again', 'continue')).taskId!)!;
+  assert.equal(again.workstreamId, first.workstreamId);
+  assert.equal(f.tasks.thread(again), thread);
+  const rows = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(rows.length, 2);
+  assert.ok(rows[0].args.includes('--session-id'));
+  assert.equal(rows[1].args[rows[1].args.indexOf('--resume') + 1], thread);
+  assert.equal(rows[1].args[rows[1].args.indexOf('--model') + 1], 'sonnet');
+  assert.equal(rows[1].args[rows[1].args.indexOf('--tools') + 1], 'Read,Glob,Grep,Edit,Write');
+  assert.ok(rows[1].args.includes('--restricted'));
+  assert.ok(rows[1].args.includes('--strict-mcp-config'));
+  const policy = JSON.parse(rows[1].args[rows[1].args.indexOf('--settings') + 1]);
+  assert.ok(policy.permissions.deny.includes(`Read(/${raw.codex.denyPaths[0]})`));
+  assert.equal(rows[1].home, join(f.data, 'agents', 'claude'));
+  assert.equal(rows[1].config, join(rows[1].home, '.claude'));
+  assert.equal(rows[1].codexHome, undefined);
+  assert.equal(rows[1].anthropicKey, false);
+  assert.equal(rows[1].feishuSecret, false);
+  assert.equal(JSON.parse(rows[1].input.message.content[0].text).messages[0].text, 'continue');
+  const abort = new AbortController();
+  const pending = runtimeFor(config, 'claude').run({ cwd: first.cwd, prompt: 'hold', signal: abort.signal,
+    onThread() { assert.fail('cancelled calls must not bind a session'); }, onTurn() {} });
+  const cancelled = assert.rejects(pending, (error: RuntimeError) => error.code === 'cancelled');
+  await wait(() => readFileSync(log, 'utf8').trim().split('\n').length === 3);
+  abort.abort();
+  await cancelled;
+  await send('schedule-claude', '/schedule add task once 2099-01-01T09:00+08:00 scheduled');
+  await send('schedule-switch', '/agent codex');
+  const due = Date.now() - 1;
+  const schedule = f.store.db.prepare('SELECT id FROM schedules').get()!;
+  f.store.db.prepare('UPDATE schedules SET nextAt=? WHERE id=?').run(due, schedule.id!);
+  const scheduledKey = `schedule:${schedule.id}:${due}`;
+  await wait(() => f.store.get(scheduledKey)?.state === 'replied');
+  const scheduledTask = f.tasks.get(f.store.get(scheduledKey)!.taskId!)!;
+  assert.equal(f.tasks.selection(scheduledTask.id)?.adapter, 'claude');
+  assert.notEqual(scheduledTask.workstreamId, first.workstreamId);
+  assert.equal(f.tasks.binding(message('current'))?.id, f.tasks.get(codexAgain.taskId!)?.workstreamId);
+});
+
+test('a Claude gateway authenticates the persistent worker without OAuth and redacts the credential from replies', async t => {
+  const f = fixture(t), bin = join(f.dir, 'claude-gateway.mjs'), token = 'fixture-gateway-credential';
+  const checkpoint = '12b4ae64-753e-4389-aabd-7f2c0c4f1ff0';
+  writeFileSync(bin, `#!${process.execPath}
+const env = process.env, args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('2.1.330 (Claude Code)'); process.exit(0); }
+if (args[0] === 'auth') process.exit(93);
+if (env.ANTHROPIC_BASE_URL !== 'https://gateway.example/anthropic' || env.ANTHROPIC_AUTH_TOKEN !== ${JSON.stringify(token)}
+  || env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC !== '1' || args.includes(env.ANTHROPIC_AUTH_TOKEN))
+  process.exit(94);
+let input = '';
+for await (const chunk of process.stdin) input += chunk;
+const message = JSON.parse(input), session_id = message.session_id;
+const text = JSON.parse(message.message.content[0].text).messages[0].text;
+if (text === 'gateway refusal') {
+  console.log(JSON.stringify({ type: 'assistant', session_id, error: 'invalid_request', message: {
+    stop_reason: 'refusal', content: [{ type: 'text', text: 'Private provider diagnostic ' + env.ANTHROPIC_AUTH_TOKEN }]
+  } }));
+  console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, session_id, result: 'Private provider diagnostic' }));
+  process.exitCode = 1;
+} else {
+  const rewind = args.indexOf('--resume-session-at');
+  if (text === 'another gateway task' && (rewind < 0 || args[rewind + 1] !== ${JSON.stringify(checkpoint)}
+    || args[args.indexOf('--resume') + 1] !== session_id)) process.exit(95);
+  if (text === 'gateway after tools' && rewind >= 0) process.exit(96);
+  console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, session_id,
+    result: 'Gateway reply ' + env.ANTHROPIC_AUTH_TOKEN }));
+}
+`, { mode: 0o700 });
+  const raw = JSON.parse(readFileSync(f.file, 'utf8'));
+  raw.agents = { defaultProfile: 'claude', profiles: { claude: { adapter: 'claude', enabled: true, bin,
+    gateway: { baseUrl: 'https://gateway.example/anthropic/', auth: 'bearer', secret: token } } } };
+  writeFileSync(f.file, JSON.stringify(raw));
+  const config = loadConfig(f.file), home = join(f.data, 'agents', 'claude');
+  assert.ok(!existsSync(home));
+  assert.equal((await probeAgent(config)).find(check => check.id === 'agent.auth')?.status, 'ok');
+  await assert.rejects(loginAgent(config));
+  assert.ok(!existsSync(home), 'gateway diagnostics and login do not create credentials or invoke OAuth');
+  const engine = f.receiver(config);
+  engine.start();
+  engine.accept(message('gateway-task', 'gateway test'));
+  await wait(() => f.store.get('gateway-task')?.state === 'replied');
+  assert.ok(existsSync(home));
+  assert.ok(f.deliveries.some(text => text.includes('Gateway reply [REDACTED]')));
+  assert.ok(f.deliveries.every(text => !text.includes(token)));
+  assert.ok(!String(f.job().result).includes(token));
+  const original = f.tasks.get(f.store.get('gateway-task')!.taskId!)!;
+  const threadId = f.tasks.thread(original);
+  assert.ok(threadId);
+  engine.accept(message('gateway-refusal', 'gateway refusal'));
+  await wait(() => f.store.get('gateway-refusal')?.state === 'failed');
+  const refused = f.tasks.get(f.store.get('gateway-refusal')!.taskId!)!;
+  assert.equal(refused.error, 'claude_response_refused');
+  const runs = f.store.db.prepare('SELECT threadId FROM task_runs WHERE taskId=?');
+  assert.equal(runs.all(refused.id).length, 1, 'a refusal is never retried automatically');
+  assert.equal(f.tasks.thread(original), threadId);
+  const project = join(home, '.claude', 'projects', realpathSync(original.cwd).replace(/[^a-zA-Z0-9-]/g, '-'));
+  mkdirSync(project, { recursive: true });
+  const transcript = join(project, `${threadId}.jsonl`);
+  const completed = { type: 'assistant', uuid: checkpoint, message: { stop_reason: 'end_turn' } };
+  const user = { type: 'user', message: { content: 'gateway refusal' } };
+  const rejection = { type: 'assistant', isApiErrorMessage: true, message: { stop_reason: 'refusal' } };
+  const writeTranscript = (entries: object[]) => {
+    const text = entries.map(entry => JSON.stringify({ sessionId: threadId, ...entry })).join('\n') + '\n';
+    writeFileSync(transcript, text);
+    return text;
+  };
+  const before = writeTranscript([completed, user, rejection]);
+  engine.accept(message('gateway-continuation', 'another gateway task'));
+  await wait(() => f.store.get('gateway-continuation')?.state === 'replied');
+  const continued = f.tasks.get(f.store.get('gateway-continuation')!.taskId!)!;
+  assert.equal(continued.workstreamId, original.workstreamId);
+  assert.equal(runs.get(continued.id)?.threadId, threadId);
+  assert.equal(readFileSync(transcript, 'utf8'), before, 'the runner does not edit Claude history');
+  writeTranscript([completed, user, { type: 'assistant', message: { stop_reason: 'tool_use' } }, rejection]);
+  engine.accept(message('gateway-after-tools', 'gateway after tools'));
+  await wait(() => f.store.get('gateway-after-tools')?.state === 'replied');
+  assert.ok(f.deliveries.every(text => !text.includes('Private provider diagnostic') && !text.includes(token)));
+});
+
+test('Claude-only memory extraction writes context used by both executors', async t => {
+  const f = fixture(t), bin = join(f.dir, 'memory-claude.mjs'), trace = join(f.dir, 'claude-memory');
+  const raw = JSON.parse(readFileSync(f.file, 'utf8'));
+  const codexBin = raw.codex.bin;
+  raw.codex.bin = join(f.dir, 'missing-codex');
+  raw.agents = { defaultProfile: 'claude', profiles: { claude: {
+    adapter: 'claude', enabled: true, bin, gateway: { baseUrl: 'https://gateway.example', auth: 'bearer', secret: 'fixture-memory-key' },
+  } } };
+  writeFileSync(f.file, JSON.stringify(raw));
+  writeFileSync(bin, `#!${process.execPath}
+import assert from 'node:assert/strict';
+import { appendFileSync, readdirSync } from 'node:fs';
+const args = process.argv.slice(2);
+let stdin = '';
+for await (const chunk of process.stdin) stdin += chunk;
+const input = JSON.parse(stdin), source = JSON.parse(input.message.content[0].text);
+let result = 'Claude reply';
+if (args.includes('--no-session-persistence')) {
+  assert.equal(args[args.indexOf('--tools') + 1], '');
+  assert.equal(args.includes('--add-dir'), false);
+  assert.equal(args.includes('--resume'), false);
+  assert.ok(args.includes('--safe-mode') && args.includes('--disable-slash-commands') && args.includes('--strict-mcp-config'));
+  assert.match(args[args.indexOf('--system-prompt') + 1], /逐字 quote/);
+  assert.equal(process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
+  assert.equal(process.env.ANTHROPIC_AUTH_TOKEN, 'fixture-memory-key');
+  assert.equal(process.env.FEISHU_APP_SECRET, undefined);
+  assert.deepEqual(readdirSync(process.cwd()), []);
+  assert.equal(source.messages[0].text, 'I always prefer barley tea.');
+  appendFileSync(${JSON.stringify(trace)}, process.cwd());
+  result = JSON.stringify({ memories: [{ key: 'person.tea', kind: 'preference', level: 'global', privacy: 'private',
+    text: 'Prefers barley tea.', directory: null, operation: 'upsert', evidence:
+    [{ messageId: source.messages[0].messageId, quote: source.messages[0].text }] }] });
+}
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, session_id: input.session_id, result }));
+`, { mode: 0o700 });
+  const receiver = f.receiver(loadConfig(f.file));
+  receiver.start();
+  receiver.accept(message('memory-source', 'I always prefer barley tea.'));
+  await wait(() => f.store.get('memory-source')?.state === 'replied');
+  const jobs = memoryJobs(f.store.db);
+  const [queued] = jobs.list();
+  assert.ok(queued);
+  jobs.save({ ...queued, dueAt: 0 });
+  await receiver.pump();
+  await wait(() => jobs.get(queued.id)?.state === 'completed');
+  assert.equal(jobs.get(queued.id)?.accepted, 1);
+  assert.equal(existsSync(readFileSync(trace, 'utf8')), false, 'extraction cleans its independent directory');
+
+  receiver.accept(message('claude-with-memory', 'Which tea do I prefer?'));
+  await wait(() => f.store.get('claude-with-memory')?.state === 'replied');
+  assert.match(f.job().prompt, /Prefers barley tea\./);
+  await receiver.stop();
+  raw.codex.bin = codexBin;
+  writeFileSync(f.file, JSON.stringify(raw));
+  const both = f.receiver(loadConfig(f.file));
+  both.start();
+  both.accept(message('switch-backend', '/agent codex'));
+  await wait(() => f.store.get('switch-backend')?.state === 'replied');
+  both.accept(message('codex-with-memory', 'instant'));
+  await wait(() => f.store.get('codex-with-memory')?.state === 'replied');
+  assert.match(f.job().prompt, /Prefers barley tea\./);
+  assert.equal(f.tasks.selection(f.store.get('codex-with-memory')!.taskId!)?.adapter, 'codex');
+});
 
 test('queued task keeps its user model through detached worker startup', async t => {
   const f=fixture(t), identity={channel:'feishu' as const,appId:'app',userId:'alice'}, receiver=f.receiver();

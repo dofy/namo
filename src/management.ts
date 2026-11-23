@@ -10,8 +10,9 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { loadConfig, parseConfig } from './config.js';
-import { resolveAgent } from './agent-registry.js';
+import { loadConfig, parseConfig, type Config } from './config.js';
+import { claudeGatewaySecrets, claudeGatewayTarget, getAgentRegistry, resolveAgent, validClaudeGatewaySecret } from './agent-registry.js';
+import { agentLabel } from './agents.js';
 import { ConfigEditor, digest, readJson } from './paths.js';
 import { Store, SCHEMA_VERSION } from './store.js';
 import { Tasks } from './tasks.js';
@@ -71,7 +72,7 @@ export class Management {
   private redactor():(text:string)=>string {
     const {raw}=this.source(),f=raw.feishu??{};let token=typeof raw.github?.token==='string'?raw.github.token:'';
     try {token=parseGitHubAccessConfig(raw.github,process.env)?.token??'';}catch{const key=raw.github?.tokenEnv;if(typeof key==='string'&&/^NAMO_GITHUB_[A-Z][A-Z0-9_]*$/.test(key))token=process.env[key]??token;}
-    return makeRedactor([typeof f.appSecret==='string'?f.appSecret:'',process.env[f.appSecretEnv??'FEISHU_APP_SECRET']??'',token,...(Array.isArray(raw.mcpConnections)?raw.mcpConnections.map((v:any)=>typeof v?.token==='string'?v.token:''):[])]);
+    return makeRedactor([typeof f.appSecret==='string'?f.appSecret:'',process.env[f.appSecretEnv??'FEISHU_APP_SECRET']??'',token,...(Array.isArray(raw.mcpConnections)?raw.mcpConnections.map((v:any)=>typeof v?.token==='string'?v.token:''):[]),...claudeGatewaySecrets(raw.agents)]);
   }
   private read<T>(fn:(s:Store)=>T):T|undefined {
     const path=join(this.dataDir,'bot.sqlite');if(!existsSync(path))return;
@@ -98,16 +99,22 @@ export class Management {
   async organization():Promise<{tenantKey:string;name:string}> { return new FeishuTransport(loadConfig(this.file).feishu,()=>{}).organization(); }
   config():any {
     const {raw,revision}=this.source(),c=raw.codex??{},f=raw.feishu??{};
-    let valid=true;try{parseConfig(raw,this.file);}catch{valid=false;}
+    let parsed: Config | undefined;
+    try { parsed = parseConfig(raw, this.file); } catch { /* Keep the repair form available. */ }
+    const registry = parsed && getAgentRegistry(parsed);
+    const agentConnections = registry && { defaultProfile: registry.defaultProfile,
+      profiles: registry.profiles.map(p => ({ id: p.id, adapter: p.adapter, label: agentLabel(p), enabled: p.enabled,
+        bin: p.id === 'claude' && typeof raw.agents?.profiles?.claude?.bin === 'string' ? raw.agents.profiles.claude.bin : p.bin,
+        model: p.model ?? '', ...(p.gateway ? { gateway: p.gateway } : {}) })) };
     let github=publicGitHubAccess();try {github=publicGitHubAccess(parseGitHubAccessConfig(raw.github,process.env));}catch{/* Keep an invalid credential out of the projection. */}
     let mcpConnections:ReturnType<typeof publicMcpConnections>;try{mcpConnections=publicMcpConnections(parseMcpConnections(raw.mcpConnections));}catch{mcpConnections=[];}
     const service=this.status();let applied:string|undefined,automaticConfiguration=false,configurationReload:string|undefined;
     try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid){applied=h.configRevision;automaticConfiguration=h.automaticConfiguration===true;configurationReload=h.configurationReload;}}catch{/* Not yet instrumented. */}
     let activeModelDefault:{model:string;profile:string}|undefined;
-    if(valid&&service.running&&applied===revision){
-      try {const agent=resolveAgent(parseConfig(raw,this.file));activeModelDefault={model:agent.model??'',profile:agent.id};}catch{/* Unavailable profiles must not be presented as active. */}
+    if(parsed&&service.running&&applied===revision){
+      try {const agent=resolveAgent(parsed);activeModelDefault={model:agent.model??'',profile:agent.id};}catch{/* Unavailable profiles must not be presented as active. */}
     }
-    return {revision,valid,github,mcpConnections,activeModelDefault,automaticConfiguration,configurationReload,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
+    return {revision,valid:!!parsed,github,mcpConnections,agentConnections,activeModelDefault,automaticConfiguration,configurationReload,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
       values:{directories:c.directories??[],sandbox:'workspace-write',networkAccess:c.networkAccess??false,allowLocalCommits:true,
         concurrency:Number.isInteger(raw.concurrency)&&raw.concurrency>=1&&raw.concurrency<4?4:raw.concurrency??8,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
         reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??200,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},
@@ -392,8 +399,53 @@ export class Management {
       const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError(tr("management.configurationChangedAnotherPageProgramRefreshTry"));
       if(!patch||typeof patch!=='object'||Array.isArray(patch))throw new ManagementError(tr("management.invalidConfigurationContent"));
       const allowed=['directories','serviceAccess','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'];
-      if(Object.keys(patch).some(k=>!allowed.includes(k)))throw new ManagementError(tr("management.configurationIncludesFieldsCannotEdited"));
+      if(Object.keys(patch).some(k=>!allowed.includes(k)&&!['defaultAgentProfile','claudeCode'].includes(k)))throw new ManagementError(tr("management.configurationIncludesFieldsCannotEdited"));
       const next=structuredClone(raw);next.codex??={};next.feishu??={};
+      if (Object.hasOwn(patch, 'defaultAgentProfile') || Object.hasOwn(patch, 'claudeCode')) {
+        next.agents ??= {};
+        if (Object.hasOwn(patch, 'defaultAgentProfile')) {
+          if (typeof patch.defaultAgentProfile !== 'string' || !/^[a-z][a-z0-9_-]{0,47}$/.test(patch.defaultAgentProfile))
+            throw new ManagementError(tr('claude.configInvalid'), 400);
+          next.agents.defaultProfile = patch.defaultAgentProfile;
+        }
+        if (Object.hasOwn(patch, 'claudeCode')) {
+          const value = patch.claudeCode;
+          if (!value || typeof value !== 'object' || Array.isArray(value)
+            || Object.keys(value).some(key => !['enabled', 'bin', 'model', 'gateway'].includes(key))
+            || typeof value.enabled !== 'boolean' || typeof value.bin !== 'string' || !value.bin.trim()
+            || typeof value.model !== 'string')
+            throw new ManagementError(tr('claude.configInvalid'), 400);
+          next.agents.profiles ??= {};
+          const prior = next.agents.profiles.claude;
+          if (prior && prior.adapter !== 'claude') throw new ManagementError(tr('claude.profileConflict'), 400);
+          let gateway = prior?.gateway;
+          if (value.gateway === null) gateway = undefined;
+          else if (value.gateway !== undefined) {
+            const draft = value.gateway;
+            if (!draft || typeof draft !== 'object' || Array.isArray(draft)
+              || Object.keys(draft).some(key => !['baseUrl', 'auth', 'newSecret'].includes(key))
+              || (draft.newSecret !== undefined && draft.newSecret !== '' && !validClaudeGatewaySecret(draft.newSecret)))
+              throw new ManagementError(tr('claude.gatewayInvalid'), 400);
+            let target;
+            try { target = claudeGatewayTarget(typeof draft.baseUrl === 'string' ? draft.baseUrl.trim() : draft.baseUrl, draft.auth); }
+            catch { throw new ManagementError(tr('claude.gatewayInvalid'), 400); }
+            let retainedSecret: string | undefined;
+            if (!draft.newSecret && gateway) {
+              try {
+                const previous = claudeGatewayTarget(gateway.baseUrl, gateway.auth);
+                if (target.baseUrl === previous.baseUrl && target.auth === previous.auth) retainedSecret = gateway.secret;
+              } catch { /* Repairing an invalid gateway requires a new credential. */ }
+            }
+            const secret = draft.newSecret || retainedSecret;
+            if (!secret) throw new ManagementError(tr('claude.gatewayCredentialRequired'), 400);
+            gateway = { ...target, secret };
+          }
+          next.agents.profiles.claude = { adapter: 'claude', enabled: value.enabled, bin: value.bin.trim(),
+            ...(value.model.trim() ? { model: value.model.trim() } : {}), ...(prior?.timeoutMs ? { timeoutMs: prior.timeoutMs } : {}),
+            ...(gateway ? { gateway } : {}) };
+          if (!value.enabled && next.agents.defaultProfile === 'claude') next.agents.defaultProfile = 'codex';
+        }
+      }
       for(const key of allowed.filter(k=>!['serviceAccess','concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
       if(patch.serviceAccess!==undefined) {
         const a=patch.serviceAccess;
@@ -539,8 +591,10 @@ export class Management {
     catch (error) { if (error instanceof ApprovalError) throw new ManagementError(this.redactor()(error.message)); throw error; }
     finally { store.close(); }
   }
-  async diagnose(live = false, confirmed = false): Promise<any> {
+  async diagnose(live = false, confirmed = false, profile?: unknown): Promise<any> {
     if (live && !confirmed) throw new ManagementError(tr('operations.confirmRequired'), 400);
-    return this.sanitize(await this.deps.diagnose(this.file, live));
+    if (profile !== undefined && (typeof profile !== 'string' || !/^[a-z][a-z0-9_-]{0,47}$/.test(profile)))
+      throw new ManagementError(tr('claude.configInvalid'), 400);
+    return this.sanitize(await this.deps.diagnose(this.file, live, profile));
   }
 }

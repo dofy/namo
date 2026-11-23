@@ -1,7 +1,8 @@
 import { sessionList } from './session-list.js';
 import { decideMcpApproval, mcpApprovalCommand, revokeBrowserGrant } from './mcp-write-approval.js';
 import { memoryDirectories } from './memory-access.js';
-import { AgentRegistryError, selectAgent, selectedPolicyHash, type AgentSelection } from './agent-registry.js';
+import { AgentRegistryError, agentCodexConfig, getAgentRegistry, resolveAgent, selectAgent, selectedPolicyHash, type AgentSelection } from './agent-registry.js';
+import { agentLabel } from './agents.js';
 import { mkdirSync, realpathSync, readFileSync } from 'node:fs';
 import { pathsOverlap } from './path-policy.js';
 export { pathsOverlap } from './path-policy.js';
@@ -24,7 +25,6 @@ import { formatControlDisplay } from './control-display.js';
 import { resolveCodexBinary } from './codex-installation.js';
 import { RuntimeVersions } from './runtime-version.js';
 import { NAMO_VERSION } from './version.js';
-import { agentCodexConfig } from './agent-registry.js';
 import { EvidenceRecorder, readEvidence } from './evidence.js';
 import { runnerJob } from './runner-store.js';
 import { evidenceBrief, taskStateLabel, taskStatus } from './presentation.js';
@@ -275,7 +275,7 @@ export class Engine {
     const memoryReply=memoryCommand(this.store,m,knownUsers,this.tasks.binding(m)?.cwd??null,this.redact,memoryDirectories(this.contextConfig(),m,this.tasks.binding(m)?.cwd));
     if(memoryReply!==undefined){if(this.store.claim(m.key))this.store.finish(m.key,memoryReply);return true;}
     const command = m.text.trim().split(/\s/)[0];
-    if (['/deliver','/profile','/model','/issues','/issue','/resolve','/status', '/version', '/whoami', '/cancel', '/reset', '/new', '/refresh', '/directories', '/session', '/tasks', '/task', '/help', '/unsupported', '/too-long'].includes(command)) {
+    if (['/deliver','/profile','/model','/agent','/issues','/issue','/resolve','/status', '/version', '/whoami', '/cancel', '/reset', '/new', '/refresh', '/directories', '/session', '/tasks', '/task', '/help', '/unsupported', '/too-long'].includes(command)) {
       if (!this.store.claim(m.key)) return true;
       let reply: string;
       if(command === '/deliver') {
@@ -286,6 +286,7 @@ export class Engine {
       }
       else if (command === '/profile') reply = this.profileCommand(m);
       else if (command === '/model') reply = this.modelCommand(m);
+      else if (command === '/agent') reply = this.agentCommand(m);
       else if (['/issues','/issue','/resolve'].includes(command)) {
         const recovery=new Recovery(this.store), actor={id:m.senderId,chatKey:m.chatKey};
         const parts=m.text.trim().split(/\s+/);
@@ -331,6 +332,7 @@ export class Engine {
         '**直接说出你的要求**',
         '可以让我执行工作、查看或停止任务、补充要求、交付文件、管理会话，以及创建或管理定时任务。',
         '个人档案、模型偏好和记忆可在私聊中管理；需要确认目标时，我会询问。',
+        '私聊发送 `/agent` 查看或切换执行器。',
         '收到等待问题后可以引用问题回复或选择选项；发送结果不明时请先核对聊天记录。',
         '本机运行 namo ui 可管理配置与任务。'
       ].join('\n\n');
@@ -349,12 +351,44 @@ export class Engine {
     }
     return false;
   }
+  private agentCommand(m: Incoming): string {
+    const f = this.config.feishu, codex = this.config.codex, e = m.envelope;
+    if (e?.chatType !== 'p2p' || e.kind !== 'instruction' || e.type !== 'text'
+      || e.parentId || e.rootId || e.materials.length || e.limitations.length)
+      return '请在机器人私聊中单独发送 /agent 文字命令。';
+    if (!codex || !f || !admitted(this.contextConfig().feishu, m.senderId, m.chatId, e.tenantKey))
+      return '当前身份未获准切换执行器。';
+    const config = { ...this.config, codex };
+    const registry = getAgentRegistry(config);
+    const options = registry.profiles.filter(p => p.enabled).map(p => `${agentLabel(p)} · \`/agent ${p.id}\``);
+    const parts = m.text.trim().split(/\s+/);
+    if (parts.length > 2) return '发送 `/agent` 查看执行器和切换命令。';
+    if (parts.length === 2) {
+      const useDefault = parts[1] === 'default';
+      const target = registry.profiles.find(p => p.enabled && p.id === (useDefault ? registry.defaultProfile : parts[1]));
+      if (!target) return '执行器未启用。请在本机工作台配置后重试。\n\n' + options.join('\n');
+      if (this.store.hasPending(m.chatKey, m.key, m.senderId, scopeOf(m))) return '当前会话仍有未完成的任务，请完成或停止后再切换。';
+      if (this.configurationDraining) return '服务正在应用配置，请稍后再切换执行器。';
+      this.tasks.switchAgent(m, target.id, useDefault);
+      return `已切换到 ${agentLabel(target)}。下一条任务会续接该执行器自己的工作线。`;
+    }
+    let current: string;
+    try { current = agentLabel(resolveAgent(config, this.selectedAgent(m))); }
+    catch { current = '当前执行器不可用'; }
+    return [`**当前执行器：${current}**`, ...options, '`/agent default` 使用服务默认'].join('\n');
+  }
   private modelCommand(m: Incoming): string {
     const f = this.config.feishu;
     if (m.envelope?.chatType !== 'p2p' || m.envelope.type !== 'text' || m.envelope.parentId || m.envelope.rootId || m.envelope.materials.length)
       return '请在机器人私聊中单独发送 /model 文字命令。';
     if (!f?.appId || !f.domain || !(f.access ? admitted(f as Config['feishu'],m.senderId,m.chatId,m.envelope.tenantKey) : f.allowedUserIds?.includes(m.senderId)))
       return '当前身份未获准设置模型。';
+    try {
+      if (this.selectedAgent(m)?.adapter === 'claude') return '当前使用 Claude Code。Claude 模型由本机工作台配置。';
+    } catch (error) {
+      if (error instanceof AgentRegistryError) return '当前执行器不可用。请发送 /agent 查看可用执行器。';
+      throw error;
+    }
     const identity = { channel: f.domain, appId: f.appId, userId: m.senderId };
     const parts = m.text.trim().split(/\s+/);
     if (parts.length > 2) return '**模型命令**\n`/model` 查看\n`/model 模型ID` 设置\n`/model default` 恢复默认';
@@ -398,15 +432,36 @@ export class Engine {
   private selectedAgent(m: Incoming, reference?: Task): AgentSelection | undefined {
     if (!this.config.codex) return;
     const c = {...this.config, codex: this.config.codex};
+    if (!reference) {
+      const scheduleId = /^schedule:(S-[A-F0-9]{12}):\d+$/.exec(m.key)?.[1];
+      if (scheduleId) {
+        const row = this.store.db.prepare('SELECT binding FROM schedules WHERE id=? AND ownerId=? AND chatKey=? AND scopeKey=?')
+          .get(scheduleId, m.senderId, m.chatKey, scopeOf(m));
+        if (row?.binding) {
+          const pinned = (JSON.parse(String(row.binding)) as WorkspaceBinding).agentSelection;
+          const current = selectAgent(c, pinned?.profileId ?? 'codex');
+          if (pinned && pinned.adapter !== current.adapter) throw new AgentRegistryError('agent_configuration_changed');
+          return current;
+        }
+      }
+    }
     const bound = reference ?? this.tasks.binding(m);
     const selected=bound?this.tasks.selection(bound.id):undefined;
-    return selected&&selected.profileId!=='codex'?selected:selectAgent(c,bound?'codex':undefined);
+    if (reference && selected && selected.profileId !== 'codex') return selected;
+    return selectAgent(c, bound ? selected?.profileId ?? 'codex' : this.tasks.agentPreference(m));
   }
   private versionLines(m: Incoming): string {
     let version:string|null=null;
     try {
       const c=this.config.codex;
-      if(c) version=this.versions.get(agentCodexConfig({...this.config,codex:c},this.selectedAgent(m)));
+      if(c) {
+        const selection = this.selectedAgent(m);
+        if (selection?.adapter === 'claude') {
+          const profile = resolveAgent({ ...this.config, codex: c }, selection);
+          return `Namo：\`${NAMO_VERSION}\`\n执行器：${agentLabel(profile)}`;
+        }
+        version=this.versions.get(agentCodexConfig({...this.config,codex:c},selection));
+      }
     } catch { /* Invalid or missing runtime is reported without leaking paths or errors. */ }
     return `Namo：\`${NAMO_VERSION}\`\nCodex CLI：${version ? `\`${version}\`` : '暂不可用，检测中或未安装'}`;
   }
@@ -434,7 +489,10 @@ export class Engine {
   start(paused = false): void {
     this.paused = paused;
     if(this.config.codex) {
-      try {this.versions.get(agentCodexConfig({...this.config,codex:this.config.codex}));} catch { /* A missing runtime remains visible as unavailable. */ }
+      try {
+        const c = {...this.config,codex:this.config.codex};
+        this.versions.get(agentCodexConfig(c,selectAgent(c,'codex')));
+      } catch { /* A missing runtime remains visible as unavailable. */ }
     }
     this.modelCatalog?.start();
     this.approvals?.start();
@@ -635,6 +693,13 @@ export class Engine {
           const pending=this.store.db.prepare("SELECT 1 FROM inbox WHERE key>=? AND key<? AND state IN ('queued','running','waiting','awaiting_reply') LIMIT 1").get(prefix,upper);
           if(pending){const previous=status();saveStatus({...previous,skipped:(previous.skipped??0)+1});return;}
           const m:Incoming={...source,key:`schedule:${schedule.id}:${schedule.nextAt}`,text:schedule.content,createdAt:now};
+          if (schedule.kind === 'task') {
+            try { this.selectedAgent(m); }
+            catch (error) {
+              if (!(error instanceof AgentRegistryError)) throw error;
+              pause('绑定的执行器暂不可用', true); return;
+            }
+          }
           if(!this.store.enqueue(m))return;
           if(schedule.kind==='reminder'){this.store.claim(m.key);this.store.finish(m.key,`⏰ 定时提醒 · ${schedule.id}\n${schedule.content}`);}
           else this.route(this.store.get(m.key)!);
@@ -765,7 +830,7 @@ export class Engine {
         onSchedule: (args,callId) => new Schedules(this.store).tool(m,args,callId,()=>this.workspace(m,task)),
         onActivity: phase => recordActivity(this.store, run, phase),
         onProgress: event => recordProgress(this.store, run, event, this.redact),
-        onThread: threadId => { if (!new Waits(this.store).resume(task)) this.store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`control-tools-v4-thread:${threadId}`,'1'); this.store.saveThread(this.tasks.sessionKey(task), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
+        onThread: threadId => { if (this.tasks.selection(task.id)?.adapter !== 'claude' && !new Waits(this.store).resume(task)) this.store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`control-tools-v4-thread:${threadId}`,'1'); this.store.saveThread(this.tasks.sessionKey(task), threadId); this.store.saveRun(m.key, threadId); this.tasks.saveRun(run, threadId); },
         onTurn: turnId => { const threadId = this.store.thread(this.tasks.sessionKey(task)); if (threadId) { this.store.saveRun(m.key, threadId, turnId); this.tasks.saveRun(run, threadId, turnId); } },
         onReady: controls => { const slot = this.active.get(this.slotKey(task)); if (slot?.task.id === task.id) { slot.controls = controls; void this.steer(slot).catch(() => this.fatal('revision_storage_error')); } },
         onEvidence: item => evidence!.observe(item),
@@ -815,10 +880,11 @@ export class Engine {
       }
       if (this.runtime.persistent && e instanceof RuntimeError && ['runner_observer_error','runner_record_missing'].includes(e.code)) throw e;
       const code = signal.aborted && !this.runtime.persistent ? 'cancelled' : e instanceof RuntimeError ? e.code : 'runtime_error';
+      const agent = this.tasks.selection(task.id)?.adapter === 'claude' ? 'Claude Code' : 'Codex';
       const text = code === 'cancelled' ? '这条请求已停止。已发生的操作不会自动撤销。'
         : code === 'runner_lost' ? '独立执行进程失联，结果未确认，没有自动重跑。可能仍有子进程或外部操作；并发名额与目录占位保留。请在本机核对进程和操作后，通过异常核对入口解除占位。'
         : code === 'turn_timeout' ? '这条请求超时，执行器已停止。执行结果未确认，没有自动重跑。'
-        : `这条请求未完成（${code}）。请检查本地 Codex 登录与服务状态；为避免重复操作，没有自动重跑。`;
+        : `这条请求未完成（${code}）。请在本机工作台检查 ${agent} 连接与任务状态。没有自动重跑。`;
       await this.active.get(this.slotKey(task))?.steering;
       this.store.transaction(() => {
         evidence?.finish(false);
@@ -874,8 +940,8 @@ export class Engine {
       this.store.transaction(()=>{
         const selection = this.selectedAgent(m,ref), f = this.config.feishu;
         let preference = f?.appId && f.domain ? userModel(this.store, {channel:f.domain,appId:f.appId,userId:m.senderId}) : '';
-        if(m.envelope?.chatType==='group' || f?.access && !(this.config.codex?.allowedModels??[]).includes(preference))preference='';
-        const configured = this.config.codex && selection ? agentCodexConfig({...this.config,codex:this.config.codex},selection).model : this.config.codex?.model;
+        if(selection?.adapter === 'claude' || m.envelope?.chatType==='group' || f?.access && !(this.config.codex?.allowedModels??[]).includes(preference))preference='';
+        const configured = this.config.codex && selection ? resolveAgent({...this.config,codex:this.config.codex},selection).model : this.config.codex?.model;
         const task=this.tasks.create(m,workspace,ref,selection,preference || configured || null);
         if(this.runtime.summarizeTitle&&this.config.feishu?.cards)enqueueTitle(this.store,task.id,'task');
         if(delivery)this.artifacts.intent(m,task,delivery[1]);
@@ -887,6 +953,10 @@ export class Engine {
     } catch (e) {
       if(e instanceof ArtifactError){this.reply(m,`文件交付指令无效：${e.code}`);return;}
       if (e instanceof TaskInputError || e instanceof WaitInputError) { this.reply(m, e.message); return; }
+      if (e instanceof AgentRegistryError || e instanceof RuntimeError && e.code.startsWith('agent_')) {
+        this.reply(m, '当前执行器不可用。请发送 /agent 切换，或在本机工作台检查配置。');
+        return;
+      }
       if (!(e instanceof RuntimeError)) throw e;
       this.reply(m, `工作目录不可用（${e.code}），尚未执行。请检查目录配置。`);
     }

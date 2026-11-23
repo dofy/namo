@@ -59,7 +59,7 @@ test('agent discovery never executes a generic PATH binary or exposes inherited 
 touch '${marker}'
 `,{mode:0o700});
  const path=process.env.PATH;process.env.PATH=dir;
- try { const agents=detectAgents();assert.deepEqual(agents.map(a=>a.id),['codex']);assert.equal(agents[0].installed,false);assert.equal(existsSync(marker),false); }
+ try { const agents=detectAgents();assert.deepEqual(agents.map(a=>a.id),['codex','claude']);assert.equal(agents[0].installed,false);assert.equal(existsSync(marker),false); }
  finally {if(path===undefined)delete process.env.PATH;else process.env.PATH=path;}
 });
 
@@ -76,11 +76,11 @@ function fixture(t: {after(fn:()=>void|Promise<void>):void}) {
 }
 test('implicit Codex retains policy, home, native namespace and independent memory executor',t=>{
   const {config}=fixture(t), selection=selectAgent(config);
+  assert.equal(getAgentRegistry(config).defaultProfile, 'codex');
   assert.equal(selectedPolicyHash(config,selection),policyHash(config.codex));
   assert.equal(agentCodexConfig(config).home,config.codex.home);
   assert.equal(agentSessionKey('W-old',selection),'workstream:W-old');
   config.agents!.defaultProfile='review';
-  assert.equal(getAgentRegistry(config).memoryProfile,'codex');
   assert.equal(agentCodexConfig(config,selection).home,config.codex.home);
   assert.equal(resolveAgent(config).home,join(config.dataDir,'agents','review'));
 });
@@ -169,12 +169,13 @@ function agentManagementFixture(t: TestContext) {
   return { data, file, raw, manager };
 }
 
-test('management hides retired registry while preserving legacy Codex configuration and inactive entries on disk', t => {
+test('management projects supported profiles and preserves inactive entries on disk', t => {
   const f = agentManagementFixture(t), view = f.manager.config(), before = loadConfig(f.file);
   assert.equal(view.valid, true);
-  assert.equal(Object.hasOwn(view, 'agents'), false);
+  assert.deepEqual(view.agentConnections.profiles.map((p: {id:string;enabled:boolean}) => [p.id,p.enabled]),
+    [['codex',true],['team',true],['future',false]]);
   assert.equal(JSON.stringify(view).includes(f.raw.feishu.appSecret), false);
-  assert.deepEqual(Object.keys(before.agents!.profiles), ['team']);
+  assert.deepEqual(Object.keys(before.agents!.profiles), ['team','future']);
   const selection = selectAgent(before);
   assert.equal(selection.profileId, 'team');
   assert.equal(agentCodexConfig(before, selection).home, join(f.data, 'agents', 'team'));
@@ -184,6 +185,78 @@ test('management hides retired registry while preserving legacy Codex configurat
   assert.deepEqual(saved.custom, f.raw.custom);
   assert.equal(saved.feishu.appSecret, f.raw.feishu.appSecret);
   assert.deepEqual(selectAgent(loadConfig(f.file)), selection, 'unrelated saves retain native session identity');
+});
+
+test('management adds Claude Code, switches defaults and safely disables the active Claude profile', t => {
+  const { manager, file, raw } = agentManagementFixture(t);
+  const start = manager.config();
+  assert.throws(() => manager.save(start.revision, { defaultAgentProfile: 'claude' }), ManagementError);
+  assert.throws(() => manager.save(start.revision, { claudeCode: { enabled: true, bin: 'claude', model: '', token: 'secret' } }), ManagementError);
+  const enabled = manager.save(start.revision, { claudeCode: { enabled: true, bin: 'claude', model: 'sonnet' } });
+  assert.equal(enabled.agentConnections.defaultProfile, 'team');
+  assert.throws(() => manager.save(start.revision, { defaultAgentProfile: 'claude' }), ManagementError);
+  const switched = manager.save(enabled.revision, { defaultAgentProfile: 'claude' });
+  assert.equal(switched.agentConnections.defaultProfile, 'claude');
+  assert.equal(resolveAgent(loadConfig(file)).model, 'sonnet');
+  const saved = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual(saved.agents.profiles.future, raw.agents.profiles.future);
+  assert.deepEqual(saved.codex, raw.codex);
+  const disabled = manager.save(switched.revision, { claudeCode: { enabled: false, bin: 'claude', model: 'sonnet' } });
+  assert.equal(disabled.agentConnections.defaultProfile, 'codex');
+  assert.throws(() => selectAgent(loadConfig(file), 'claude'), /agent_profile_unavailable/);
+});
+
+test('Claude gateway saves a write-only credential and binds it to the address and auth method', t => {
+  const { manager, file } = agentManagementFixture(t);
+  const settings = { enabled: true, bin: 'claude', model: '' };
+  const original = 'fixture-router-secret';
+  const start = manager.config();
+  const gateway = { baseUrl: 'https://gateway.example/anthropic/', auth: 'bearer' };
+  const patch = (baseUrl: string, auth: string, newSecret?: string) =>
+    ({ claudeCode: { ...settings, gateway: { baseUrl, auth, newSecret } } });
+  for (const url of ['http://gateway.example', 'https://user:pass@gateway.example', 'https://gateway.example/?key=bad', 'https://gateway.example/#fragment']) {
+    assert.throws(() => manager.save(start.revision, patch(url, 'bearer', original)), ManagementError);
+  }
+  assert.throws(() => manager.save(start.revision, patch(gateway.baseUrl, gateway.auth)), ManagementError);
+  assert.throws(() => manager.save(start.revision, patch(gateway.baseUrl, gateway.auth, original + '\n')), ManagementError);
+  const saved = manager.save(start.revision, patch(gateway.baseUrl, gateway.auth, original));
+  const first = selectAgent(loadConfig(file), 'claude');
+  const claude = saved.agentConnections.profiles.find((p: {id:string}) => p.id === 'claude');
+  assert.deepEqual(claude.gateway, { baseUrl: 'https://gateway.example/anthropic', auth: 'bearer' });
+  assert.ok(!JSON.stringify(saved).includes(original));
+  assert.ok(!JSON.stringify(resolveAgent(loadConfig(file), first)).includes(original));
+  assert.throws(() => manager.save(saved.revision, patch('https://other.example', 'bearer')), ManagementError);
+  assert.throws(() => manager.save(saved.revision, patch(gateway.baseUrl, 'api-key')), ManagementError);
+  const rotated = manager.save(saved.revision, patch(gateway.baseUrl, gateway.auth, 'fixture-new-secret'));
+  assert.deepEqual(selectAgent(loadConfig(file), 'claude'), first);
+  const moved = manager.save(rotated.revision, patch('http://127.0.0.1:12345/anthropic', 'api-key', 'fixture-local-secret'));
+  assert.notDeepEqual(selectAgent(loadConfig(file), 'claude'), first);
+  manager.save(moved.revision, { claudeCode: { ...settings, gateway: null } });
+  assert.equal(loadConfig(file).agents?.profiles.claude.gateway, undefined);
+});
+
+test('changing a Claude gateway starts a new workstream without importing the previous transcript', t => {
+  const { config, store, tasks, project } = fixture(t);
+  const profile = { adapter: 'claude' as const, enabled: true, gateway: {
+    baseUrl: 'https://first-gateway.example', auth: 'bearer' as const, secret: 'fixture-key',
+  } };
+  config.agents!.profiles.claude = profile;
+  const create = (key: string) => {
+    const selection = selectAgent(config, 'claude');
+    store.enqueue(msg(key));
+    return tasks.create(store.get(key)!, { cwd: project, directories: [project],
+      policyHash: selectedPolicyHash(config, selection), agentSelection: selection });
+  };
+  const previous = create('before');
+  const run = tasks.start(previous);
+  store.saveThread(tasks.sessionKey(previous), 'native-first-gateway');
+  tasks.finish(previous, run, 'sensitive previous reply');
+  profile.gateway.baseUrl = 'https://second-gateway.example';
+  const next = create('after');
+  assert.notEqual(next.workstreamId, previous.workstreamId);
+  assert.equal(tasks.thread(next), undefined);
+  assert.deepEqual(tasks.refreshContext(next), []);
+  assert.equal(tasks.thread(previous), 'native-first-gateway');
 });
 
 test('management and CLI refuse retired agent registry writes without mutating configuration', t => {

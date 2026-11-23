@@ -27,7 +27,7 @@ try {
   for(const file of files) {
     assert.ok(!file.split('/').includes('..')&&allowed.some(pattern=>pattern.test(file)),`Unexpected packaged file: ${file}`);
   }
-  for(const required of ['package.json','bin/namo.js','dist/src/cli.js','dist/src/docs-site.js','dist/src/title-summary.js','dist/src/runner-worker.js','dist/src/service-bootstrap.js',
+  for(const required of ['package.json','bin/namo.js','dist/src/cli.js','dist/src/docs-site.js','dist/src/title-summary.js','dist/src/runner-worker.js','dist/src/claude-runtime.js','dist/src/service-bootstrap.js',
     'dist/scripts/smoke-codex.js','dist/ui/index.html','config.example.json','assets/namo-logo.png',
     'docs-site/index.html','docs-site/style.css','docs-site/main.js','docs-site/content.js','docs-site/vite.config.mjs','docs-site/assets/namo-logo.png']) {
     assert.ok(files.includes('package/'+required),`Missing runtime file: ${required}`);

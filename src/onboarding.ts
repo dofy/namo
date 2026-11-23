@@ -9,7 +9,8 @@ import type { Config } from './config.js';
 import { loadConfig, validateFeishu, parseConfig } from './config.js';
 import { ConfigEditor, atomicJson, readJson, digest, receiverDir, userHome } from './paths.js';
 import { acquireLock } from './safety.js';
-import { probeAgent, loginAgent, liveAgentTest, detectAgents, type Check } from './agents.js';
+import { probeAgent, loginAgent, liveAgentTest, detectAgents, agentLabel, type Check } from './agents.js';
+import { resolveAgent } from './agent-registry.js';
 import { PairingChallenge, FeishuSetupConnection, FEISHU_GUIDE, type SetupConnection, type Candidate } from './feishu-setup.js';
 import type { FeishuEvent } from './feishu.js';
 import { serviceAction, activeData, assertNoLegacyReceiver, waitForService } from './service.js';
@@ -77,10 +78,23 @@ export async function onboard(file: string, ui: Prompter, overrides: Partial<Ini
     if (editor.value) ui.info(tr("onboarding.existingConfigurationFoundUnknownFieldsAuthorizedUsers"));
     const reuse = !!editor.value && !!raw.feishu.appId && raw.codex.directories?.length > 0 && await ui.confirm(tr("onboarding.reuseExistingAgentDirectoryFeishuSettings"), true);
     if (!reuse) {
-      ui.info(tr("onboarding.codexOnly"));
-      const found = detectAgents(raw.codex?.bin ?? 'codex').find(a => a.id === 'codex');
-      raw.agent = 'codex'; raw.codex ??= initialConfig(file).codex;
-      raw.codex.bin = await ui.text(tr("onboarding.codexExecutablePathCommand"), found?.path ?? raw.codex.bin ?? 'codex');
+      const current = raw.agents?.defaultProfile ?? 'codex';
+      const picked = (await ui.text(tr('claude.setupBackend'), current)).trim().toLowerCase();
+      if (!['codex', 'claude', current].includes(picked)) throw new Error(tr('claude.configInvalid'));
+      const prior = raw.agents?.profiles?.[picked];
+      if (picked === 'claude' && prior && prior.adapter !== 'claude') throw new Error(tr('claude.profileConflict'));
+      const adapter = picked === 'claude' || prior?.adapter === 'claude' ? 'claude' : 'codex';
+      const found = detectAgents(raw.codex.bin ?? 'codex').find(agent => agent.id === adapter);
+      const bin = await ui.text(tr(adapter === 'claude' ? 'claude.bin' : 'onboarding.codexExecutablePathCommand'),
+        (picked === 'codex' ? found?.path ?? raw.codex.bin : prior?.bin ?? found?.path) ?? adapter);
+      raw.agent = 'codex';
+      if (picked === 'codex') raw.codex.bin = bin;
+      else {
+        raw.agents ??= {};
+        raw.agents.profiles ??= {};
+        raw.agents.profiles[picked] = { ...prior, adapter, enabled: true, bin };
+      }
+      if (raw.agents) raw.agents.defaultProfile = picked;
       for (;;) {
         const previous = directoryConfiguration(raw).codex.directories;
         const answer = await ui.text(tr("onboarding.directoryDirectoryAgentMayWork"), previous.join(';'));
@@ -92,7 +106,7 @@ export async function onboard(file: string, ui: Prompter, overrides: Partial<Ini
         try { next.codex.directories = parseConfig(next,file).codex.directories; raw = next; break; }
         catch { ui.info(tr("onboarding.chooseExistingSpecificDirectoryDirectoryRootHome")); }
       }
-      raw.codex.networkAccess = await ui.confirm(tr("onboarding.allowNetworkAccessAgentCommands"), raw.codex.networkAccess === true);
+      if (adapter === 'codex') raw.codex.networkAccess = await ui.confirm(tr("onboarding.allowNetworkAccessAgentCommands"), raw.codex.networkAccess === true);
       for (;;) {
         const domain = (await ui.text(tr("onboarding.platformFeishuLark"), raw.feishu?.domain ?? 'feishu')).toLowerCase();
         if (['feishu', 'lark'].includes(domain)) { raw.feishu.domain = domain; break; }
@@ -109,10 +123,11 @@ export async function onboard(file: string, ui: Prompter, overrides: Partial<Ini
     raw.codex.sandbox = 'workspace-write'; raw.codex.allowLocalCommits = true;
     parseConfig(raw,file); editor.save(raw); checkpoint('agent');
     let config = loadConfig(file);
+    const backend = agentLabel(resolveAgent(config));
     let checks = await deps.probe(config);
     for (const check of checks) ui.info(`${check.status === 'ok' ? '✓' : '!'} ${check.message}${check.next ? `\n  ${check.next}` : ''}`);
     if (checks.some(c => c.status === 'fail')) {
-      if (checks.some(c => c.id === 'agent.auth' && c.status === 'fail') && await ui.confirm(tr("onboarding.signNamosIsolatedCodexEnvironmentUsingOfficial"))) {
+      if (checks.some(c => c.id === 'agent.auth' && c.status === 'fail') && await ui.confirm(tr("onboarding.signNamosIsolatedCodexEnvironmentUsingOfficial", backend))) {
         await deps.login(config); checks = await deps.probe(config);
       }
       if (checks.some(c => c.status === 'fail')) { ui.info(tr("onboarding.agentChecksNotPassedFixIssueRun")); return result; }
@@ -138,7 +153,7 @@ export async function onboard(file: string, ui: Prompter, overrides: Partial<Ini
     checkpoint('verification');
     if (state.verification?.status === 'complete') {
       result.verified = true; ui.info(tr("onboarding.configurationAlreadyCompleteVerificationReceiptModelMessaging"));
-    } else if (await ui.confirm(tr("onboarding.runRealEndEndTestCallsCodex"))) {
+    } else if (await ui.confirm(tr("onboarding.runRealEndEndTestCallsCodex", backend))) {
       const interrupted = ['running', 'sending', 'unknown'].includes(state.verification?.status);
       if (interrupted && !await ui.confirm(tr("onboarding.previousTestOutcomeUnconfirmedCheckFeishuFirst"))) return result;
       const candidate = await waitForPairing(subscribe, ui, config.feishu.allowedUserIds);
@@ -147,10 +162,10 @@ export async function onboard(file: string, ui: Prompter, overrides: Partial<Ini
       const uuid = randomUUID();
       state.verification = { status: 'sending', inputMessageId: candidate.messageId, uuid }; checkpoint('verification');
       let receipt: string;
-      try { receipt = await connection.send(candidate.chatId, tr("onboarding.namoSetupVerifiedMessageReceivedCodexExecution"), uuid); }
+      try { receipt = await connection.send(candidate.chatId, tr("onboarding.namoSetupVerifiedMessageReceivedCodexExecution", backend), uuid); }
       catch { state.verification.status = 'unknown'; checkpoint('verification'); throw new Error(tr("onboarding.testReplyDeliveryUnconfirmedCheckFeishuFirst")); }
       state.verification = { status: 'complete', inputMessageId: candidate.messageId, receipt, uuid }; checkpoint('complete');
-      result.verified = true; ui.info(tr("onboarding.feishuInboundCodexExecutionFeishuSendReceipt"));
+      result.verified = true; ui.info(tr("onboarding.feishuInboundCodexExecutionFeishuSendReceipt", backend));
     } else ui.info(tr("onboarding.endEndDeliveryNotVerifiedYetRun"));
   } finally { connection?.close(); releaseReceiver?.(); releaseData(); }
   if (result.configured) {

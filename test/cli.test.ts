@@ -8,6 +8,7 @@ import { request } from 'node:http';
 import { once } from 'node:events';
 import { startDocs } from '../src/docs-site.js';
 import { initialConfig, onboard, type InitDeps } from '../src/onboarding.js';
+import { resolveAgent } from '../src/agent-registry.js';
 test('new installations enable progress cards without altering legacy defaults',()=>{
  assert.equal(initialConfig('/tmp/namo-config-test/config.json').feishu.cards,true);
 });
@@ -155,6 +156,25 @@ test('fresh init creates private config and completes guided setup without devel
   f.ui.confirm=async label=>!label.includes('允许修改')&&!label.includes('命令联网')&&!label.includes('后台服务')&&!label.includes('再配对');
   const result=await onboard(f.file,f.ui,f.deps);assert.equal(result.verified,true);
   const raw=readJson(f.file);assert.equal(directoryPrompts,2);assert.deepEqual(raw.codex.directories,[realpathSync(f.dir)]);assert.equal(raw.codex.defaultProject,undefined);assert.equal(raw.dataDir,join(f.dir,'namo-home','data'));assert.equal(raw.agent,'codex');assert.equal(raw.codex.sandbox,'workspace-write');assert.deepEqual(raw.feishu.allowedUserIds,['ou_owner']);
+});
+test('fresh init can select Claude Code as its only configured backend', async t => {
+  const f = fixture(t); rmSync(f.file);
+  const project = join(f.dir, 'project'); mkdirSync(project);
+  f.ui.text = async (label, initial, secret) => {
+    if (label.includes('默认执行器')) return 'claude';
+    if (label.startsWith('Claude Code')) return process.execPath;
+    if (label.startsWith('允许 Agent')) return project;
+    if (label === 'App ID') return 'cli_aaaaaaaaaaaaaaaa';
+    return secret ? 'fixture-secret' : initial ?? '';
+  };
+  f.deps.probe = async config => {
+    assert.equal(resolveAgent(config).adapter, 'claude');
+    assert.equal(resolveAgent(config).bin, process.execPath);
+    return [];
+  };
+  const result = await onboard(f.file, f.ui, f.deps);
+  assert.equal(result.verified, true);
+  assert.equal(resolveAgent(loadConfig(f.file)).id, 'claude');
 });
 test('aborting pairing leaves no authorized identity and releases both receiver locks',async t=>{
   const f=fixture(t);const abort=new AbortController();f.ui.signal=abort.signal;

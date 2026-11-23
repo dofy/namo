@@ -1,6 +1,6 @@
 # 技术实现
 
-Namo 负责身份、权限、任务调度和交付，官方 Codex app-server 负责推理与工具执行。当前只支持 Codex；其他 Agent 仅保留内部扩展接口。
+Namo 负责身份、权限、任务调度和交付。执行器注册表将每个任务绑定到官方 Codex app-server 或 Claude Code CLI。
 
 技术栈：TypeScript、Node.js 24.15+、SQLite、飞书官方 SDK；本地 UI 使用 React、Radix Themes、Lucide 和 Vite。当前 schema 为 16：表与索引集中在 [schema.ts](../src/schema.ts)，初始化和版本检查集中在 [schema-migrations.ts](../src/schema-migrations.ts)。
 
@@ -24,10 +24,8 @@ flowchart TB
     DB[(SQLite)]
   end
 
-  subgraph Codex["官方 Codex"]
-    Agent[app-server<br/>推理与工具调用]
-    Sandbox[沙箱<br/>授权目录与 Skills]
-  end
+  Agent[Codex app-server 或 Claude Code CLI<br/>推理与工具调用]
+  Sandbox[执行器权限控制<br/>授权目录与工具]
 
   Feishu --> In --> Queue --> Runner --> Agent
   Agent <--> Sandbox
@@ -42,9 +40,9 @@ flowchart TB
   In & Queue & Runner & Receipts & Wait & Out & Memory -.-> DB
 ```
 
-工作线关联连续任务；一次任务可包含多个等待 / 恢复运行。聊天、工作线、任务与 Codex 原生 session 分别保存，不能互相当作身份或权限凭证。
+工作线关联连续任务。一次任务可包含多个等待或恢复运行。聊天、工作线、任务与执行器原生 session 分别保存。通过 `/agent` 切换时，Namo 按当前用户和聊天范围恢复所选执行器的工作线，任务保留创建时的执行器绑定。
 
-消息先持久化再确认收件；调度器安排独立 runner，由 Codex 在沙箱中推理和使用获准目录、Skills。MCP 和 GitHub 请求经 Namo 宿主管理的工具访问，宿主保管凭据并记录调用回执。需要用户回答或外部条件时，任务进入持久等待，满足条件后再恢复。结果和证据先保存，再排队投递到飞书；模型完成、平台接受和用户实际收件是不同的事实。
+消息先持久化再确认收件，调度器安排独立 runner。Codex 在沙箱中使用获准目录和 Skills，MCP 和 GitHub 请求经宿主管理的工具访问。Claude Code 通过受限 CLI 使用授权目录内的文件工具。Codex 任务需要用户回答或外部条件时可进入持久等待，满足条件后再恢复。结果和证据先保存，再排队投递到飞书。模型完成、平台接受和用户实际收件是不同的事实。
 
 ## 模块与约束
 
@@ -53,6 +51,7 @@ flowchart TB
 | 入站与调度 | [engine](../src/engine.ts)、[tasks](../src/tasks.ts) | 先落库再确认；同聊天串行、全局限流、重叠真实目录互斥 |
 | 独立执行 | [runner](../src/runner.ts)、[worker](../src/runner-worker.ts) | 唯一运行归属；接收端重启后关联原运行，失联不重启模型；取消只停止所属进程组 |
 | Codex 协议 | [connection](../src/codex-connection.ts)、[runtime](../src/runtime.ts) | 官方 provider、独立认证、目录白名单；修订回执未知时不自动重送 |
+| Claude Code 协议 | [claude-runtime](../src/claude-runtime.ts)、[agent-registry](../src/agent-registry.ts) | 独立认证与会话，受限文件工具，使用明确的 session ID 续接，取消和超时停止所属进程组 |
 | 受限浏览器原型 | [ego-browser-prototype](../src/ego-browser-prototype.ts)、[worker](../src/runner-worker.ts) | 私聊配对用户逐任务批准或显式持久授权；固定操作、宿主持有空间绑定；能力外操作和结果不明均不自动执行或重试 |
 | 人工 / 外部等待 | [waits](../src/waits.ts)、[external-waits](../src/external-waits.ts) | 等待释放执行资源，保留聊天顺序；回答绑定身份和版本；GitHub 固定 HEAD，恢复只消费一次 |
 | 身份与资源 | [access](../src/access.ts)、[path-policy](../src/path-policy.ts)、[skill-access](../src/skill-access.ts) | 组织准入保留；已准入成员共享写目录与 MCP；续接与交付重验权限；Skills 保留个人启停设置 |
@@ -89,7 +88,7 @@ flowchart TB
 
 **上下文。** 每次运行冻结输入、可写目录、权限、助手设置和记忆版本。普通配置保存不改变既有运行及已创建的排队任务；接收器暂缓创建新任务，待旧队列完成后自动切换配置并处理已持久化的新请求。仅默认模型变化保留原生上下文；目录或执行策略变化时，在同一工作线内重建模型会话并携带有界历史摘录，旧任务保持原记录；组织授权撤销仍会阻断执行及交付。worker 通过私有管道接收生效配置，模型不继承宿主飞书 / GitHub 凭据。
 
-**记忆。** 默认在前台任务空闲时，从直接用户消息提取有证据的长期事实；独立临时 Codex 轮次关闭外部工具、hooks、插件及沙箱网络。`global / local` 知识层级与 `shared / private / chat` 披露范围、来源目录授权分别检查；全局存储不代表公开。临时要求不写长期记忆，迁移候选须人工启用。既有 session 与历史副本不会随删除自动清除。
+**记忆。** 前台任务空闲时，服务的默认执行器从直接用户消息提取有证据的长期事实。提取使用独立临时会话并关闭工具和自定义扩展。两个执行器共用记忆库。`global / local` 知识层级与 `shared / private / chat` 披露范围、来源目录授权分别检查；全局存储不代表公开。临时要求不写长期记忆，迁移候选须人工启用。既有 session 与历史副本不会随删除自动清除。
 
 工作台按用户展示提取队列概况与最近 20 条记录，区分无可保存内容、候选未采用和执行失败。最多尝试三次，前台任务抢占不计失败；仅保存和展示已知错误类别，不暴露原始消息或 SDK 错误。
 

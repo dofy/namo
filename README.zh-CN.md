@@ -5,7 +5,7 @@
 <h1 align="center">Namo</h1>
 
 <p align="center"><strong>住在本地，帮你把事情做完的小狐狸。</strong><br />
-面向飞书与 Lark、由 Codex 驱动的自托管 AI 工作伙伴。</p>
+面向飞书与 Lark、支持 Codex 和 Claude Code 的自托管 AI 工作伙伴。</p>
 
 <p align="center"><a href="README.md">English</a> · <strong>简体中文</strong><br />
 <a href="https://github.com/dofy/namo">GitHub</a> · <a href="https://github.com/dofy/namo/issues">问题反馈</a></p>
@@ -18,20 +18,24 @@ Namo 把 AI 助手带进日常工作的对话中。给它发一条消息，或�
 - **处理项目工作**：使用你授权的目录和连接服务，包括 GitHub、远程 MCP 和可信的本地 stdio MCP 工具。
 - **跟踪工作进展**：在本地工作台查看任务、会话、执行证据和定时任务，管理设置。
 - **记住有用的上下文**：按需设置助手档案和范围记忆，在不同对话中使用相关信息。
-- **运行在自己的机器上**：任务状态保存在本地，模型推理使用官方 Codex 服务。
+- **运行在自己的机器上**：任务状态保存在本地，执行使用官方 Codex 或 Claude Code CLI。
 
 Namo 目前处于早期可用阶段，需要你自行托管和维护。后台服务管理目前支持 macOS；其他平台可前台运行，但尚未完成完整平台验收。
 
 ## 快速开始
 
-准备 Node.js 24.15 或更高版本、官方 Codex CLI，以及启用机器人能力的飞书或 Lark 应用。安装并初始化 Namo：
+准备 Node.js 24.15 或更高版本、官方 Codex CLI 或 Claude Code 2.1.330 及以上版本，以及启用机器人能力的飞书或 Lark 应用。
 
 ```sh
 npm install -g @dofy/namo
 namo init
 ```
 
-初始化向导会引导你登录 Codex、设置可访问目录并连接机器人。向导支持安装 macOS 后台服务；如果没有安装，可用 `namo start` 前台运行。使用 `namo ui` 打开本地工作台。
+初始化向导会引导你选择执行器、登录、设置可访问目录并连接机器人。向导支持安装 macOS 后台服务，也可用 `namo start` 前台运行。
+
+运行 `namo ui`，在 **连接设置**启用 Claude Code 或修改默认执行器。使用 Claude 账号时运行 `namo login --profile claude`，使用自定义网关时填写网关 Base URL 和凭据。飞书或 Lark 私聊可用 `/agent claude` 和 `/agent codex` 切换，切回时续接该执行器自己的工作线。
+
+Codex 和 Claude Code 共用同一套按权限读取的长期记忆。Namo 空闲时，由默认执行器自动整理记忆。
 
 开发时可使用 pnpm 12.15.0 从源码构建：
 

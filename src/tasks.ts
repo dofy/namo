@@ -40,6 +40,7 @@ export class Tasks {
     this.store.clearThread(key); return true;
   }
   upgradeToolSession(t:Task):void {
+    if (this.selection(t.id)?.adapter === 'claude') return;
     const key=this.sessionKey(t), thread=this.store.thread(key);
     if(!thread || new Waits(this.store).resume(t) || this.store.db.prepare('SELECT 1 FROM settings WHERE key=?').get(`control-tools-v4-thread:${thread}`)) return;
     this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
@@ -90,6 +91,23 @@ export class Tasks {
       WHERE b.scopeKey=? AND b.ownerId=? AND w.chatKey=?`).get(scopeOf(m), m.senderId, m.chatKey) as unknown as Workstream | undefined;
   }
   reset(m: Incoming): void { this.store.db.prepare('DELETE FROM bindings WHERE scopeKey=? AND ownerId=?').run(scopeOf(m), m.senderId); }
+  private agentKey(m: Incoming): string { return `chat-agent:${JSON.stringify([m.chatKey, scopeOf(m), m.senderId])}`; }
+  agentPreference(m: Incoming): string | undefined {
+    const row = this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(this.agentKey(m));
+    return row ? String(row.value) : undefined;
+  }
+  switchAgent(m: Incoming, target: string, useDefault: boolean): void {
+    const key = this.agentKey(m);
+    if (useDefault) this.store.db.prepare('DELETE FROM settings WHERE key=?').run(key);
+    else this.store.db.prepare('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, target);
+    const current = this.binding(m);
+    if (current && (this.selection(current.id)?.profileId ?? 'codex') === target) return;
+    const workspace = this.store.db.prepare(`SELECT w.* FROM workstreams w LEFT JOIN execution_bindings a ON a.subjectId=w.id
+      WHERE w.chatKey=? AND w.scopeKey=? AND w.ownerId=? AND COALESCE(json_extract(a.selection,'$.profileId'),'codex')=?
+      ORDER BY w.rowid DESC LIMIT 1`).get(m.chatKey, scopeOf(m), m.senderId, target) as unknown as Workstream | undefined;
+    if (workspace) this.bind(m, workspace);
+    else this.reset(m);
+  }
   bind(m: Incoming, w: Workstream): void {
     if (w.ownerId !== m.senderId || w.chatKey !== m.chatKey) throw new Error('workstream_access_denied');
     this.store.db.prepare(`INSERT INTO bindings VALUES(?,?,?) ON CONFLICT(scopeKey,ownerId) DO UPDATE SET workstreamId=excluded.workstreamId`)
@@ -122,8 +140,10 @@ export class Tasks {
       let w = saved ? this.store.db.prepare('SELECT * FROM workstreams WHERE id=? AND ownerId=? AND chatKey=? AND scopeKey=?').get(saved.value,m.senderId,m.chatKey,scopeOf(m)) as unknown as Workstream|undefined
         : scheduleKey ? undefined : reference ? this.store.db.prepare('SELECT * FROM workstreams WHERE id=?').get(reference.workstreamId) as unknown as Workstream : this.binding(m);
       // Config changes apply only after the old queue drains. Preserve the Namo
-      // workstream and historical tasks while starting a fresh native session.
+      // workstream while refreshing its policy. A changed Claude profile starts
+      // a separate workstream so previous history cannot reach a different gateway.
       if (w && workspace.directories !== undefined && (w.cwd !== workspace.cwd || w.policyHash !== workspace.policyHash)
+        && (selection?.adapter !== 'claude' || this.selection(w.id)?.revision === selection.revision)
         && !this.store.db.prepare("SELECT 1 FROM tasks WHERE workstreamId=? AND state IN ('queued','running','waiting') LIMIT 1").get(w.id)) {
         const key=agentSessionKey(w.id,this.selection(w.id)),thread=this.store.thread(key);
         if(thread) {
@@ -154,7 +174,11 @@ export class Tasks {
       selection ??= previous;
       if (selection) this.store.db.prepare('INSERT OR IGNORE INTO execution_bindings(subjectId,selection) VALUES(?,?)').run(w.id, JSON.stringify(selection));
       if(scheduleKey) this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(scheduleKey,w.id);
-      else this.bind(m, w);
+      else {
+        const current = reference && this.binding(m);
+        const currentProfile = current ? this.selection(current.id)?.profileId ?? 'codex' : this.agentPreference(m);
+        if (!reference || !currentProfile || currentProfile === (selection?.profileId ?? 'codex')) this.bind(m, w);
+      }
       const tid = id('N');
       this.store.db.prepare(`INSERT INTO tasks(id,inboxKey,workstreamId,ownerId,chatKey,scopeKey,cwd,policyHash)
         VALUES(?,?,?,?,?,?,?,?)`).run(tid, m.key, w.id, m.senderId, m.chatKey, scopeOf(m), workspace.cwd, workspace.policyHash);
@@ -196,6 +220,8 @@ export class Tasks {
   amend(task: Task, m: Incoming): Revision {
     return this.store.transaction(() => {
       if (new Waits(this.store).current(task.id)) throw new TaskInputError('任务正在进入等待。请收到问题后引用回复，或询问任务状态。');
+      if (task.state === 'running' && this.selection(task.id)?.adapter === 'claude')
+        throw new TaskInputError('Claude Code 运行中暂不能追加要求。请等任务完成后续接，或先停止当前任务。');
       if(task.state==='running'&&(m.envelope?.materials?.length??0)>0)throw new TaskInputError('运行中的任务暂不支持追加附件。请等任务完成后重新发送图片和要求，或先停止任务再新建任务；这条附件未加入执行。');
       const version = task.inputVersion + 1;
       if (version > 100) throw new TaskInputError('本任务已达到 100 个输入版本，请明确发起后续任务。');

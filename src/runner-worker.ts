@@ -1,10 +1,10 @@
-import { selectAgent, selectedPolicyHash, AgentRegistryError, agentCodexConfig } from './agent-registry.js';
+import { selectAgent, selectedPolicyHash, AgentRegistryError } from './agent-registry.js';
 import { runtimeFor } from './agents.js';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { loadConfig, type Config } from './config.js';
-import { readWorkerSnapshot } from './runtime-config.js';
+import { readWorkerSnapshot, runtimeSecrets } from './runtime-config.js';
 import { digest } from './paths.js';
 import { makeRedactor } from './safety.js';
 import { Store } from './store.js';
@@ -68,10 +68,9 @@ async function main(): Promise<void> {
       const policy = executionPolicy(config.codex,config.feishu,store.get(task.inboxKey)!);
       const effectiveConfig = {...config,codex:policy};
       const selection = tasks.selection(task.id) ?? selectAgent(effectiveConfig, 'codex');
-      const selectedConfig = agentCodexConfig(effectiveConfig, selection);
       if (resolve(database) !== join(config.dataDir, 'bot.sqlite') || revision !== runnerJob(store, runId)!.configRevision
         || task.policyHash !== selectedPolicyHash(effectiveConfig, selection) || realpathSync(task.cwd) !== task.cwd) throw new RuntimeError('task_configuration_changed');
-      const redact = makeRedactor([config.feishu.appSecret,config.github?.token??'',...(config.mcpConnections??[]).map(c=>c.token)]);
+      const redact = makeRedactor(runtimeSecrets(config));
       const egoBin=join(homedir(),'.local','bin','ego-browser');
       const browserEligible=process.platform==='darwin' && existsSync(egoBin) && message.envelope?.chatType==='p2p'
         && message.envelope.kind==='instruction' && config.feishu.allowedUserIds.includes(message.senderId)
@@ -85,7 +84,7 @@ async function main(): Promise<void> {
         catch { return false; }
       };
       if (store.get(task.inboxKey)?.cancelRequested || abort.signal.aborted) throw new RuntimeError('cancelled');
-      write(() => { evidence = new EvidenceRecorder(store, runId, task.cwd, selectedConfig.denyPaths, redact); });
+      write(() => { evidence = new EvidenceRecorder(store, runId, task.cwd, policy.denyPaths, redact); });
       const steer = (): void => {
         if (!controls || steering || abort.signal.aborted) return;
         steering = (async () => {
@@ -128,7 +127,8 @@ async function main(): Promise<void> {
         threadId: tasks.thread(task), signal: abort.signal,
         onProcess: pid => write(() => { store.db.prepare('UPDATE runner_jobs SET runtimePid=? WHERE runId=?').run(pid, runId); runnerEvent(store, runId, 'runtime_started'); }),
         onThread: thread => write(() => {
-          if (!new Waits(store).resume(task)) store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`control-tools-v4-thread:${thread}`,'1');
+          if (selection.adapter === 'codex' && !new Waits(store).resume(task))
+            store.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run(`control-tools-v4-thread:${thread}`,'1');
           store.saveThread(tasks.sessionKey(task), thread); store.saveRun(task.inboxKey, thread); tasks.saveRun(runId, thread);
           runnerEvent(store, runId, 'thread_bound');
         }),

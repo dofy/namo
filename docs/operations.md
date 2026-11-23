@@ -7,7 +7,19 @@
 
 在容器或 SSH 终端中使用 `namo config` 配置模型、执行参数、目录、飞书消息与组织准入、GitHub、MCP、助手、用户档案和 Codex 更新；Docker 可运行 `docker exec -it <容器名> namo config`。菜单在支持的终端中原位刷新，退出后恢复原终端画面；使用方向键选择字段、Enter 编辑；表单底部的 `S` 保存、`Esc` 返回，返回时可放弃未保存的草稿；初次配置仍使用 `namo init`。配置、数据和独立 Codex 登录目录必须使用持久卷；Linux 服务以前台 `namo start` 运行，由容器管理器管理。保存后的生效状态以菜单显示为准，“等待生效”表示尚未生效。各表单在内存中保存草稿，可逐项编辑、清空或放弃，明确确认后才写入；MCP 连接支持新增、编辑、移除、测试及从 Codex 导入。工作台的浏览器主题属于浏览器本地偏好，不适用于终端。Codex 更新检查、升级和回退在后台执行；启动后保持终端打开，并重新进入更新菜单查看最终状态，退出管理进程会取消尚未完成的操作。
 
-Codex 可使用 `namo login --device-auth` 调用官方设备登录（已完成真实登录验证）；GitHub 本机登录先执行 `gh auth login`，也可在菜单中使用独立令牌。MCP OAuth 会在终端显示授权链接：在浏览器完成授权后，复制最终的 `http://127.0.0.1:.../api/mcp-oauth/callback?...` 地址并粘贴到终端的隐藏输入，即使浏览器提示无法连接也可复制。该地址含一次性授权码，请勿分享；授权流程保持 10 分钟有效。服务商仍需支持现有 OAuth 发现与动态注册要求；终端 MCP OAuth 尚未通过真实服务商验收。
+Codex 可使用 `namo login --profile codex --device-auth` 调用官方设备登录（已完成真实登录验证）；GitHub 本机登录先执行 `gh auth login`，也可在菜单中使用独立令牌。MCP OAuth 会在终端显示授权链接：在浏览器完成授权后，复制最终的 `http://127.0.0.1:.../api/mcp-oauth/callback?...` 地址并粘贴到终端的隐藏输入，即使浏览器提示无法连接也可复制。该地址含一次性授权码，请勿分享；授权流程保持 10 分钟有效。服务商仍需支持现有 OAuth 发现与动态注册要求；终端 MCP OAuth 尚未通过真实服务商验收。
+
+## Claude Code 与执行器切换
+
+安装官方 Claude Code CLI 2.1.330 或更新版本。在本机工作台 **连接设置**启用 Claude Code。使用 Claude 账号时，保存后运行页面提供的 `namo login --profile claude`，由官方 CLI 处理浏览器登录。也可以在 `namo init` 选择 `claude` 作为首个执行器。
+
+使用 Kaon Router 等支持 Anthropic Messages API 的自定义网关时，在「认证方式」选择与现有 Claude Code 相同的认证方式。原来使用 `ANTHROPIC_AUTH_TOKEN` 时选 Bearer Token，使用 `ANTHROPIC_API_KEY` 时选 API Key。填写原来的 `ANTHROPIC_BASE_URL`、网关凭据以及网关要求的模型 ID。地址支持 HTTPS 或本机回环 HTTP，填基础地址及网关要求的路径前缀。保存后可运行真实回复测试验证。凭据保存在 Namo 私有配置中，仅传给所选 Claude Code 进程。
+
+工作台的默认执行器用于没有个人选择的新工作线。飞书私聊中用 `/agent` 查看当前和可用的执行器，用 `/agent claude` 或 `/agent codex` 切换，用 `/agent default` 恢复服务默认。切回时会续接该执行器最近的工作线。请先完成或停止当前会话里尚未结束的任务。
+
+Claude Code 在 macOS 和 Linux 上支持文字、图片、授权目录内的文件搜索、读取和编辑。需要 Shell、Skills、Namo MCP、GitHub 工具、模型触发的持久等待或运行中追加指令时，可切换到 Codex。后台自动记忆跟随服务的默认执行器，两者共用记忆库。卡片标题仍使用 Codex。授权目录应与 Namo 的数据和登录目录分开，避免重叠。
+
+仅有终端时，可在配置文件的顶层加入 `"agents": {"defaultProfile":"codex","profiles":{"claude":{"adapter":"claude","enabled":true,"bin":"claude"}}}`。使用自定义网关时，在 Claude 配置中增加 `"gateway":{"baseUrl":"https://gateway.example/anthropic","auth":"bearer","secret":"替换为网关凭据"}`，API Key 则使用 `"auth":"api-key"`。将 `defaultProfile` 改为 `claude` 可让新工作线默认使用 Claude Code。
 
 ## 配置与权限
 
@@ -115,7 +127,7 @@ macOS 上安装并完成 Ego Lite 初始化后，已配对用户在私聊中请�
 
 组织模式下，`codex.allowedModels` 可列出私聊允许选择的模型 ID；缺省或空数组只允许跟随服务默认模型。群聊任务使用服务默认模型。已有个人模型偏好不会被删除，但不在允许列表内时不会用于新任务；已接受任务的模型保持原样。
 
-`codex.dailyTurnLimit` 可设置每天（UTC）允许启动的模型轮次数，包含前台任务、后台记忆提取和卡片标题总结；`0` 表示不限。组织模式缺省为 100，非组织模式缺省不限。达到上限的任务保留排队并告知用户，下一 UTC 日自动继续；记忆提取也会等待，标题则直接使用截取内容。该计数不是 token、费用或账单统计，实际费用仍以 Codex 账户为准。
+`codex.dailyTurnLimit` 可设置每天（UTC）允许启动的模型轮次数，包含前台任务、后台记忆提取和卡片标题总结；`0` 表示不限。组织模式缺省为 100，非组织模式缺省不限。达到上限的任务保留排队并告知用户，下一 UTC 日自动继续；记忆提取也会等待，标题则直接使用截取内容。该计数只记录轮次，实际费用以处理请求的服务为准。
 
 任务卡片先显示任务和结果的简短截取。若服务账号的模型目录包含受支持的小模型，Namo 可在有空闲并发名额时异步生成标题；模型不可用、超时、额度不足或前台任务需要名额时保留截取标题，不阻塞任务或回复。模型目录只是候选列表，不保证账号对每个模型有推理权限。每个任务的开始和完成标题各最多尝试一次。
 

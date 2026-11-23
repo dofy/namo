@@ -12,6 +12,8 @@ import { runnerJob, runnerEvent, reconcileRunner } from './runner-store.js';
 import { classifyControl } from './control-classifier.js';
 import { summarizeTitle } from './title-summary.js';
 import { saveRunImages } from './image-inputs.js';
+import { runtimeFor } from './agents.js';
+import { agentCodexConfig, selectAgent } from './agent-registry.js';
 
 /** The receiver only observes. The detached worker owns the model and durable result. */
 export class RunnerRuntime implements Runtime {
@@ -19,7 +21,13 @@ export class RunnerRuntime implements Runtime {
   constructor(private store: Store, private config: Config) {}
   classifyControl(input: Parameters<typeof classifyControl>[1], signal:AbortSignal) {return classifyControl(this.config.codex,input,signal);}
   summarizeTitle(input: Parameters<typeof summarizeTitle>[1],signal:AbortSignal) {return summarizeTitle(this.config.codex,input,signal);}
-  extractMemory(input: AutoMemoryInput, signal: AbortSignal): Promise<unknown> { return extractConversationMemory(this.config.codex,input,signal); }
+  async extractMemory(input: AutoMemoryInput, signal: AbortSignal): Promise<unknown> {
+    const selection = selectAgent(this.config);
+    if (selection.adapter === 'codex') return extractConversationMemory(agentCodexConfig(this.config, selection), input, signal);
+    const runtime = runtimeFor(this.config, selection);
+    if (!runtime.extractMemory) throw new RuntimeError('memory_extraction_disconnected');
+    return runtime.extractMemory(input, signal);
+  }
   reservations(): { runId: string; chatKey: string; cwd: string; slotKey: string;paths:string[] }[] {
     const rows=this.store.db.prepare(`SELECT j.runId,t.id taskId,t.chatKey,t.cwd,t.scopeKey,t.ownerId,i.envelope FROM runner_jobs j JOIN task_runs r ON r.id=j.runId
       JOIN tasks t ON t.id=r.taskId JOIN inbox i ON i.key=t.inboxKey WHERE j.state IN ('starting','running','lost')`).all();

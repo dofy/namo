@@ -5,14 +5,14 @@ import { probeAgent, liveAgentTest, type Check } from './agents.js';
 import { FeishuSetupConnection } from './feishu-setup.js';
 import { serviceStatus } from './service.js';
 
-export async function doctor(file: string, live = false): Promise<Check[]> {
+export async function doctor(file: string, live = false, profile?: string): Promise<Check[]> {
   const checks: Check[] = [{ id: 'node', status: 'ok', message: `Node ${process.version}` }];
   if (!existsSync(file)) return [...checks, { id: 'config', status: 'fail', message: tr("doctor.noConfiguration", file), next: tr("doctor.runNamoInitUseConfigSelectExisting") }];
   let c;
   try { c = loadConfig(file); }
   catch { return [...checks, { id: 'config', status: 'fail', message: tr("doctor.configurationInvalidUnreadableReferencesMissingDirectoryDirectory"), next: tr("doctor.runNamoInitFixSettingsConfigurationContents") }]; }
   checks.push({ id: 'config', status: 'ok', message: tr("doctor.configuration", c.file) });
-  checks.push(...await probeAgent(c));
+  checks.push(...await probeAgent(c, profile));
   const connection = new FeishuSetupConnection(c.feishu);
   try {
     const valid = !!c.feishu.appId && !!c.feishu.appSecret && await connection.credentials();
@@ -31,7 +31,7 @@ export async function doctor(file: string, live = false): Promise<Check[]> {
     if (checks.some(c => c.id.startsWith('agent.') && c.status === 'fail')) checks.push({ id: 'agent.inference', status: 'fail', message: tr("doctor.agentPrerequisitesFailedModelWasNotCalled") });
     else {
       try {
-        const matched = await liveAgentTest(c);
+        const matched = await liveAgentTest(c, profile);
         checks.push({ id: 'agent.inference', status: matched ? 'ok' : 'fail', message: tr(matched ? 'doctor.replyVerified' : 'doctor.replyMismatch') });
       }
       catch { checks.push({ id: 'agent.inference', status: 'fail', message: tr("doctor.realAgentCallFailedCheckAccountQuota") }); }

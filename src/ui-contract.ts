@@ -30,9 +30,16 @@ export interface ConfigValues {
 }
 export interface McpConnectionView { id:string; type:'remote'|'stdio'; url:string; command?:string; args?:string[]; oauthScope?:string; ownerUserId?:string; credentialConfigured:boolean; credentialSource?:'oauth' }
 export interface McpConnectionPatch { id:string; type:'remote'|'stdio'; url:string; command?:string; args?:string[]; oauthScope?:string; ownerUserId?:string; newToken?:string; clearToken?:boolean }
+export interface ClaudeGatewayView { baseUrl: string; auth: 'bearer' | 'api-key' }
+export interface AgentConnectionView { id: string; adapter: 'codex' | 'claude'; label: string; enabled: boolean; bin: string; model: string; gateway?: ClaudeGatewayView }
+export interface AgentConfigPatch {
+  defaultAgentProfile?: string;
+  claudeCode?: { enabled: boolean; bin: string; model: string; gateway?: (ClaudeGatewayView & { newSecret?: string }) | null };
+}
 export interface ConfigView {
   revision: string;
   mcpConnections: McpConnectionView[];
+  agentConnections?: { defaultProfile: string; profiles: AgentConnectionView[] };
   valid: boolean;
   application: 'stopped' | 'unknown' | 'applied' | 'pending';
   automaticConfiguration?:boolean;
