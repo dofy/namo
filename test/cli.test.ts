@@ -66,6 +66,27 @@ test('CLI keeps lifecycle commands and rejects invalid arguments before loading 
  assert.match(run('init','--lang','zh-CN').stderr,/交互终端/);
  assert.match(run('--config',join(dir,'other.json'),'ui').stderr,/No configuration/);
 });
+test('Ctrl+C cancels a pending onboarding prompt', { timeout: 5000 }, async t => {
+  const module = new URL('../src/prompts.js', import.meta.url).href;
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', `
+    import { Cancelled, TerminalPrompter } from ${JSON.stringify(module)};
+    const prompt = new TerminalPrompter();
+    try {
+      await prompt.text('Enter credentials', '', true);
+      process.exitCode = 1;
+    } catch (error) {
+      if (!(error instanceof Cancelled) || !prompt.signal.aborted) throw error;
+    } finally {
+      prompt.close();
+    }
+  `], { stdio: ['pipe', 'pipe', 'inherit'] });
+  t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
+  const exited = once(child, 'close');
+  const [output] = await once(child.stdout, 'data');
+  assert.match(String(output), /Enter credentials/);
+  child.stdin.end('\x03');
+  assert.deepEqual(await exited, [0, null]);
+});
 test('service render uses explicit installed entry and private config references without secrets',t=>{
  const dir=mkdtempSync(join(tmpdir(),'namo-service-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const file=join(dir,'config.json');const raw=initialConfig(file, file.slice(0, file.lastIndexOf('/')));raw.feishu.appSecret='SECRET_MUST_NOT_APPEAR';atomicJson(file,raw);
