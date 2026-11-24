@@ -9,6 +9,7 @@ import { Engine } from '../src/engine.js';
 import { Schedules } from '../src/schedules.js';
 import { waitFor } from './helpers.js';
 import { Tasks } from '../src/tasks.js';
+import { Recovery } from '../src/recovery.js';
 import { loadConfig } from '../src/config.js';
 
 function message(key:string,text:string,senderId='user'):Incoming {return {key,messageId:key,chatKey:'chat',chatId:'chat',senderId,text,envelope:{version:1,type:'text',kind:'instruction',chatType:'p2p',scopeKey:'chat',materials:[],limitations:[]}};}
@@ -27,6 +28,50 @@ test('schedules are owned, scoped, durable and missed occurrences are coalesced'
  schedules.due(first+5*86400000,()=>{count++;});assert.equal(count,1);
  assert.match(schedules.command(message('resume',`/schedule resume ${id}`),()=>({}),first+5*86400000)!,/恢复/);
  assert.equal(store.db.prepare('SELECT nextAt FROM schedules WHERE id=?').get(id)?.nextAt,first+6*86400000);
+});
+
+test('a quoted pause notice identifies the schedule and explains its outstanding delivery before resuming', t => {
+  const dir=mkdtempSync(join(tmpdir(),'namo-schedule-'));
+  const store=new Store(join(dir,'db'));
+  t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true});});
+  const engine=new Engine(store,{async run(){throw Error('unexpected model call');}},
+    {async send(){throw Error('unexpected send');}},{dataDir:dir,concurrency:1});
+  const source=message('create','/schedule add reminder daily 2099-01-01T09:00+08:00 report');
+  engine.accept(source);
+  const id=String(store.db.prepare('SELECT id FROM schedules').get()!.id);
+  store.db.prepare("UPDATE schedules SET state='paused' WHERE id=?").run(id);
+  const occurrence=message(`schedule:${id}:1`,'report');
+  store.enqueue(occurrence);
+  store.claim(occurrence.key);
+  store.finish(occurrence.key,'timeout', 'turn_timeout');
+  const delivery=Number(store.db.prepare('SELECT id FROM outbox WHERE inboxKey=?').get(occurrence.key)!.id);
+  store.deliveryFailed(delivery,true,'feishu_transport_unknown');
+  const alert=message(`schedule-alert:${id}:2`,'');
+  store.enqueue(alert);
+  store.claim(alert.key);
+  store.finish(alert.key,'pause notice');
+  const alertOutput=Number(store.db.prepare('SELECT id FROM outbox WHERE inboxKey=?').get(alert.key)!.id);
+  store.sending(alertOutput);
+  store.sent(alertOutput,'pause-platform-id');
+  function quoted(key:string,owner='user') {
+    const request=message(key,'恢复',owner);
+    request.envelope!.parentId='pause-platform-id';
+    engine.accept(request);
+    return String(store.db.prepare("SELECT content FROM outbox WHERE inboxKey=? AND kind='result'").get(key)?.content);
+  }
+  assert.doesNotMatch(quoted('foreign','other'),new RegExp(id+'|D-'+delivery));
+  const response=quoted('blocked');
+  assert.ok(response.includes(id) && response.includes('/issue D-'+delivery));
+  assert.equal(store.db.prepare('SELECT state FROM schedules').get()!.state,'paused');
+  assert.equal(store.db.prepare('SELECT state FROM outbox WHERE id=?').get(delivery)!.state,'unknown');
+  const recovery=new Recovery(store);
+  const actor={id:source.senderId,chatKey:source.chatKey};
+  const subject='D-'+delivery;
+  const {stamp}=recovery.inspect(subject,actor);
+  recovery.resolve({subject,stamp,action:'received',note:'verified in test chat',requestId:'receipt-check'},actor);
+  assert.match(quoted('resume'),/已恢复/);
+  assert.equal(store.db.prepare('SELECT state FROM schedules').get()!.state,'active');
+  assert.match(quoted('repeat'),/已在运行计划中/);
 });
 
 test('due reminders and tasks use durable outbox and ordinary task engine',async t=>{

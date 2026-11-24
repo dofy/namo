@@ -20,9 +20,20 @@ export class Schedules {
     return new Date(row.nextAt+minutes*60_000).toISOString().replace(/Z$/,offset);
   }
   command(m:Incoming, binding:()=>unknown, now=Date.now()):string | undefined {
-    if (!/^\/schedule(?:\s|$)/.test(m.text.trim())) return;
-    if (m.envelope?.chatType !== 'p2p' || !['text','post'].includes(m.envelope.type) || m.envelope.parentId || m.envelope.rootId || m.envelope.materials.length || m.envelope.limitations.length) return '请在机器人私聊中单独发送定时任务命令。';
-    const text=m.text.trim();
+    let text=m.text.trim();
+    const envelope=m.envelope;
+    const quotedResume=!!envelope?.parentId && /^(?:请|请帮我|帮我)?恢复(?:这(?:条|个)定时任务)?[。！!]?$/u.test(text);
+    if (!quotedResume && !/^\/schedule(?:\s|$)/.test(text)) return;
+    if (envelope?.chatType !== 'p2p' || !['text','post'].includes(envelope.type) || envelope.materials.length || envelope.limitations.length) {
+      return quotedResume ? undefined : '请在机器人私聊中单独发送定时任务命令。';
+    }
+    if (quotedResume) {
+      const alert=this.store.db.prepare(`SELECT inboxKey FROM outbox
+        WHERE platformId=? AND chatId=? AND kind='result' AND state='sent'`).get(envelope.parentId!,m.chatId);
+      const match=/^schedule-alert:(S-[A-F0-9]{12}):\d+$/.exec(String(alert?.inboxKey));
+      if (!match) return;
+      text=`/schedule resume ${match[1]}`;
+    } else if (envelope.parentId || envelope.rootId) return '请在机器人私聊中单独发送定时任务命令。';
     if (/^\/schedule(?:\s+list)?$/.test(text)) {
       const rows=this.store.db.prepare('SELECT * FROM schedules WHERE ownerId=? AND chatKey=? AND scopeKey=? AND state!=\'deleted\' ORDER BY createdAt DESC LIMIT 100').all(m.senderId,m.chatKey,scopeOf(m)) as unknown as Schedule[];
       return rows.length ? rows.map(r=>{const row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`schedule-status:${r.id}`);let detail='';
@@ -34,6 +45,11 @@ export class Schedules {
       const row=this.store.db.prepare("SELECT * FROM schedules WHERE id=? AND ownerId=? AND chatKey=? AND scopeKey=? AND state!='deleted'").get(change[2].toUpperCase(),m.senderId,m.chatKey,scopeOf(m)) as unknown as Schedule|undefined;
       if(!row)return '未找到属于本人的定时任务。';
       if(change[1]==='resume' && row.state==='completed')return '一次性任务已触发，请新建任务。';
+      if(change[1]==='resume') {
+        if(row.state==='active') return `${row.id} 已在运行计划中。`;
+        const blocker=this.priorIssue(row.id);
+        if(blocker) return `${row.id} 仍处于暂停状态。${blocker}`;
+      }
       let nextBinding=row.binding,rebound=false;
       if(change[1]==='resume' && row.state==='paused' && row.kind==='task') {
         try {
@@ -73,6 +89,22 @@ export class Schedules {
     const interval=add[2]==='daily'?86_400_000:add[2]==='weekly'?604_800_000:null;
     this.store.db.prepare('INSERT INTO schedules VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(id,m.senderId,m.chatKey,scopeOf(m),m.key,add[1],content,interval,next,'active',frozen,now);
     return `已创建 ${id} · ${add[1]==='reminder'?'提醒':'任务'} · ${add[2]}\n首次：${time}（${new Date(next).toISOString()}）\n内容：${content}\n服务需保持运行；错过多次时只补一次。`;
+  }
+  /** Use the same unresolved occurrence when explaining a pause and when dispatching. */
+  priorIssue(id:string):string|undefined {
+    const prefix=`schedule:${id}:`;
+    const row=this.store.db.prepare(`SELECT o.id AS deliveryId, t.id AS taskId FROM inbox i
+      LEFT JOIN tasks t ON t.id=i.taskId
+      LEFT JOIN outbox o ON o.inboxKey=i.key AND o.kind='result' AND o.state IN ('unknown','failed')
+      WHERE i.key>=? AND i.key<? AND (i.state IN ('delivery_unknown','delivery_failed')
+        OR i.error='interrupted' OR t.state IN ('interrupted','lost'))
+      ORDER BY (o.id IS NULL), i.seq, o.id LIMIT 1`).get(prefix,prefix+'\uffff');
+    if(!row) return;
+    if(row.deliveryId) {
+      const delivery=`D-${row.deliveryId}`;
+      return `请核对投递 ${delivery}。在私聊中单独发送 /issue ${delivery} 查看消息和处理选项。已收到可确认收到，若决定不再发送可选择放弃。核对后再引用暂停通知回复“恢复”。`;
+    }
+    return row.taskId ? `请先在工作台核对上次执行的任务 ${row.taskId}。` : '请先在工作台核对上次执行记录。';
   }
   /** Local owner changes are serialized with dispatch; stale UI state never overwrites a trigger. */
   changeFromWorkbench(id:string,expectedState:string,expectedNextAt:number,action:'pause'|'resume'|'delete',binding:(source:Incoming)=>unknown,now=Date.now()):void {
