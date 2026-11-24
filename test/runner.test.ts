@@ -22,7 +22,8 @@ import { Management } from '../src/management.js';
 import { Cards } from '../src/cards.js';
 import { queuedConfiguration, watchConfiguration } from '../src/config-reload.js';
 import { RuntimeHost } from '../src/runtime-host.js';
-import { setUserModel } from '../src/model-preferences.js';
+import { saveAgentModel } from '../src/agent-models.js';
+import { resolveAgent } from '../src/agent-registry.js';
 import { loginAgent, probeAgent, runtimeFor } from '../src/agents.js';
 import { memoryJobs } from '../src/business-storage.js';
 
@@ -54,6 +55,9 @@ createInterface({input:process.stdin}).on('line',line=>{
    const root=join(process.env.CODEX_HOME,'generated_images',thread);mkdirSync(root,{recursive:true});
    const savedPath=join(root,'image.png');writeFileSync(savedPath,Buffer.from([137,80,78,71,13,10,26,10,1]));
    send({method:'item/completed',params:{threadId:thread,turnId:turn,item:{id:'image',type:'imageGeneration',status:'completed',savedPath}}});
+  }
+  if(actual.messages[0].text==='我看看具体用的哪个 model'){
+   send({id:99,method:'item/tool/call',params:{namespace:null,tool:'manage_namo',threadId:thread,turnId:turn,callId:'model-check',arguments:{operation:'model'}}});return;
   }
   if(actual.messages[0].text==='control-check'){send({id:99,method:'item/tool/call',params:{namespace:null,tool:'manage_namo',threadId:thread,turnId:turn,callId:'control-check',arguments:{operation:'tasks'}}});return;}
   if(actual.messages[0].text==='schedule-check'){send({id:99,method:'item/tool/call',params:{namespace:null,tool:'manage_schedule',threadId:thread,turnId:turn,callId:'schedule-check',arguments:{operation:'create',kind:'task',frequency:'daily',time:'2099-01-01T09:00+08:00',content:'搜索项目并汇报'}}});return;}
@@ -139,8 +143,8 @@ else output({ type: 'result', subtype: 'success', is_error: false, session_id: i
   await assert.rejects(loginAgent(config, 'claude', true));
   await loginAgent(config, 'claude');
   assert.equal((await probeAgent(config, 'claude')).find(row => row.id === 'agent.auth')?.status, 'ok');
-  const engine = f.receiver(config), identity = { channel: 'feishu' as const, appId: 'app', userId: 'alice' };
-  setUserModel(f.store, identity, 'codex-only');
+  const engine = f.receiver(config);
+  saveAgentModel(config,resolveAgent(config),'codex-only');
   engine.start();
   const send = async (key: string, input: string) => {
     assert.equal(engine.accept(message(key, input)), true);
@@ -152,6 +156,7 @@ else output({ type: 'result', subtype: 'success', is_error: false, session_id: i
   const first = f.tasks.get((await send('claude-first', 'hello')).taskId!)!;
   assert.equal(f.tasks.selection(first.id)?.adapter, 'claude');
   assert.equal(f.tasks.model(first.id), 'sonnet');
+  assert.equal(f.tasks.reportedModel(first.id), 'claude-sonnet-test');
   const thread = f.tasks.thread(first);
   assert.match(thread ?? '', /^[0-9a-f-]{36}$/);
   await send('to-codex', '/agent codex');
@@ -341,15 +346,18 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
   assert.equal(f.tasks.selection(f.store.get('codex-with-memory')!.taskId!)?.adapter, 'codex');
 });
 
-test('queued task keeps its user model through detached worker startup', async t => {
-  const f=fixture(t), identity={channel:'feishu' as const,appId:'app',userId:'alice'}, receiver=f.receiver();
-  setUserModel(f.store,identity,'model-one');
-  receiver.accept(message('model-task','instant'));
-  setUserModel(f.store,identity,'model-two');
+test('detached worker uses and reports the queued task model even after the Agent setting changes', async t => {
+  const f=fixture(t), receiver=f.receiver(), agent=resolveAgent(f.config);
+  saveAgentModel(f.config,agent,'model-one');
+  receiver.accept(message('model-task','我看看具体用的哪个 model'));
+  saveAgentModel(f.config,agent,'model-two');
   receiver.start();
   await wait(()=>f.store.get('model-task')?.state==='replied');
   const rows=readFileSync(join(f.project,'model-params'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
   assert.deepEqual(rows,[{thread:'model-one'},{turn:'model-one'}]);
+  const {result}=JSON.parse(readFileSync(join(f.project,'mcp-discovery'),'utf8'));
+  assert.ok(result.startsWith('**本次任务模型**  `model-one`'));
+  assert.ok(result.includes('**新任务模型**  `model-two`'));
 });
 
 test('new workstreams register MCP discovery even before a connection exists', async t => {
@@ -465,10 +473,10 @@ test('restart recovers the queued configuration from the existing save backup',t
   receiver.accept(message('queued','instant'));
   writeFileSync(join(f.data,'health.json'),JSON.stringify({automaticConfiguration:true,configRevision:revision}));
   const manager=new Management(f.file,{status:()=>({running:false,mode:'stopped'})});
-  manager.save(manager.config().revision,{model:'next-model'});
+  manager.save(manager.config().revision,{concurrency:9});
   const recovered=queuedConfiguration(loadConfig(f.file));
-  assert.equal(recovered.revision,revision);assert.equal(recovered.config.codex.model,undefined);
-  assert.equal(loadConfig(f.file).codex.model,'next-model');
+  assert.equal(recovered.revision,revision);assert.equal(recovered.config.concurrency,4);
+  assert.equal(loadConfig(f.file).concurrency,9);
 });
 
 test('saving presentation settings does not cancel an organization worker; revocation still does', async t => {
@@ -515,13 +523,13 @@ test('unapplied execution defaults do not change a queued worker or withhold its
   const f = fixture(t), input = organization(f), receiver = f.receiver();
   receiver.accept(input);
   const manager = new Management(f.file, { status: () => ({ running: false, mode: 'stopped' }) });
-  manager.save(manager.config().revision, { model: 'pending-model', timeoutMs: 15000, progressIntervalMs: 9000 });
+  manager.save(manager.config().revision, { agentExecution:{profile:'codex',bin:f.config.codex.bin,timeoutMs:15000}, progressIntervalMs:9000 });
   receiver.start(); await wait(() => f.calls() === 1 || f.job()?.state === 'failed');
   assert.equal(f.job().state, 'running');
   writeFileSync(join(f.project, 'release'), 'release');
   await wait(() => f.store.get(input.key)?.state === 'replied');
   assert.equal(f.tasks.get(f.store.get(input.key)!.taskId!)?.state, 'succeeded');
-  assert.equal(f.config.codex.model, undefined); assert.equal(loadConfig(f.file).codex.model, 'pending-model');
+  assert.equal(f.config.codex.timeoutMs,12000); assert.equal(loadConfig(f.file).codex.timeoutMs,15000);
 });
 
 test('switching out of organization mode cannot deliver a saved result to a now-unpaired user', async t => {

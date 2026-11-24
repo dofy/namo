@@ -220,7 +220,6 @@ summary { cursor: pointer; font-size: 13px; color: var(--namo-link-muted); }
 .profile-scope-heading .ui-icon { margin-top: 2px; }
 .profile-scope-heading p { margin: 4px 0 0; }
 .profile-scoped-settings > .page-panel { margin-top: 16px; background: var(--namo-canvas); }
-.profile-model-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
 .profile-save { display: grid; gap: 14px; margin-top: 24px; padding: 20px 0; border-top: 1px solid var(--namo-border); }
 .profile-save p { margin: 0; }
 .profile-save-actions { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -537,8 +536,6 @@ html { scroll-padding-bottom:180px; }
 .settings-page .setting-options { margin-top: 12px; }
 .connections-page .connection { border: 0; padding: 0; margin: 0; align-items: flex-start; flex-wrap: wrap; }
 .connections-page .connection > .panel-heading { flex: 1 1 280px; }
-.default-executor { display: grid; grid-template-columns: minmax(0, 1fr) clamp(12rem, 25%, 17rem); align-items: center; gap: 12px 24px; }
-.default-executor p { margin-bottom: 0; }
 .executor-connections {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 370px), 1fr));
   align-items: start; gap: var(--section-gap); margin-top: var(--section-gap);
@@ -625,7 +622,6 @@ html { scroll-padding-bottom:180px; }
   .workbench-main .save-bar > button { flex: 1 1 auto; white-space: normal; height: auto; min-height: 32px; }
   .connections-page .connection { gap: 16px; }
   .connections-page .connection > .panel-heading { flex: 0 1 auto; width: 100%; }
-  .default-executor { grid-template-columns: minmax(0, 1fr); }
   .operations-panel .operations-info { grid-template-columns: minmax(0, 1fr); }
   .operations-panel .operations-info dd { margin-bottom: 8px; }
   .changelog-entry { grid-template-columns: minmax(0, 1fr); gap: 18px; }
@@ -637,12 +633,6 @@ html { scroll-padding-bottom:180px; }
 
 /* Model settings use the same selector and a compact, explicit source summary. */
 .model-select { min-width: 0; }
-.model-status { margin-bottom: 18px; padding: 14px 16px; background: var(--gray-a2); border-radius: 8px; }
-.model-status dl { margin: 0 0 8px; display: grid; gap: 8px; }
-.model-status dl > div { display: flex; flex-wrap: wrap; gap: 6px 16px; }
-.model-status dt { min-width: 7em; color: var(--gray-11); font-size: 13px; }
-.model-status dd { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
-.model-status p { margin: 0; }
 
 /* Settings tabs and shared compact option rows. */
 .settings-tabs > .rt-TabsList { background: var(--namo-surface); padding: 6px; border: 1px solid var(--panel-border); border-radius: 10px; box-shadow: none; }
@@ -898,3 +888,6 @@ html { scroll-padding-bottom:180px; }
 .directory-entry:hover, .directory-entry:focus-visible { background: var(--gray-a3); }
 .directory-entry span { overflow-wrap: anywhere; }
 .directory-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+
+.agent-model-field { min-width: 0; }
+.agent-model-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

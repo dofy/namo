@@ -79,13 +79,13 @@ interface ResultContext { source: 'main' | 'unrecorded'; model?: string; }
  * invented source or a model from the current configuration. */
 function resultContext(store: Store, task: Task): ResultContext | undefined {
   if (!['succeeded', 'needs_attention'].includes(task.state)) return;
-  const run = store.db.prepare(`SELECT state,threadId,turnId FROM task_runs
+  const run = store.db.prepare(`SELECT id,state,threadId,turnId FROM task_runs
     WHERE taskId=? ORDER BY startedAt DESC,rowid DESC LIMIT 1`).get(task.id);
   if (!run || run.state !== 'succeeded' || typeof run.threadId !== 'string' || !run.threadId
     || typeof run.turnId !== 'string' || !run.turnId) return { source: 'unrecorded' };
-  let model: unknown;
-  try { model = new Tasks(store).model(task.id); } catch { /* Legacy invalid metadata remains unknown. */ }
-  return { source: 'main', ...(typeof model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model) ? { model } : {}) };
+  let model: string | undefined;
+  try { model = new Tasks(store).reportedModel(task.id, String(run.id)); } catch { /* Legacy invalid metadata remains unknown. */ }
+  return { source: 'main', ...(model ? { model } : {}) };
 }
 export function renderTaskCard(t: Task, content: string, kind: string, part: number, actions: { action:string; token:string; label?: string }[] = [], totals?: ReturnType<typeof progressState>['totals'], context?: ResultContext, questions?: TaskWait['questions'], titleSummary?:string): object {
   // Retire the live progress surface without competing with the durable result.

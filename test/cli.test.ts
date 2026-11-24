@@ -218,7 +218,7 @@ test('terminal configuration saves only selected settings and preserves secrets 
  const answers=['1','model','concurrency','$save','0'],textAnswers=['example-model','12'],messages:string[]=[];
  const ui={select:async()=>{const answer=answers.shift()!;if(answer==='0')throw new Back();return answer;},text:async()=>textAnswers.shift()!,confirm:async()=>true,info:(s:string)=>messages.push(s),close:()=>{}};
  await terminalConfig(new Management(file),ui);
- const saved=readJson(file);assert.equal(saved.codex.model,'example-model');assert.equal(saved.concurrency,12);assert.equal(saved.feishu.appSecret,'private-secret');assert.deepEqual(saved.custom,{untouched:true});assert.ok(messages.every(s=>!s.includes('private-secret')));
+ const saved=readJson(file);assert.equal(saved.codex.model,undefined);assert.match(readFileSync(join(loadConfig(file).codex.home,'config.toml'),'utf8'),/model = "example-model"/);assert.equal(saved.concurrency,12);assert.equal(saved.feishu.appSecret,'private-secret');assert.deepEqual(saved.custom,{untouched:true});assert.ok(messages.every(s=>!s.includes('private-secret')));
 });
 
 test('terminal configuration Escape discards a partially entered draft',async t=>{
@@ -339,10 +339,10 @@ test('MCP removal confirmation names the selected connection',async()=>{
 test('profile actions open the chosen editor directly and return to the list',async()=>{
  const {editProfiles}=await import('../src/terminal-settings.js');const {Back,selectedAction}=await import('../src/config-prompts.js');
  const optionsSeen:string[][]=[],initials:(string|undefined)[]=[];let step=0;
- const ui={select:async(_label:string,options:import('../src/config-prompts.js').Option[],initial?:string)=>{optionsSeen.push(options.map(o=>o.value));initials.push(initial);if(step++===0)return selectedAction('model','user');throw new Back();},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
+ const ui={select:async(_label:string,options:import('../src/config-prompts.js').Option[],initial?:string)=>{optionsSeen.push(options.map(o=>o.value));initials.push(initial);if(step++===0)return selectedAction('profile','user');throw new Back();},text:async()=>'',confirm:async()=>false,info:(_message:string)=>{},close:()=>{}};
  const manager={profiles:()=>({available:true,configRevision:'r',entries:[{userId:'user',name:'Name'}]})} as unknown as import('../src/management.js').Management;
  await assert.rejects(editProfiles(manager,ui),Back);
- assert.ok(optionsSeen[1].includes('model'));assert.ok(optionsSeen[2].includes('user'));assert.equal(initials[2],'user');
+ assert.ok(optionsSeen[1].includes('name'));assert.ok(!optionsSeen[1].includes('model'));assert.ok(optionsSeen[2].includes('user'));assert.equal(initials[2],'user');
 });
 
 test('form keeps field selection when a save confirmation is declined',async()=>{

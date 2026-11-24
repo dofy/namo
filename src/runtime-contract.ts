@@ -11,6 +11,7 @@ export interface RunRequest {
   threadId?: string; cwd: string; prompt: string; signal: AbortSignal;
   model?: string | null;
   onModel?: (model: string) => void;
+  onRuntimeModel?: (model: string) => void;
   images?: readonly ImageInput[];
   onThread: (id: string) => void; onTurn: (id: string) => void;
   onReady?: (controls: RunControls) => void;

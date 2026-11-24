@@ -1,3 +1,4 @@
+import { isModelId } from './agent-models.js';
 import { deliveries } from './business-storage.js';
 import { legacyPolicyHash, agentSessionKey, type AgentSelection } from './agent-registry.js';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -126,6 +127,23 @@ export class Tasks {
   model(id: string): string | null | undefined {
     const row = this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`task-model:${id}`);
     return row ? JSON.parse(String(row.value)) as string | null : undefined;
+  }
+  recordRuntimeModel(runId: string, model: string): void {
+    if (isModelId(model)) this.store.db.prepare('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)').run(`run-model:${runId}`, model);
+  }
+  reportedModel(id: string, runId?: string): string | undefined {
+    const run = runId ?? this.store.db.prepare('SELECT id FROM task_runs WHERE taskId=? ORDER BY startedAt DESC,rowid DESC LIMIT 1').get(id)?.id;
+    const model = run ? this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(`run-model:${run}`)?.value : undefined;
+    if (isModelId(model)) return model;
+    const selected = this.model(id);
+    return isModelId(selected) ? selected : undefined;
+  }
+  latestModel(m: Incoming, profileId: string): string | undefined {
+    const task = this.store.db.prepare(`SELECT t.id,r.id AS runId FROM task_runs r JOIN tasks t ON t.id=r.taskId
+      LEFT JOIN execution_bindings a ON a.subjectId=t.id WHERE t.chatKey=? AND t.ownerId=? AND t.scopeKey=?
+      AND r.state='succeeded' AND COALESCE(json_extract(a.selection,'$.profileId'),'codex')=?
+      ORDER BY r.startedAt DESC,r.rowid DESC LIMIT 1`).get(m.chatKey,m.senderId,scopeOf(m),profileId);
+    return task ? this.reportedModel(String(task.id), String(task.runId)) : undefined;
   }
   freezeDefaultModel(id: string, model: string): void {
     this.store.db.prepare("UPDATE settings SET value=? WHERE key=? AND value='null'").run(JSON.stringify(model), `task-model:${id}`);

@@ -19,11 +19,14 @@ export function configFile(explicit?: string, cwd = process.cwd(), env = process
 export function readJson(file: string): any { return JSON.parse(readFileSync(file, 'utf8')); }
 export function digest(value: string): string { return createHash('sha256').update(value).digest('hex'); }
 export function atomicJson(file: string, value: unknown, exclusive = false): void {
+  atomicText(file, JSON.stringify(value, null, 2) + '\n', exclusive);
+}
+export function atomicText(file: string, value: string, exclusive = false): void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   if (existsSync(file) && lstatSync(file).isSymbolicLink()) throw new Error(tr("paths.refusingOverwriteSymlinkConfigurationSpecifyRealConfiguration"));
   const temp = `${file}.${randomUUID()}.tmp`;
   try {
-    writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+    writeFileSync(temp, value, { mode: 0o600, flag: 'wx' });
     const fd = openSync(temp, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); }
     if (exclusive) linkSync(temp, file);
     else renameSync(temp, file);

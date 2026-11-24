@@ -61,7 +61,7 @@ test('OAuth callback rejects a stale config, leaving prior authorization intact'
  const {dir}=storeFixture(t,'namo-oauth-stale-'),file=join(dir,'config.json');
  writeFileSync(file,JSON.stringify({dataDir:dir,feishu:{appId:'app',appSecret:'test-secret',allowedUserIds:['alice']},codex:{home:join(dir,'auth')},mcpConnections:[{id:'demo',type:'remote',url:resource,oauthScope:'read',token:''}]}));
  const manager=new Management(file),revision=manager.config().revision,fake=fakeOAuth();const flow=new McpOAuthFlow(manager,()=> 'http://127.0.0.1:45678',(url,cb,scope)=>beginMcpOAuth(url,cb,scope,fake.fetcher));
- const started=await flow.begin(revision,'demo'),state=new URL(started.url).searchParams.get('state')!;manager.save(revision,{model:'changed'});
+ const started=await flow.begin(revision,'demo'),state=new URL(started.url).searchParams.get('state')!;manager.save(revision,{concurrency:9});
  assert.equal(await flow.finish(new URLSearchParams({state,code:'synthetic-code',iss:issuer})),false);assert.equal(fake.counts.exchanged,0);
 });
 test('legacy Linear credentials are readable only for their original endpoint',async t=>{

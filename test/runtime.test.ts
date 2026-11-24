@@ -14,7 +14,7 @@ import { awaitMcpApproval, mcpApprovalCommand } from '../src/mcp-write-approval.
 const FAKE = `#!/usr/bin/env node
 import { createInterface } from 'node:readline';
 const write = m => process.stdout.write(JSON.stringify(m)+'\\n');
-let directoryMode=false,waitAfterLate=false,apiRegistered=false,mcpRegistered=false,scheduleRegistered=false,controlRegistered=false,threadModel,parallelMode='',parallelReplies=[];
+let directoryMode=false,waitAfterLate=false,apiRegistered=false,mcpRegistered=false,scheduleRegistered=false,controlRegistered=false,threadModel,modelInstructions,parallelMode='',parallelReplies=[];
 createInterface({input:process.stdin}).on('line', line=>{
  const m=JSON.parse(line);
  if([101,102,103].includes(m.id)&&!m.method){
@@ -35,7 +35,7 @@ createInterface({input:process.stdin}).on('line', line=>{
  if(m.method==='model/list')return write({id:m.id,result:{data:[{model:'default-model',isDefault:true}],nextCursor:null}});
  if(m.method==='thread/start' && new Set((m.params.dynamicTools??[]).map(t=>Object.hasOwn(t,'type')?'canonical':'legacy')).size>1)return write({id:m.id,error:{code:-32600,message:'mixed dynamic tool formats'}});
  if(m.method==='thread/start'){apiRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='github_api');mcpRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='mcp_read');scheduleRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='manage_schedule');controlRegistered=(m.params.dynamicTools??[]).some(t=>t.name==='manage_namo');}
- if(m.method==='thread/start'||m.method==='thread/resume'){threadModel=m.params.model;return write({id:m.id,result:{thread:{id:m.params.threadId||'thread-one'}}});}
+ if(m.method==='thread/start'||m.method==='thread/resume'){threadModel=m.params.model;modelInstructions=m.params.developerInstructions;return write({id:m.id,result:{thread:{id:m.params.threadId||'thread-one'}}});}
  if(m.method==='turn/interrupt'&&directoryMode){write({id:m.id,result:{}});return write({method:'turn/completed',params:{threadId:'thread-one',turn:{id:'turn-one',status:'interrupted',items:[]}}});}
  if(m.method==='turn/interrupt'&&waitAfterLate){
   write({id:m.id,result:{}});
@@ -62,6 +62,8 @@ createInterface({input:process.stdin}).on('line', line=>{
   }
   if(prompt==='check-model' && (threadModel!=='chosen-model'||m.params.model!=='chosen-model'))return write({id:m.id,error:{code:-32602,message:'model mismatch'}});
   if(prompt==='check-default' && (threadModel!=='default-model'||m.params.model!=='default-model'))return write({id:m.id,error:{code:-32602,message:'default mismatch'}});
+  if(['check-model','check-default','check-configured'].includes(prompt) && !modelInstructions.includes('本次任务模型（Namo 为本轮主线程选定）：'+threadModel))
+   return write({id:m.id,error:{code:-32602,message:'task model missing from developer instructions'}});
   if(prompt==='check-configured' && (threadModel!=='configured-model'||m.params.model!=='configured-model'))return write({id:m.id,error:{code:-32602,message:'configured default mismatch'}});
   if(prompt==='image-input' && (m.params.input.length!==2 || m.params.input[1].type!=='localImage' || !m.params.input[1].path.endsWith('/accepted.png')))
    return write({id:m.id,error:{code:-32602,message:'image input missing'}});

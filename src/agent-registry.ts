@@ -87,6 +87,10 @@ export function getAgentRegistry(c: AgentConfig): { defaultProfile: string; prof
   return { defaultProfile: c.agents?.defaultProfile ?? 'codex',
     profiles: [profile('codex',{adapter:'codex'}), ...Object.entries(c.agents?.profiles ?? {}).map(([id,p]) => profile(id,p))] };
 }
+export function agentLabel(profile: Pick<AgentProfile,'adapter'|'id'>): string {
+  const name = profile.adapter === 'claude' ? 'Claude Code' : 'Codex';
+  return (profile.adapter === 'claude' && profile.id === 'claude') || profile.id === 'codex' ? name : `${name} (${profile.id})`;
+}
 export function resolveAgent(c: AgentConfig, selection?: AgentSelection): AgentProfile {
   const registry = getAgentRegistry(c), id = selection?.profileId ?? registry.defaultProfile;
   const p = registry.profiles.find(p => p.id === id);

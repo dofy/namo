@@ -36,7 +36,7 @@ export const api = {
     mutation.action==='import'?mutation.input:mutation.action==='correct'?{id:mutation.id,version:mutation.version,text:mutation.text}:{id:mutation.id,version:mutation.version}}),
   session: (code: string) => request('/api/session', { code }),
   state: (signal?: AbortSignal) => request<ManagementState>('/api/state', undefined, signal),
-  models: (signal?: AbortSignal) => request<{id:string;name:string;isDefault:boolean}[]>('/api/models', undefined, signal),
+  models: (profile: string, signal?: AbortSignal) => request<{id:string;name:string;isDefault:boolean}[]>(`/api/models?profile=${encodeURIComponent(profile)}`, undefined, signal),
   codexUpdate: (signal?: AbortSignal) => request<CodexUpdateStatus>('/api/codex-update', undefined, signal),
   changeCodexUpdate: (configRevision: string, action: 'check' | 'upgrade' | 'automatic' | 'rollback', enabled?: boolean) =>
     request<CodexUpdateStatus>('/api/codex-update', { action, configRevision, ...(enabled === undefined ? {} : { enabled }) }),
@@ -48,7 +48,7 @@ export const api = {
   browseOptions: (signal?: AbortSignal) => request<BrowseOptions>('/api/browse-options', undefined, signal),
   task: (id: string, signal?: AbortSignal) => request<TaskDetail>(`/api/tasks/${encodeURIComponent(id)}`, undefined, signal),
   issue: (id: string, signal?: AbortSignal) => request<Issue>(`/api/issues/${encodeURIComponent(id)}`, undefined, signal),
-  save: (revision: string, patch: ConfigValues & { newSecret: string }) => request<ConfigView>('/api/config', { revision, patch }),
+  save: (revision: string, patch: Omit<ConfigValues, 'bin'|'timeoutMs'> & AgentConfigPatch & { newSecret: string }) => request<ConfigView>('/api/config', { revision, patch }),
   saveGitHub: (revision: string, patch: GitHubConfigPatch) => request<ConfigView>('/api/config', { revision, patch }),
   apply: (revision: string) => request<ApplyResult>('/api/apply', { revision, confirmed: true }),
   cancel: (task: TaskDetail) => request('/api/cancel', { id: task.id, inputVersion: task.inputVersion, requestId: crypto.randomUUID() }),
@@ -61,6 +61,6 @@ export const api = {
   approval: (input: ApprovalAction) => request<ApprovalView>('/api/approvals', input),
   inspectMigration: (sourceFile: string, sourceInstanceId: string) => request<MigrationInspection>('/api/migration-inspect', { sourceFile, sourceInstanceId }),
   saveProfile: (configRevision: string, profile: UserProfile, patch: ProfileValues) => request<UserProfile>('/api/profiles', { configRevision, userId: profile.userId, version: profile.version, patch }),
-  saveUserModel: (configRevision: string, profile: UserProfile, model: string) => request<{model:string}>('/api/user-model', {configRevision,userId:profile.userId,expected:profile.defaultModel ?? '',model}),
+  saveAgentModel: (revision: string, profile: string, expected: string, model: string) => request<{model:string}>('/api/agent-model', {revision,profile,expected,model}),
 };
 export const message = (error: unknown) => error instanceof Error ? error.message : tr("api.actionIncompletePleaseTryAgain");

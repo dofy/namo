@@ -1,3 +1,4 @@
+import { migrateAgentModels } from './agent-models.js';
 import { t as tr, withLocale } from './locale.js';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -112,7 +113,7 @@ async function main(): Promise<void> {
   let stopUpdates: (() => Promise<void>) | undefined;
   let reload:ReturnType<typeof watchConfiguration>|undefined;
   let health: Record<string, unknown> = { pid: process.pid, startedAt: new Date().toISOString(), ready: false, connection: 'connecting',
-    configRevision,managementVersion:2,automaticConfiguration:true,...(startupRelease ? { releaseId: startupRelease.id } : {}) };
+    configRevision,managementVersion:2,isolatedAgentModels:true,automaticConfiguration:true,...(startupRelease ? { releaseId: startupRelease.id } : {}) };
   const log = (event: string, fields: Record<string, unknown> = {}) => {
     if (['ready', 'stopped', 'feishu_connected', 'feishu_reconnecting', 'feishu_reconnected', 'feishu_connection_failed', 'feishu_startup_timeout'].includes(event)) {
       const connection = event === 'ready' || ['feishu_connected', 'feishu_reconnected'].includes(event) ? 'connected'
@@ -139,6 +140,7 @@ async function main(): Promise<void> {
     mkdirSync(config.codex.home, { recursive: true, mode: 0o700 });
     assertNoLegacyReceiver(config.feishu.appId);
     releaseReceiver = acquireLock(receiverDir(config.feishu.appId));
+    migrateAgentModels(config, profile => log('agent_model_migration_failed', {profile}));
     store = new Store(dbFile); store.bindAccount(config.feishu.appId);
     transport = new FeishuTransport(config.feishu, log);
     const sender=new Proxy(transport,{get(_target,key){const value=Reflect.get(transport!,key);return typeof value==='function'?value.bind(transport):value;}});

@@ -35,7 +35,7 @@ export async function terminalConfig(manager: Management, ui: ConfigPrompter): P
   for (;;) {
     ui.screen?.();
     const view: ConfigView = manager.config();
-    const values=[{applied:t('terminal.statusApplied'),pending:t('terminal.statusPending'),stopped:t('terminal.statusStopped'),unknown:t('terminal.statusUnknown')}[view.application],view.valid?t('terminal.valid'):t('terminal.invalid'),view.values.model||t('terminal.defaultModel'),String(view.values.concurrency),String((view.values.directories??[]).length),String(view.mcpConnections.length)];
+    const values=[{applied:t('terminal.statusApplied'),pending:t('terminal.statusPending'),stopped:t('terminal.statusStopped'),unknown:t('terminal.statusUnknown')}[view.application],view.valid?t('terminal.valid'):t('terminal.invalid'),view.agentConnections?.profiles.find(agent=>agent.id===view.agentConnections?.defaultProfile)?.model||t('terminal.defaultModel'),String(view.values.concurrency),String((view.values.directories??[]).length),String(view.mcpConnections.length)];
     if(ui.summary)ui.summary(([['terminal.summaryService','terminal.summaryConfig'],['terminal.summaryModel','terminal.summaryConcurrency'],['terminal.summaryDirectories','terminal.summaryMcp']] as const).map((labels,index)=>labels.map((label,column)=>[t(label),values[index*2+column]] as [string,string])));
     else ui.info(t('terminal.summary',...values));
     if (notice) { ui.info(notice); notice = ''; }

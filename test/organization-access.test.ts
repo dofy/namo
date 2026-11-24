@@ -15,7 +15,7 @@ import { assertReviewDelivery, reviewCoverageBrief } from '../src/github-review.
 import { selectAgent, selectedPolicyHash, agentCodexConfig } from '../src/agent-registry.js';
 import { Memories } from '../src/memory.js';
 import { memoryDirectories } from '../src/memory-access.js';
-import { setUserModel, userModel } from '../src/model-preferences.js';
+
 
 const f:Config['feishu']={appId:'app',appSecret:'fake',domain:'feishu',allowedUserIds:['legacy'],allowedChatIds:[],requireMention:true,access:{mode:'organization',tenantKey:'tenant'}};
 const event=(user='alice',tenant='tenant'):FeishuEvent=>({sender:{sender_type:'user',tenant_key:tenant,sender_id:{open_id:user}},message:{message_id:`message-${user}`,chat_id:'group',chat_type:'group',message_type:'text',content:'{"text":"@bot review PR"}',mentions:[{key:'@bot',id:{open_id:'bot'}}]}});
@@ -59,17 +59,20 @@ test('two organization members in one group get separate workspaces and model se
   assert.equal(rows.length,2);assert.notEqual(rows[0].cwd,rows[1].cwd);assert.notEqual(rows[0].workstreamId,rows[1].workstreamId);
   assert.equal(new Tasks(store).owned(String(store.db.prepare('SELECT id FROM tasks WHERE ownerId=?').get('alice')!.id),member('bob')),undefined);
 });
-test('organization model allowlist rejects arbitrary selections and group tasks use the service default',t=>{
+test('organization members can read shared models, but only paired users may change them',t=>{
  const {dir,store}=fixture(t),file=join(dir,'config.json');
  const raw={dataDir:dir,feishu:f,codex:{model:'service-model',allowedModels:['allowed-model']}};writeFileSync(file,JSON.stringify(raw));
  const c=parseConfig(raw,file),engine=new Engine(store,{async run(){throw Error('not started');}},{async send(){return 'id';}},c);
- const identity={channel:'feishu' as const,appId:'app',userId:'alice'};setUserModel(store,identity,'old-model');
  const dm={...member(),key:'model-denied',messageId:'model-denied',chatId:'dm',chatKey:'app:dm',text:'/model arbitrary',envelope:{...member().envelope!,chatType:'p2p' as const,scopeKey:'app:dm'}};
- engine.accept(dm);assert.equal(userModel(store,identity),'old-model');
- assert.match(String(store.db.prepare("SELECT content FROM outbox WHERE inboxKey='model-denied' AND kind='result'").get()?.content),/未在服务允许列表/);
- engine.accept({...dm,key:'model-allowed',messageId:'model-allowed',text:'/model allowed-model'});assert.equal(userModel(store,identity),'allowed-model');
+ engine.accept(dm);
+ assert.match(String(store.db.prepare("SELECT content FROM outbox WHERE inboxKey='model-denied' AND kind='result'").get()?.content),/仅本机已配对成员/);
+ engine.accept({...dm,key:'model-read',messageId:'model-read',text:'/model'});
+ const status=String(store.db.prepare("SELECT content FROM outbox WHERE inboxKey='model-read' AND kind='result'").get()?.content);
+ assert.ok(status.includes('**新任务模型**  `service-model`'));
+ assert.doesNotMatch(status,/设置此 Agent/);
+ engine.accept({...dm,senderId:'legacy',key:'model-allowed',messageId:'model-allowed',text:'/model shared-model'});
  const group=member();engine.accept(group);const task=new Tasks(store).get(store.get(group.key)!.taskId!)!;
- assert.equal(new Tasks(store).model(task.id),'service-model');
+ assert.equal(new Tasks(store).model(task.id),'shared-model');
 });
 test('revoked bot admission blocks cached review delivery',t=>{
   const{dir,store}=fixture(t);store.enqueue(member());const task=new Tasks(store).create(store.get(member().key)!,{cwd:dir,policyHash:'test'});

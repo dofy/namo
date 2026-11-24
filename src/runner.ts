@@ -1,3 +1,4 @@
+import { readAgentModel } from './agent-models.js';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -13,17 +14,17 @@ import { classifyControl } from './control-classifier.js';
 import { summarizeTitle } from './title-summary.js';
 import { saveRunImages } from './image-inputs.js';
 import { runtimeFor } from './agents.js';
-import { agentCodexConfig, selectAgent } from './agent-registry.js';
+import { agentCodexConfig, resolveAgent, selectAgent } from './agent-registry.js';
 
 /** The receiver only observes. The detached worker owns the model and durable result. */
 export class RunnerRuntime implements Runtime {
   readonly persistent = true;
   constructor(private store: Store, private config: Config) {}
-  classifyControl(input: Parameters<typeof classifyControl>[1], signal:AbortSignal) {return classifyControl(this.config.codex,input,signal);}
+  classifyControl(input: Parameters<typeof classifyControl>[1], signal:AbortSignal) {return classifyControl({...this.config.codex,model:readAgentModel(resolveAgent(this.config,selectAgent(this.config,'codex')))},input,signal);}
   summarizeTitle(input: Parameters<typeof summarizeTitle>[1],signal:AbortSignal) {return summarizeTitle(this.config.codex,input,signal);}
   async extractMemory(input: AutoMemoryInput, signal: AbortSignal): Promise<unknown> {
     const selection = selectAgent(this.config);
-    if (selection.adapter === 'codex') return extractConversationMemory(agentCodexConfig(this.config, selection), input, signal);
+    if (selection.adapter === 'codex') return extractConversationMemory({...agentCodexConfig(this.config, selection), model:readAgentModel(resolveAgent(this.config,selection))}, input, signal);
     const runtime = runtimeFor(this.config, selection);
     if (!runtime.extractMemory) throw new RuntimeError('memory_extraction_disconnected');
     return runtime.extractMemory(input, signal);

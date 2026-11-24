@@ -2,9 +2,9 @@ import { t as tr, type MessageKey } from '../i18n';
 import { Icon, type IconName } from '../Icon';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, Dialog, Tabs, Text, TextField } from '@radix-ui/themes';
-import type { ConfigValues, ConfigView, ProfileState } from '../../src/ui-contract';
+import type { AgentConfigPatch, AgentConnectionView, ConfigValues, ConfigView } from '../../src/ui-contract';
 import { api, message } from '../api';
-import { ConfirmButton, Field, Notice } from '../components';
+import { Choice, ConfirmButton, Field, Notice } from '../components';
 import { PageSection } from '../components/PageSection';
 import { SettingToggle } from '../components/SettingToggle';
 import { ModelSelect } from '../components/ModelSelect';
@@ -20,21 +20,73 @@ const messageOptions: { key: MessageOption; icon: IconName; title: MessageKey; d
 ];
 
 interface Draft extends Omit<ConfigValues, 'directories' | 'readPaths' | 'denyPaths' | 'timeoutMs' | 'concurrency' | 'progressDelayMs' | 'progressIntervalMs' | 'progressHeartbeatMs'> {
-  directories:string[]; readPaths:string; denyPaths:string; timeoutSeconds:string; concurrency:string; newSecret:string;
+  agentProfile?:string; directories:string[]; readPaths:string; denyPaths:string; timeoutSeconds:string; concurrency:string; newSecret:string;
   progressDelayMs:string;progressIntervalMs:string;progressHeartbeatMs:string;
 }
+function defaultAgent(config: ConfigView): AgentConnectionView | undefined {
+  return config.agentConnections?.profiles.find(agent => agent.id === config.agentConnections?.defaultProfile);
+}
 function fromConfig(config:ConfigView):Draft {
-  const v=config.values;
-  return {...v,directories:v.directories??[],readPaths:'',denyPaths:v.denyPaths.join('\n'),
-    timeoutSeconds:String(v.timeoutMs/1000),concurrency:String(v.concurrency),newSecret:'',
+  const {timeoutMs,...v}=config.values, agent=defaultAgent(config);
+  return {...v,agentProfile:agent?.id,bin:agent?.bin??v.bin,directories:v.directories??[],readPaths:'',denyPaths:v.denyPaths.join('\n'),
+    timeoutSeconds:String((agent?.timeoutMs??timeoutMs)/1000),concurrency:String(v.concurrency),newSecret:'',
     progressDelayMs:String(v.progressDelayMs??200),progressIntervalMs:String(v.progressIntervalMs??5000),progressHeartbeatMs:String(v.progressHeartbeatMs??30000)};
 }
-function toPatch(draft:Draft):ConfigValues&{newSecret:string} {
-  const {timeoutSeconds,...values}=draft;
-  return {...values,directories:draft.directories,
+function toPatch(draft:Draft, agent:AgentConnectionView|undefined): Omit<ConfigValues,'bin'|'timeoutMs'> & AgentConfigPatch & {newSecret:string} {
+  const {timeoutSeconds,agentProfile,bin,...values}=draft;
+  const timeoutMs=Number(timeoutSeconds)*1000;
+  const execution=agent && agentProfile===agent.id && (bin!==agent.bin || timeoutMs!==agent.timeoutMs)
+    ? {agentExecution:{profile:agentProfile,bin,timeoutMs}} : {};
+  return {...values,...execution,directories:draft.directories,
     sandbox:'workspace-write',allowLocalCommits:true,readPaths:[],denyPaths:draft.denyPaths.split('\n').map(x=>x.trim()).filter(Boolean),
-    concurrency:Number(draft.concurrency),timeoutMs:Number(timeoutSeconds)*1000,
-    progressDelayMs:Number(draft.progressDelayMs),progressIntervalMs:Number(draft.progressIntervalMs),progressHeartbeatMs:Number(draft.progressHeartbeatMs)};
+    concurrency:Number(draft.concurrency),progressDelayMs:Number(draft.progressDelayMs),
+    progressIntervalMs:Number(draft.progressIntervalMs),progressHeartbeatMs:Number(draft.progressHeartbeatMs)};
+}
+
+function AgentModelSetting({agent,revision,disabled,refresh,onDirtyChange}:{
+  agent:AgentConnectionView;revision:string;disabled:boolean;refresh:()=>Promise<unknown>;onDirtyChange:(dirty:boolean)=>void;
+}) {
+  const [edit,setEdit]=useState<{base:string;value:string}>();
+  const [confirmed,setConfirmed]=useState<{previous:string;value:string}>();
+  const [saving,setSaving]=useState(false), toast=useToast();
+  useEffect(()=>{
+    if(confirmed && agent.model!==confirmed.previous)setConfirmed(undefined);
+  },[agent.model,confirmed]);
+  const current=confirmed?.previous===agent.model ? confirmed.value : agent.model;
+  const value=edit?.value??current;
+  const dirty=!!edit && value.trim()!==current;
+  useEffect(()=>onDirtyChange(dirty),[dirty,onDirtyChange]);
+  function change(value:string) {
+    setEdit({base:edit?.base??current,value});
+  }
+  async function saveModel() {
+    if (!dirty || !edit || disabled || saving) return;
+    setSaving(true);
+    try {
+      const saved=await api.saveAgentModel(revision,agent.id,edit.base,value.trim());
+      setConfirmed({previous:agent.model,value:saved.model});setEdit(undefined);onDirtyChange(false);
+      toast(tr('model.saved'));
+      try {await refresh();} catch {toast(tr('settings.savedRefreshFailed'),true);}
+    } catch(error) {toast(message(error),true);}
+    finally {setSaving(false);}
+  }
+  const blocked=disabled||saving||!!agent.modelError;
+  return <div className="agent-model-field" onKeyDown={event=>{
+    if(event.key==='Enter' && event.target instanceof HTMLInputElement){event.preventDefault();if(!blocked)void saveModel();}
+  }}>
+    {agent.adapter==='codex'
+      ? <ModelSelect profile={agent.id} id="agent-model" label={tr('model.agentModel')} value={value} onChange={change} disabled={blocked}
+          inheritLabel={tr('model.runtimeDefault')} resetKey={current}/>
+      : <Field label={tr('model.agentModel')} htmlFor="agent-model"><TextField.Root id="agent-model" value={value} maxLength={128}
+          disabled={blocked} placeholder={tr('model.runtimeDefault')} onChange={event=>change(event.target.value)} /></Field>}
+    <Text as="p" size="1" color="gray">{tr('model.agentHelp')}</Text>
+    {agent.modelError && <Notice error>{agent.modelError}</Notice>}
+    {dirty && edit?.base!==current && <Notice>{tr('settings.configurationChangedAnotherPageProgramDraftPreserved')}</Notice>}
+    {dirty && <div className="agent-model-actions">
+      <Button type="button" disabled={blocked} loading={saving} onClick={()=>void saveModel()}>{tr('model.save')}</Button>
+      <Button type="button" variant="soft" color="gray" disabled={saving} onClick={()=>{setEdit(undefined);onDirtyChange(false);}}>{tr('settings.discardChanges')}</Button>
+    </div>}
+  </div>;
 }
 function DirectoryPicker({directories,onChange,onPicking}:{directories:string[];onChange:(value:string[])=>void;onPicking:(value:boolean)=>void}) {
   const [open,setOpen]=useState(false),[path,setPath]=useState<string|undefined>();
@@ -83,13 +135,15 @@ function DirectoryPicker({directories,onChange,onPicking}:{directories:string[];
     </Dialog.Root>
   </div>;
 }
-export function SettingsPage({ config, recoveryAvailable, refresh, notify, tab, onTabChange, operations }: {
+export function SettingsPage({ config, expired, recoveryAvailable, refresh, notify, tab, onTabChange, operations }: {
   tab: string; onTabChange: (tab: 'work' | 'feishu') => void; operations: ReactNode;
-  config: ConfigView; profiles?:ProfileState; recoveryAvailable: boolean; refresh: () => Promise<unknown>; notify: (text: string, error?: boolean) => void;
+  config: ConfigView; expired: boolean; recoveryAvailable: boolean; refresh: () => Promise<unknown>; notify: (text: string, error?: boolean) => void;
 }) {
   const [draft, setDraft] = useState(() => fromConfig(config)), [revision, setRevision] = useState(config.revision);
   const [dirty, setDirty] = useState(false), [saving, setSaving] = useState(false), [pickingDirectory,setPickingDirectory]=useState(false);
   const toast = useToast();
+  const agent = config.agentConnections?.profiles.find(profile=>profile.id===draft.agentProfile) ?? defaultAgent(config);
+  const [modelDirty,setModelDirty]=useState(false), [switching,setSwitching]=useState(false);
   const observedRevision = useRef(config.revision);
   const invalidField = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -107,11 +161,20 @@ export function SettingsPage({ config, recoveryAvailable, refresh, notify, tab, 
     observedRevision.current = config.revision;
   }, [config, dirty, saving, revision]);
   useEffect(() => {
-    if (!dirty) return;
+    if (!dirty && !modelDirty) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
     window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  }, [dirty,modelDirty]);
   function edit<K extends keyof Draft>(key: K, value: Draft[K]) { setDraft(d => ({ ...d, [key]: value })); setDirty(true); }
+  async function selectDefaultAgent(profile: string) {
+    if (dirty||modelDirty||switching||saving||expired) return;
+    setSwitching(true);
+    try {
+      const saved=await api.saveAgents(config.revision,{defaultAgentProfile:profile});reset(saved);
+      try {await refresh();} catch {toast(tr('settings.savedRefreshFailed'),true);}
+    } catch(error) {toast(message(error),true);}
+    finally {setSwitching(false);}
+  }
   return <div className="settings-page"><form noValidate hidden={tab !== 'work' && tab !== 'feishu' && !dirty} onSubmit={async event => {
     event.preventDefault(); if (saving||pickingDirectory) return;
     const invalid = event.currentTarget.querySelector<HTMLElement>('input:invalid, textarea:invalid, select:invalid');
@@ -128,27 +191,37 @@ export function SettingsPage({ config, recoveryAvailable, refresh, notify, tab, 
     }
     setSaving(true);
     try {
-      const saved = await api.save(revision, toPatch(draft)); reset(saved);
+      const saved = await api.save(revision, toPatch(draft,agent)); reset(saved);
       toast(tr("settings.configurationSavedPreviousValuesBackedUpApply"));
       try { await refresh(); } catch { toast(tr("settings.savedRefreshFailed"), true); }
     } catch (e) { toast(message(e), true); } finally { setSaving(false); }
   }}>
     {!config.valid && <Notice>{tr("common.configurationValidationFailedCheckDirectoriesPermissions")}</Notice>}
     {dirty && revision !== config.revision && <Notice>{tr("settings.configurationChangedAnotherPageProgramDraftPreserved")}</Notice>}
-    <fieldset disabled={saving||pickingDirectory}>
-      <Tabs.Content value="work" forceMount hidden={tab !== 'work'} data-settings-form="work" className="settings-tab-panel"><PageSection icon="settings" title={tr('directories.title')} description={tr('directories.help')}>
+    <fieldset disabled={saving||switching||pickingDirectory||expired}>
+      <Tabs.Content value="work" forceMount hidden={tab !== 'work'} data-settings-form="work" className="settings-tab-panel"><PageSection icon="settings" title={tr('directories.title')} description={tr(agent?.adapter==='claude'?'directories.claudeHelp':'directories.help')}>
         <DirectoryPicker directories={draft.directories} onChange={value=>edit('directories',value)} onPicking={setPickingDirectory}/>
       </PageSection>
-      <PageSection icon="connections" title={tr('settings.executionPermissions')}>
-        <SettingToggle icon="connections" title={tr('settings.allowNetworkAccessCommands')} description={tr('design.network')} checked={draft.networkAccess!==false} disabled={saving} onChange={value=>edit('networkAccess',value)}/>
+      {agent?.adapter==='codex' && <PageSection icon="connections" title={tr('settings.executionPermissions')}>
+        <SettingToggle icon="connections" title={tr('settings.allowNetworkAccessCommands')} description={tr('settings.codexNetworkHelp')} checked={draft.networkAccess!==false}
+          disabled={saving||switching} onChange={value=>edit('networkAccess',value)}/>
+      </PageSection>}
+      <PageSection icon="play" title={tr('settings.executionSettings')} description={tr('settings.agentExecutionHelp')}>
+        <div className="form-grid">
+          {agent && <>
+            <Field label={tr('claude.defaultAgent')} htmlFor="default-agent"><Choice id="default-agent" value={draft.agentProfile??agent.id}
+              disabled={dirty||modelDirty||saving||switching||expired} options={(config.agentConnections?.profiles??[]).filter(profile=>profile.enabled).map(profile=>({value:profile.id,label:profile.label}))}
+              onChange={profile=>void selectDefaultAgent(profile)} /></Field>
+            <AgentModelSetting key={agent.id} agent={agent} revision={revision} disabled={saving||switching||expired||config.agentModelEditing===false}
+              refresh={refresh} onDirtyChange={setModelDirty}/>
+            <Field label={tr('settings.agentCommandPath',agent.label)} htmlFor="bin"><TextField.Root id="bin" required value={draft.bin} onChange={e=>edit('bin',e.target.value)}/></Field>
+            <Field label={tr('settings.executionTimeoutSeconds')} htmlFor="timeout"><TextField.Root id="timeout" type="number" min="1" max="7200" required
+              value={draft.timeoutSeconds} onChange={e=>edit('timeoutSeconds',e.target.value)}/></Field>
+          </>}
+          <Field label={tr('settings.maximumConcurrentTasks')} htmlFor="concurrency"><TextField.Root id="concurrency" type="number" min="4" max="64" required value={draft.concurrency} onChange={e=>edit('concurrency',e.target.value)}/></Field>
+        </div>
+        {config.agentModelEditing===false && <Notice>{tr('model.receiverRequiresUpgrade')}</Notice>}
       </PageSection>
-      <PageSection icon="play" title={tr("settings.executionSettings")} description={tr("design.execution")}><div className="form-grid">
-        <div><ModelSelect id="model" label={tr('model.serviceDefault')} value={draft.model} onChange={value=>edit('model',value)} disabled={saving} inheritLabel={tr('model.codexDefault')} resetKey={revision} />
-          <Text as="p" size="1" color="gray">{tr('model.serviceHelp')}</Text></div>
-        <Field label={tr("settings.codexCommandFullPath")} htmlFor="bin"><TextField.Root id="bin" required value={draft.bin} onChange={e => edit('bin', e.target.value)} /></Field>
-        <Field label={tr("settings.maximumConcurrentTasks")} htmlFor="concurrency"><TextField.Root id="concurrency" type="number" min="4" max="64" required value={draft.concurrency} onChange={e => edit('concurrency', e.target.value)} /></Field>
-        <Field label={tr("settings.executionTimeoutSeconds")} htmlFor="timeout"><TextField.Root id="timeout" type="number" min="1" max="7200" required value={draft.timeoutSeconds} onChange={e => edit('timeoutSeconds', e.target.value)} /></Field>
-      </div></PageSection>
       </Tabs.Content><Tabs.Content value="feishu" forceMount hidden={tab !== 'feishu'} data-settings-form="feishu" className="settings-tab-panel"><PageSection icon="sessions" title={tr("settings.feishuMessages")} description={tr("design.messages")}>
         <div className="setting-options">{messageOptions.map(option => <SettingToggle key={option.key}
           icon={option.icon} title={tr(option.title)} description={tr(option.description)} checked={draft[option.key] !== false}
