@@ -3,10 +3,11 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { isAbsolute, join, relative } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
+import { evidenceItem } from './evidence.js';
 import type { AgentProfile, ClaudeGateway } from './agent-registry.js';
 import type { AutoMemoryInput } from './auto-memory.js';
 import type { Config } from './config.js';
@@ -62,7 +63,7 @@ export async function claudeAuthenticated(bin: string, dataDir: string, home: st
   return JSON.parse(stdout).loggedIn === true;
 }
 
-function filePolicy(c: Config, home: string, cwd: string): { directories: string[]; deny: string[] } {
+function filePolicy(c: Config, home: string, cwd: string) {
   if (process.platform === 'win32') throw new RuntimeError('claude_platform_unsupported');
   const canonical = (path: string) => existsSync(path) ? realpathSync(path) : path;
   const dataDir = canonical(c.dataDir);
@@ -81,7 +82,32 @@ function filePolicy(c: Config, home: string, cwd: string): { directories: string
     if (/[\[\]{}*?!(),\\\u0000-\u001f]/u.test(path)) throw new RuntimeError('claude_deny_path_unsupported');
     for (const tool of ['Read', 'Edit']) deny.push(`${tool}(/${path})`, `${tool}(/${path}/**)`);
   }
-  return { directories, deny };
+  return { directories, deny, sandboxDenied: denied, privateRoots };
+}
+
+function commandSandbox(policy: ReturnType<typeof filePolicy>, cwd: string, networkAccess: boolean) {
+  const realHome = realpathSync(homedir());
+  const toolchainRoot = dirname(dirname(realpathSync(process.execPath)));
+  const protectedPaths = [...new Set([...policy.privateRoots, ...policy.sandboxDenied])];
+  const toolchain = toolchainRoot.startsWith(realHome + '/') && !protectedPaths.some(path => pathsOverlap(path, toolchainRoot))
+    ? [toolchainRoot] : [];
+  const allowRead = [...new Set([realpathSync(cwd), ...policy.directories, ...toolchain])];
+  const denyRead = [...new Set([realHome, ...protectedPaths])];
+  // Treat configured paths as literals. A pattern in an allow path could
+  // reopen files outside the corresponding directory grant.
+  if ([...allowRead, ...denyRead].some(path => /[\[\]{}*?!(),\\\u0000-\u001f]/u.test(path)))
+    throw new RuntimeError('claude_sandbox_path_unsupported');
+  return {
+    enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false,
+    filesystem: {
+      allowRead, denyRead, allowWrite: policy.directories,
+      // The task's private cwd can live under dataDir. All other writes are
+      // limited to the working directories and the sandbox's temporary area.
+      denyWrite: protectedPaths.filter(path => path !== policy.privateRoots[0]),
+    },
+    network: { allowedDomains: networkAccess ? ['*'] : [], strictAllowlist: true,
+      allowAllUnixSockets: false, allowLocalBinding: false },
+  };
 }
 
 function terminate(child: ChildProcess, signal: NodeJS.Signals): void {
@@ -171,15 +197,21 @@ export class ClaudeRuntime implements Runtime {
       throw new RuntimeError('claude_login_required');
     const threadId = r.threadId ?? randomUUID(), turnId = randomUUID();
     if (!nativeSession.test(threadId)) throw new RuntimeError('claude_session_invalid');
-    const { directories, deny } = extracting ? { directories: [], deny: [] } : filePolicy(this.config, this.profile.home, r.cwd);
+    const policy = extracting ? undefined : filePolicy(this.config, this.profile.home, r.cwd);
+    const directories = policy?.directories ?? [];
+    const commandTools = r.taskId && policy;
     const model = r.model === undefined ? readAgentModel(this.profile) : r.model;
     const settings = {
       disableAllHooks: true,
-      permissions: { deny, blockReadsOutsideWorkingDirectories: true, blockWritesOutsideWorkingDirectories: true },
+      permissions: {
+        deny: policy?.deny ?? [], blockReadsOutsideWorkingDirectories: true, blockWritesOutsideWorkingDirectories: true,
+        ...(commandTools ? { allow: ['Bash'] } : {}),
+      },
+      ...(commandTools ? { sandbox: commandSandbox(policy, r.cwd, this.config.codex.networkAccess === true) } : {}),
     };
     const args = ['--print', '--restricted', '--safe-mode', '--no-chrome', '--strict-mcp-config',
       '--permission-mode', extracting ? 'dontAsk' : 'acceptEdits', '--permission-prompts', 'none',
-      '--tools', r.taskId ? 'Read,Glob,Grep,Edit,Write' : '', '--disallowed-tools', 'mcp__*', '--settings', JSON.stringify(settings),
+      '--tools', commandTools ? 'Read,Glob,Grep,Edit,Write,Bash' : '', '--disallowed-tools', 'mcp__*', '--settings', JSON.stringify(settings),
       '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       r.threadId ? '--resume' : '--session-id', threadId];
     const checkpoint = gateway && r.threadId ? refusalCheckpoint(this.profile.home, r.cwd, threadId) : undefined;
@@ -197,8 +229,15 @@ export class ClaudeRuntime implements Runtime {
     return new Promise<RunResult>((resolve, reject) => {
       const env = claudeEnvironment(this.profile.home, gateway);
       if (extracting) env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
+      if (commandTools) {
+        env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = '1';
+        env.GIT_CONFIG_GLOBAL = '/dev/null';
+        env.GIT_CONFIG_NOSYSTEM = '1';
+        env.GIT_TERMINAL_PROMPT = '0';
+      }
       const child = spawn(this.bin!, args, { cwd: r.cwd, env, detached: true, stdio: ['pipe', 'pipe', 'ignore'] });
       const decoder = new StringDecoder('utf8');
+      const commands = new Map<string, NonNullable<ReturnType<typeof evidenceItem>>>();
       let buffered = '', result: { text: string; failed: boolean } | undefined;
       let refused = false;
       let failure: RuntimeError | undefined, killTimer: NodeJS.Timeout | undefined;
@@ -241,9 +280,30 @@ export class ClaudeRuntime implements Runtime {
         } else if (event.type === 'assistant') {
           // The CLI surfaces streaming refusals here even when its result envelope calls them invalid requests.
           if (event.message?.stop_reason === 'refusal') refused = true;
-          const tool = event.message?.content?.some((item: { type: string }) => item.type === 'tool_use' || item.type === 'server_tool_use');
+          const blocks = Array.isArray(event.message?.content) ? event.message.content : [];
+          const tool = blocks.some((item: { type?: string } | null) => item?.type === 'tool_use' || item?.type === 'server_tool_use');
           if (extracting && tool) throw new RuntimeError('memory_extraction_tool_rejected');
           r.onActivity?.(tool ? 'tool' : 'answering');
+          if (commandTools && r.onEvidence && !event.isReplay) {
+            for (const item of blocks) {
+              if (item?.type !== 'tool_use' || item.name !== 'Bash') continue;
+              const command = evidenceItem({ id: item.id, type: 'commandExecution', status: 'inProgress',
+                command: item.input?.command });
+              if (!command) continue;
+              // Claude's Bash process can change its working directory between calls.
+              delete command.cwd;
+              if (commands.size < 60) commands.set(item.id, command);
+              r.onEvidence(command);
+            }
+          }
+        } else if (event.type === 'user' && !event.isReplay && commands.size && Array.isArray(event.message?.content)) {
+          for (const item of event.message.content) {
+            if (item?.type !== 'tool_result') continue;
+            const command = commands.get(item.tool_use_id);
+            if (!command) continue;
+            commands.delete(item.tool_use_id);
+            r.onEvidence?.({ ...command, status: item.is_error === true ? 'failed' : 'completed' });
+          }
         } else if (event.type === 'result') {
           if (event.session_id !== threadId) throw new RuntimeError('claude_session_mismatch');
           if (result) throw new RuntimeError('claude_protocol_failed');

@@ -18,7 +18,7 @@ export async function editExecution(manager:Management,ui:ConfigPrompter,view:Co
  const fields:Field[]=[field('model',t('model.agentModel'),'text',{clearable:true}),
   field('bin',t('settings.agentCommandPath',agent.label),'text'),field('timeoutMs',t('terminal.timeout'),'number'),
   field('concurrency',t('settings.maximumConcurrentTasks'),'number'),field('denyPaths',t('terminal.denyPaths'),'list',{clearable:true})];
- if(agent.adapter==='codex')fields.push(field('networkAccess',t('settings.allowNetworkAccessCommands'),'boolean'));
+ fields.push(field('networkAccess',t('settings.allowNetworkAccessCommands'),'boolean'));
  return editForm(ui,t('terminal.menuModel'),{model:agent.model,bin:agent.bin,concurrency:v.concurrency,
   timeoutMs:agent.timeoutMs,networkAccess:v.networkAccess,denyPaths:v.denyPaths},fields,(d,keys)=>{
   const {model,bin,timeoutMs,...patch}=changedPatch(d,keys);

@@ -1191,7 +1191,7 @@ export const english = {
   "model.agentHelp": "Shared by tasks using this Agent. Changes apply to new tasks.",
   "settings.agentExecutionHelp": "Set the default Agent, its launch options, and the shared concurrency limit.",
   "settings.agentCommandPath": "{0} command or full path",
-  "settings.codexNetworkHelp": "Allows Codex commands to access the network for tasks such as downloading dependencies.",
+  "settings.agentNetworkHelp": "Allows sandboxed commands from Codex and Claude Code to access the network.",
   "directories.claudeHelp": "Claude Code can read and write in its task directory and the directories authorized here.",
   "model.loading": "Loading available models…",
   "model.custom": "Enter a model ID manually…",
