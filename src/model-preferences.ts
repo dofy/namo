@@ -1,35 +1,31 @@
-import type { Store } from './store.js';
-import type { ProfileIdentity } from './ui-contract.js';
+import { agentLabel, type AgentProfile } from './agent-registry.js';
+import { readAgentModel } from './agent-models.js';
 import type { CatalogModel } from './model-catalog.js';
 
-export class ModelPreferenceError extends Error {}
-const key = (identity: ProfileIdentity) => `user-model:${JSON.stringify([identity.channel, identity.appId, identity.userId])}`;
+const modelId = (value: string) => '`' + value + '`';
 
-export function validateModel(value: unknown): string {
-  if (typeof value !== 'string' || (value !== '' && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)))
-    throw new ModelPreferenceError('模型名称无效，请使用 Codex 模型 ID，或留空使用默认模型。');
-  return value;
+export function formatTaskModel(model: string | null | undefined, taskId?: string): string {
+  const label = taskId ? `任务 ${taskId} 的模型` : '本次任务模型';
+  return `**${label}**  ${model ? modelId(model) : '暂未记录'}`;
 }
 
-export function userModel(store: Store, identity: ProfileIdentity): string {
-  const row = store.db.prepare('SELECT value FROM settings WHERE key=?').get(key(identity));
-  return row ? validateModel(row.value) : '';
+export function formatModelStatus(agent: AgentProfile, inherited?: string): string {
+  const configured = readAgentModel(agent);
+  const runtime = agent.adapter === 'claude' ? 'Claude Code' : 'Codex';
+  return [
+    `**当前 Agent**  ${agentLabel(agent)}`,
+    `**新任务模型**  ${configured ? modelId(configured) : inherited ? modelId(inherited) + '（运行时默认）' : `跟随 ${runtime} 运行时默认`}`,
+  ].join('\n');
 }
 
-export function setUserModel(store: Store, identity: ProfileIdentity, model: unknown): string {
-  const value = validateModel(model);
-  store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key(identity), value);
-  return value;
-}
-
-/** Model IDs are inline code so the Feishu rich-text reply keeps each name selectable. */
-export function formatModelReply(current: string, models: readonly CatalogModel[]): string {
-  const selected = current ? `\`${current}\`` : '跟随服务默认';
-  const options = models.length
-    ? models.map(model => `- \`${model.id}\`${[model.id === current ? '当前' : '', model.isDefault ? '推荐' : ''].filter(Boolean).map(label => ` · ${label}`).join('')}`).join('\n')
-    : '模型列表暂不可用，可手动输入 Codex 模型 ID。';
-  const example = models.find(model => model.isDefault)?.id ?? models[0]?.id;
-  return `**个人默认模型**\n${selected}\n\n**可选模型**\n${options}\n\n**切换模型**\n`
-    + (example ? `示例：\`/model ${example}\`\n` : '发送 /model 模型ID 设置。\n')
-    + '`/model default` 恢复服务默认。\n\n切换只影响新任务；模型可用性以实际运行结果为准。';
+export function formatModelReply(agent: AgentProfile, recent: string | undefined, models: readonly CatalogModel[], canEdit: boolean): string {
+  const configured = readAgentModel(agent);
+  const fallback = models.find(model => model.isDefault)?.id;
+  const lines = [formatModelStatus(agent, fallback), `**最近任务模型**  ${recent ? modelId(recent) : '暂无记录'}`];
+  if (canEdit) {
+    lines.push('\n`/model 模型ID` 设置此 Agent 的共享模型，`/model default` 恢复运行时默认。');
+    if (models.length) lines.push('\n**可选模型**', ...models.map(model =>
+      `- ${modelId(model.id)}${model.id === (configured ?? fallback) ? ' · 当前' : ''}`));
+  }
+  return lines.join('\n');
 }

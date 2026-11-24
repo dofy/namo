@@ -1,3 +1,4 @@
+import { migrateAgentModels } from '../src/agent-models.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, chmodSync, existsSync, realpathSync, symlinkSync } from 'node:fs';
@@ -79,9 +80,9 @@ test('failed local GitHub discovery and concurrent edits preserve configuration'
  const patch={github:{source:'gh',repositories:[],allowedUserIds:['alice']}};
  await assert.rejects(f.manager.saveGitHub(f.manager.config().revision,patch),e=>{assert.doesNotMatch(String(e),/raw secret/);return true;});
  assert.equal(readFileSync(f.file,'utf8'),before);
- const race=fixture(t,{localGh:async()=>{race.manager.save(race.manager.config().revision,{model:'concurrent-edit'});return {executable:'/usr/bin/gh',configDir:'/tmp/gh-fixture',login:'owner',userId:42};}});
+ const race=fixture(t,{localGh:async()=>{race.manager.save(race.manager.config().revision,{concurrency:12});return {executable:'/usr/bin/gh',configDir:'/tmp/gh-fixture',login:'owner',userId:42};}});
  await assert.rejects(race.manager.saveGitHub(race.manager.config().revision,patch),/配置已被/);
- assert.equal(race.manager.config().values.model,'concurrent-edit');assert.equal(race.manager.config().github.credentialConfigured,false);
+ assert.equal(race.manager.config().values.concurrency,12);assert.equal(race.manager.config().github.credentialConfigured,false);
 });
 test('HTTP localizes application errors per request while preserving user task text', async t => {
  const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());
@@ -95,20 +96,53 @@ test('HTTP localizes application errors per request while preserving user task t
   const detail=await (await fetch(ui.url+'/api/tasks/'+task.id,{headers})).json() as {title:string};assert.equal(detail.title,'保留我的原文 {0} English');
  }
 });
-test('configuration projection excludes credentials and preserves unknown fields on save',t=>{const f=fixture(t),before=f.manager.config();assert.doesNotMatch(JSON.stringify(f.manager.state()),/PRIVATE_TEST_SECRET|PRIVATE_EXTRA/);const saved=f.manager.save(before.revision,{model:'test-model'});const raw=JSON.parse(readFileSync(f.file,'utf8'));assert.equal(raw.custom.keep,'untouched');assert.equal(raw.feishu.extraSecret,f.raw.feishu.extraSecret);assert.equal(raw.feishu.appSecret,f.raw.feishu.appSecret);assert.equal(saved.values.model,'test-model');assert.equal(readdirSync(join(f.data,'config-backups')).length,1);assert.throws(()=>f.manager.save(before.revision,{model:'stale'}),/配置已被/);});
-test('user model saves are scoped to paired users and reject stale edits',t=>{
- const f=fixture(t),rev=f.manager.config().revision;
- assert.equal(f.manager.saveUserModel(rev,'alice','','model-one'),'model-one');
- assert.equal(f.manager.profiles().entries.find(p=>p.userId==='alice')?.defaultModel,'model-one');
- assert.throws(()=>f.manager.saveUserModel(rev,'alice','','model-two'),/变化/);
- assert.throws(()=>f.manager.saveUserModel(rev,'stranger','','model-two'));
- assert.throws(()=>f.manager.saveUserModel(rev,'alice','model-one','../invalid'));
- assert.equal(f.manager.saveUserModel(rev,'alice','model-one',''),'');
+test('configuration projection excludes credentials and preserves unknown fields on save',t=>{const f=fixture(t),before=f.manager.config();assert.doesNotMatch(JSON.stringify(f.manager.state()),/PRIVATE_TEST_SECRET|PRIVATE_EXTRA/);const saved=f.manager.save(before.revision,{concurrency:9});const raw=JSON.parse(readFileSync(f.file,'utf8'));assert.equal(raw.custom.keep,'untouched');assert.equal(raw.feishu.extraSecret,f.raw.feishu.extraSecret);assert.equal(raw.feishu.appSecret,f.raw.feishu.appSecret);assert.equal(saved.values.concurrency,9);assert.equal(readdirSync(join(f.data,'config-backups')).length,1);assert.throws(()=>f.manager.save(before.revision,{concurrency:10}),/配置已被/);});
+test('Agent model saves preserve isolated Codex config and reject stale edits',t=>{
+ const f=fixture(t),rev=f.manager.config().revision,config=loadConfig(f.file);
+ mkdirSync(config.codex.home,{recursive:true});
+ const file=join(config.codex.home,'config.toml');
+ writeFileSync(file,'# stay\nmodel = "old" # old model\n[features]\nplugins = false\n');
+ assert.equal(f.manager.saveExecutionModel(rev,'codex','old','model-one'),'model-one');
+ const current=f.manager.config().agentConnections.profiles.find((p:{id:string})=>p.id==='codex');
+ assert.equal(current.model,'model-one');
+ assert.match(readFileSync(file,'utf8'),/# stay\n# old model\nmodel = "model-one"\n\[features\]\nplugins = false/);
+ assert.throws(()=>f.manager.saveExecutionModel(rev,'codex','','model-two'),/修改/);
+ assert.throws(()=>f.manager.saveExecutionModel(rev,'unknown','','model-two'));
+ assert.throws(()=>f.manager.saveExecutionModel(rev,'codex','model-one','../invalid'));
+ assert.equal(f.manager.saveExecutionModel(rev,'codex','model-one',''),'');
+ assert.equal(f.manager.config().agentConnections.profiles[0].model,'');
+ assert.equal(JSON.parse(readFileSync(f.file,'utf8')).codex.model,undefined);
 });
-test('user model HTTP endpoint requires the local session and origin',async t=>{
+test('legacy Agent model migration seeds native settings once and preserves a native model',t=>{
+ const f=fixture(t);
+ writeFileSync(f.file,JSON.stringify({...f.raw,codex:{...f.raw.codex,model:'old-codex'},
+   agents:{profiles:{claude:{adapter:'claude',enabled:true,model:'old-claude'}}}}));
+ const config=loadConfig(f.file), home=join(f.data,'agents','claude','.claude');
+ mkdirSync(home,{recursive:true});
+ const file=join(home,'settings.json');
+ writeFileSync(file,JSON.stringify({model:'native-claude',spinnerTipsEnabled:false}));
+ migrateAgentModels(config);
+ const stored=f.manager.config();
+ const profiles=stored.agentConnections.profiles;
+ assert.equal(profiles[0].model,'old-codex');
+ assert.equal(profiles[1].model,'native-claude');
+ f.manager.saveExecutionModel(stored.revision,'claude','native-claude','');
+ f.manager.saveExecutionModel(stored.revision,'codex','old-codex','');
+ migrateAgentModels(config);
+ assert.deepEqual(JSON.parse(readFileSync(file,'utf8')),{spinnerTipsEnabled:false});
+ assert.deepEqual(f.manager.config().agentConnections.profiles.map((p:{model:string})=>p.model),['','']);
+});
+test('running legacy receiver cannot accept isolated model edits until replaced',t=>{
+ const f=fixture(t,{status:()=>({running:true,pid:process.pid})}),rev=f.manager.config().revision;
+ assert.equal(f.manager.config().agentModelEditing,false);
+ assert.throws(()=>f.manager.saveExecutionModel(rev,'codex','','new-model'),/更新/);
+ writeFileSync(join(f.data,'health.json'),JSON.stringify({pid:process.pid,configRevision:rev,isolatedAgentModels:true}));
+ assert.equal(f.manager.saveExecutionModel(rev,'codex','','new-model'),'new-model');
+});
+test('Agent model HTTP endpoint requires the local session and origin',async t=>{
  const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());
- const revision=f.manager.config().revision, body=JSON.stringify({configRevision:revision,userId:'alice',expected:'',model:'model-one'});
- const post=(cookie='',origin=ui.url)=>fetch(ui.url+'/api/user-model',{method:'POST',headers:{'Content-Type':'application/json',Origin:origin,...(cookie?{Cookie:cookie}:{})},body});
+ const revision=f.manager.config().revision, body=JSON.stringify({revision,profile:'codex',expected:'',model:'model-one'});
+ const post=(cookie='',origin=ui.url)=>fetch(ui.url+'/api/agent-model',{method:'POST',headers:{'Content-Type':'application/json',Origin:origin,...(cookie?{Cookie:cookie}:{})},body});
  assert.equal((await post()).status,401);
  const login=await fetch(ui.url+'/api/session',{method:'POST',headers:{Origin:ui.url,'Content-Type':'application/json'},body:JSON.stringify({code:new URL(ui.entryUrl).hash.slice(1)})});
  const cookie=login.headers.get('set-cookie')!;
@@ -162,8 +196,8 @@ test('HTTP UI requires one-time bootstrap, cookie and exact origin; credentials 
  assert.equal((await fetch(origin+'/api/state')).status,401);const html=await fetch(origin);assert.match(html.headers.get('content-security-policy')??'',/frame-ancestors 'none'/);assert.doesNotMatch(await html.text(),/PRIVATE_TEST_SECRET/);
  assert.equal((await post('/api/session',{code},'','https://attacker.invalid')).status,403);const login=await post('/api/session',{code});assert.equal(login.status,200);const cookie=login.headers.get('set-cookie')!;assert.match(cookie,/HttpOnly/);assert.match(cookie,/SameSite=Strict/);assert.equal((await post('/api/session',{code})).status,401);
  const state=await fetch(origin+'/api/state',{headers:{Cookie:cookie}});const text=await state.text();assert.equal(state.status,200);assert.doesNotMatch(text,/PRIVATE_TEST_SECRET|PRIVATE_EXTRA/);const revision=JSON.parse(text).config.revision;
- assert.equal((await post('/api/config',{revision,patch:{model:'attack'}},cookie,'https://attacker.invalid')).status,403);assert.equal(digest(readFileSync(f.file,'utf8')),revision);
- const saved=await post('/api/config',{revision,patch:{model:'safe'}},cookie);assert.equal(saved.status,200);assert.equal(JSON.parse(readFileSync(f.file,'utf8')).codex.model,'safe');
+ assert.equal((await post('/api/config',{revision,patch:{concurrency:10}},cookie,'https://attacker.invalid')).status,403);assert.equal(digest(readFileSync(f.file,'utf8')),revision);
+ const saved=await post('/api/config',{revision,patch:{concurrency:9}},cookie);assert.equal(saved.status,200);assert.equal(JSON.parse(readFileSync(f.file,'utf8')).concurrency,9);
  assert.equal((await fetch(origin+'/api/state',{headers:{Cookie:cookie,'Sec-Fetch-Site':'cross-site'}})).status,403);
  const diagnostic=await post('/api/diagnose',{},cookie);assert.equal(diagnostic.status,200);assert.match(await diagnostic.text(),/isolated diagnostic/);
 });
@@ -201,7 +235,7 @@ test('native directory picker enforces session and origin and distinguishes sele
 test('failed service application clears maintenance and releases the edit lock',async t=>{
  const f=fixture(t,{status:()=>({running:true,installed:true,registered:true,mode:'background',pid:process.pid}),action:async()=>{throw Error('service failed');},wait:async()=>false});
  const rev=f.manager.config().revision;writeFileSync(join(f.data,'health.json'),JSON.stringify({pid:process.pid,managementVersion:2,configRevision:rev}));await assert.rejects(()=>f.manager.apply(rev,true),/service failed/);
- const s=new Store(join(f.data,'bot.sqlite'));assert.equal(s.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get(),undefined);s.close();assert.equal(f.manager.save(rev,{model:'still-editable'}).values.model,'still-editable');
+ const s=new Store(join(f.data,'bot.sqlite'));assert.equal(s.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get(),undefined);s.close();assert.equal(f.manager.save(rev,{concurrency:10}).values.concurrency,10);
 });
 
 test('UI serves bundled assets with strict CSP and never exposes source files or private paths',async t=>{
@@ -239,7 +273,7 @@ test('profile management uses configured identity and cannot change pairing, per
  assert.throws(()=>f.manager.saveProfile(state.configRevision,'alice',1,{name:f.raw.feishu.appSecret}),/凭据/);
  assert.throws(()=>f.manager.saveProfile(state.configRevision,'alice',0,{name:'stale'}),/已被修改/);
  assert.equal(f.manager.profiles().entries[0].name,'小七');
- f.manager.save(f.manager.config().revision,{model:'changed'});
+ f.manager.save(f.manager.config().revision,{concurrency:9});
  assert.throws(()=>f.manager.saveProfile(state.configRevision,'alice',1,{name:'wrong-config'}),/应用配置已变化/);
 });
 
@@ -277,7 +311,7 @@ test('GitHub credential saves preserve empty values, scope and unrelated setting
  assert.equal(JSON.parse(readFileSync(f.file,'utf8')).custom.keep,'untouched');
  assert.equal(JSON.parse(readFileSync(f.file,'utf8')).feishu.appSecret,f.raw.feishu.appSecret);
  assert.equal(JSON.stringify(saved).includes(githubCredential),false);
- const unchanged=f.manager.save(saved.revision,{github:githubScope,newGithubToken:'',model:'new-model'});
+ const unchanged=f.manager.save(saved.revision,{github:githubScope,newGithubToken:'',concurrency:9});
  assert.equal(JSON.parse(readFileSync(f.file,'utf8')).github.token,githubCredential);
  assert.equal(unchanged.github.credentialConfigured,true);
  const beforeConflict=readFileSync(f.file,'utf8');
@@ -523,10 +557,10 @@ test('terminal drafts survive validation errors and discard without writing',asy
  assert.equal(await editExecution(f.manager,ui,f.manager.config()),false);assert.equal(readFileSync(f.file,'utf8'),before);assert.ok(ui.messages.some(s=>s.includes('64')));
 });
 test('terminal assistant and profile settings use existing versioned management APIs',async t=>{
- const {editAssistant,editProfiles}=await import('../src/terminal-settings.js');const f=fixture(t);
+ const {editAssistant,editExecution,editProfiles}=await import('../src/terminal-settings.js');const f=fixture(t);
  const assistant=terminalScript(['name','$save'],['Compass']);assert.equal(await editAssistant(f.manager,assistant),true);assert.equal(f.manager.state().assistant.values.name,'Compass');
  const profile=terminalScript(['alice','name','$save'],['Sailor']);assert.equal(await editProfiles(f.manager,profile),true);assert.equal(f.manager.profiles().entries[0].name,'Sailor');
- const model=terminalScript([selectedAction('model','alice'),'model','$save'],['sample-model']);assert.equal(await editProfiles(f.manager,model),true);assert.equal(f.manager.profiles().entries[0].defaultModel,'sample-model');
+ const model=terminalScript(['model','$save'],['sample-model']);assert.equal(await editExecution(f.manager,model,f.manager.config()),true);assert.equal(f.manager.config().agentConnections.profiles[0].model,'sample-model');
 });
 test('terminal Feishu form keeps existing secret when editing message settings',async t=>{
  const {editFeishu}=await import('../src/terminal-settings.js');const f=fixture(t);

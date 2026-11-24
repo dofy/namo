@@ -98,7 +98,7 @@ macOS 上，`namo service install` 安装并启动后台服务；`start`、`stop
 
 ## 聊天命令
 
-常用入口：`/directories` 查看目录白名单，`/refresh` 携带有限历史摘录刷新配置，`/task` 查看任务，`/cancel` 停止任务，`/new` 开始新上下文，`/profile` 管理本人档案，私聊 `/model` 查看或设置用户默认模型，`/status` 查看服务状态和版本，`/version` 查看 Namo 与 Codex CLI 版本，`/help` 查看命令。
+常用入口：`/directories` 查看目录白名单，`/refresh` 携带有限历史摘录刷新配置，`/task` 查看任务，`/cancel` 停止任务，`/new` 开始新上下文，`/profile` 管理本人档案，私聊 `/model` 查看当前 Agent 的模型，已配对成员可用 `/model 模型ID` 设置该 Agent 的共享模型，`/status` 查看服务状态和版本，`/version` 查看 Namo 与 Codex CLI 版本，`/help` 查看命令。
 
 工作台「设置 → Codex CLI 更新」提供版本检查、手动升级、回退和自动升级开关。自动升级默认关闭；开启后由运行中的服务每天检查官方稳定版，忙碌时延后，失败后至少等待一小时再重试。Namo 将完整安装包下载到独立登录目录内的 `namo-cli/`，校验 SHA-256、CLI 版本、app-server 协议、登录、权限配置及模型目录后，空闲时原子切换；不替换全局 CLI，也不改变模型偏好。回退会关闭自动升级。当前支持 macOS/Linux 的 arm64/x64。飞书模型目录每 5 分钟刷新，CLI 切换后会重新获取；更新失败保留原版本。 历史 CLI 包暂不自动清理。
 

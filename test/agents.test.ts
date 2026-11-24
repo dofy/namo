@@ -191,24 +191,29 @@ test('management adds Claude Code, switches defaults and safely disables the act
   const { manager, file, raw } = agentManagementFixture(t);
   const start = manager.config();
   assert.throws(() => manager.save(start.revision, { defaultAgentProfile: 'claude' }), ManagementError);
-  assert.throws(() => manager.save(start.revision, { claudeCode: { enabled: true, bin: 'claude', model: '', token: 'secret' } }), ManagementError);
-  const enabled = manager.save(start.revision, { claudeCode: { enabled: true, bin: 'claude', model: 'sonnet' } });
+  assert.throws(() => manager.save(start.revision, { claudeCode: { enabled: true, token: 'secret' } }), ManagementError);
+  const enabled = manager.save(start.revision, { claudeCode: { enabled: true } });
   assert.equal(enabled.agentConnections.defaultProfile, 'team');
   assert.throws(() => manager.save(start.revision, { defaultAgentProfile: 'claude' }), ManagementError);
-  const switched = manager.save(enabled.revision, { defaultAgentProfile: 'claude' });
+  manager.saveExecutionModel(enabled.revision, 'claude', '', 'router/sonnet[1m]');
+  const switched = manager.save(enabled.revision, { defaultAgentProfile: 'claude', agentExecution:{profile:'claude',bin:'claude-custom',timeoutMs:90000} });
   assert.equal(switched.agentConnections.defaultProfile, 'claude');
-  assert.equal(resolveAgent(loadConfig(file)).model, 'sonnet');
+  assert.equal(resolveAgent(loadConfig(file)).model, undefined);
+  const profile = switched.agentConnections.profiles.find((p:{id:string})=>p.id==='claude');
+  assert.equal(profile.model, 'router/sonnet[1m]');
+  assert.equal(profile.bin, 'claude-custom');
+  assert.equal(profile.timeoutMs, 90000);
   const saved = JSON.parse(readFileSync(file, 'utf8'));
   assert.deepEqual(saved.agents.profiles.future, raw.agents.profiles.future);
   assert.deepEqual(saved.codex, raw.codex);
-  const disabled = manager.save(switched.revision, { claudeCode: { enabled: false, bin: 'claude', model: 'sonnet' } });
+  const disabled = manager.save(switched.revision, { claudeCode: { enabled: false } });
   assert.equal(disabled.agentConnections.defaultProfile, 'codex');
   assert.throws(() => selectAgent(loadConfig(file), 'claude'), /agent_profile_unavailable/);
 });
 
 test('Claude gateway saves a write-only credential and binds it to the address and auth method', t => {
   const { manager, file } = agentManagementFixture(t);
-  const settings = { enabled: true, bin: 'claude', model: '' };
+  const settings = { enabled: true };
   const original = 'fixture-router-secret';
   const start = manager.config();
   const gateway = { baseUrl: 'https://gateway.example/anthropic/', auth: 'bearer' };

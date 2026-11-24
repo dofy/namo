@@ -1,3 +1,4 @@
+import { isModelId, readAgentModel } from './agent-models.js';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from 'node:fs';
@@ -171,7 +172,7 @@ export class ClaudeRuntime implements Runtime {
     const threadId = r.threadId ?? randomUUID(), turnId = randomUUID();
     if (!nativeSession.test(threadId)) throw new RuntimeError('claude_session_invalid');
     const { directories, deny } = extracting ? { directories: [], deny: [] } : filePolicy(this.config, this.profile.home, r.cwd);
-    const model = r.model === undefined ? this.profile.model : r.model;
+    const model = r.model === undefined ? readAgentModel(this.profile) : r.model;
     const settings = {
       disableAllHooks: true,
       permissions: { deny, blockReadsOutsideWorkingDirectories: true, blockWritesOutsideWorkingDirectories: true },
@@ -236,7 +237,7 @@ export class ClaudeRuntime implements Runtime {
         if (event.type === 'system' && event.subtype === 'init') {
           if (event.session_id !== threadId) throw new RuntimeError('claude_session_mismatch');
           r.onActivity?.('working');
-          if (typeof event.model === 'string' && /^[\w.-]{1,128}$/.test(event.model)) r.onModel?.(event.model);
+          if (isModelId(event.model)) { r.onModel?.(event.model); r.onRuntimeModel?.(event.model); }
         } else if (event.type === 'assistant') {
           // The CLI surfaces streaming refusals here even when its result envelope calls them invalid requests.
           if (event.message?.stop_reason === 'refusal') refused = true;

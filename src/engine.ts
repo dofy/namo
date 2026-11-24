@@ -17,7 +17,8 @@ import { randomUUID } from 'node:crypto';
 import { Recovery, RecoveryError } from './recovery.js';
 import { Cards, renderTaskListCard, type CardEvent } from './cards.js';
 import { Profiles, ProfileError } from './profiles.js';
-import { userModel, setUserModel, formatModelReply, ModelPreferenceError } from './model-preferences.js';
+import { formatModelReply } from './model-preferences.js';
+import { AgentModelError, readAgentModel, saveAgentModel } from './agent-models.js';
 import { listCodexModels } from './codex-connection.js';
 import { ModelCatalog } from './model-catalog.js';
 import { chooseTitleModel, enqueueTitle, type TitlePhase } from './title-summary.js';
@@ -378,32 +379,38 @@ export class Engine {
     return [`**当前执行器：${current}**`, ...options, '`/agent default` 使用服务默认'].join('\n');
   }
   private modelCommand(m: Incoming): string {
-    const f = this.config.feishu;
-    if (m.envelope?.chatType !== 'p2p' || m.envelope.type !== 'text' || m.envelope.parentId || m.envelope.rootId || m.envelope.materials.length)
+    const f = this.config.feishu, e = m.envelope, codex = this.config.codex;
+    if (e?.chatType !== 'p2p' || e.kind !== 'instruction' || e.type !== 'text' || e.parentId || e.rootId || e.materials.length || e.limitations.length)
       return '请在机器人私聊中单独发送 /model 文字命令。';
-    if (!f?.appId || !f.domain || !(f.access ? admitted(f as Config['feishu'],m.senderId,m.chatId,m.envelope.tenantKey) : f.allowedUserIds?.includes(m.senderId)))
-      return '当前身份未获准设置模型。';
+    if (!f || !codex) return '当前 Agent 不可用。';
+    const parts = m.text.trim().split(/\s+/);
+    if (parts.length > 2) return '发送 `/model` 查询，或发送 `/model 模型ID` 设置共享模型。';
     try {
-      if (this.selectedAgent(m)?.adapter === 'claude') return '当前使用 Claude Code。Claude 模型由本机工作台配置。';
+      const current = this.contextConfig().feishu;
+      if (!admitted(current, m.senderId, m.chatId, e.tenantKey)) return '当前身份无法访问 Agent 模型。';
+      const config = { ...this.config, codex };
+      const agent = resolveAgent(config, this.selectedAgent(m));
+      const canEdit = current.allowedUserIds.includes(m.senderId);
+      if (parts.length === 2) {
+        if (!canEdit) return '此模型由使用该 Agent 的任务共享，仅本机已配对成员可修改。';
+        if (this.configurationDraining) return '服务正在应用配置，请稍后重试。';
+        saveAgentModel(config, agent, parts[1] === 'default' ? '' : parts[1], undefined, () => {
+          if (!config.file) return;
+          const latest = loadConfig(config.file);
+          const target = resolveAgent(latest, selectAgent(latest, agent.id));
+          if (!latest.feishu.allowedUserIds.includes(m.senderId) || !admitted(latest.feishu, m.senderId, m.chatId, e.tenantKey)
+            || latest.dataDir !== config.dataDir || target.home !== agent.home || target.adapter !== agent.adapter)
+            throw new AgentModelError('Agent 或访问配置已变化，请重新查询。');
+        });
+      }
+      const catalog = agent.id === 'codex' ? this.modelCatalog : undefined;
+      void catalog?.refresh();
+      return formatModelReply(agent, this.tasks.latestModel(m, agent.id), catalog?.models ?? [], canEdit);
     } catch (error) {
+      if (error instanceof AgentModelError) return error.message;
       if (error instanceof AgentRegistryError) return '当前执行器不可用。请发送 /agent 查看可用执行器。';
       throw error;
     }
-    const identity = { channel: f.domain, appId: f.appId, userId: m.senderId };
-    const parts = m.text.trim().split(/\s+/);
-    if (parts.length > 2) return '**模型命令**\n`/model` 查看\n`/model 模型ID` 设置\n`/model default` 恢复默认';
-    try {
-      const allowed=this.config.codex?.allowedModels??[];
-      if (parts.length === 2) {
-        const selected=parts[1] === 'default' ? '' : parts[1];
-        if(f.access && selected && !allowed.includes(selected))return '该模型未在服务允许列表中；请使用 /model default 或联系服务管理员。';
-        setUserModel(this.store, identity, selected);
-      }
-      void this.modelCatalog?.refresh();
-      const selected=userModel(this.store, identity);
-      return formatModelReply(f.access&&!allowed.includes(selected)?'':selected, f.access?(this.modelCatalog?.models??[]).filter(model=>allowed.includes(model.id)):this.modelCatalog?.models ?? [])
-        +(f.access?'\n组织模式仅允许服务配置中列出的模型；群聊始终使用服务默认。':'');
-    } catch (error) { if (error instanceof ModelPreferenceError) return error.message; throw error; }
   }
   private profileCommand(m: Incoming): string {
     // Unknown/legacy chat types fail closed, and group replies never include a profile.
@@ -621,12 +628,13 @@ export class Engine {
     if(result.kind==='amend' && task&&['running','queued'].includes(task.state)) {this.tasks.amend(task,m);return;}
     if(result.kind==='control' && typeof result.operation==='string' && pending.length && this.config.file) {
       const current=task??pending[0], args={...result} as Record<string,unknown>;delete args.kind;
+      if (task && result.operation === 'model') args.id = task.id;
       let response:unknown;
       if(result.operation.startsWith('schedule_')) {
         const operation=result.operation.slice('schedule_'.length);
         const scheduleArgs=operation==='create'?{operation,kind:result.field,frequency:result.scope,time:result.path,content:result.value}:{operation,...(id?{id}:{})};
         response=new Schedules(this.store).tool(m,scheduleArgs,`classifier-${m.key}`,()=>this.workspace(m,current));
-      } else response=conversationControl(this.store,this.config as Config,m,current,args,`classifier-${m.key}`,this.redact,t=>this.taskAccessible(t),true);
+      } else response=conversationControl(this.store,this.config as Config,m,current,args,`classifier-${m.key}`,this.redact,t=>this.taskAccessible(t),{outOfBand:true});
       const output=response as {result?:unknown;error?:unknown};
       let text=typeof output.error==='string'?output.error:typeof output.result==='string'?output.result:'';
       if(!text && result.operation==='tasks' && Array.isArray(output.result)) text=output.result.length?output.result.map((item:any)=>`${item.state} · ${item.id}`).join('\n'):'没有其他任务记录。';
@@ -822,11 +830,12 @@ export class Engine {
         taskId: task.id, runId: run,
         model: this.tasks.model(task.id),
         onModel: model => this.tasks.freezeDefaultModel(task.id, model),
+        onRuntimeModel: model => this.tasks.recordRuntimeModel(run, model),
         threadId: this.tasks.thread(task), cwd, signal,
         prompt, images,
         ...(this.config.file?{onMcp:(args:unknown,toolSignal:AbortSignal)=>mcpRead(this.store,this.config.file!,task,args,toolSignal)}:{}),
         ...(this.config.file?{onReview:(args:unknown)=>readReview(this.store,this.config.file!,task,args,signal)}:{}),
-        ...(this.config.file?{onControl:(args:unknown,callId:string)=>conversationControl(this.store,loadConfig(this.config.file!),m,task,args,callId,this.redact,t=>this.taskAccessible(t))}:{}),
+        ...(this.config.file?{onControl:(args:unknown,callId:string)=>conversationControl(this.store,loadConfig(this.config.file!),m,task,args,callId,this.redact,t=>this.taskAccessible(t),{agentConfig:this.config.codex ? {...this.config,codex:this.config.codex} : undefined})}:{}),
         onSchedule: (args,callId) => new Schedules(this.store).tool(m,args,callId,()=>this.workspace(m,task)),
         onActivity: phase => recordActivity(this.store, run, phase),
         onProgress: event => recordProgress(this.store, run, event, this.redact),
@@ -938,11 +947,10 @@ export class Engine {
       }
       const delivery=/^\/run\s+--deliver\s+(\S+)\s+--\s+\S/.exec(m.text);
       this.store.transaction(()=>{
-        const selection = this.selectedAgent(m,ref), f = this.config.feishu;
-        let preference = f?.appId && f.domain ? userModel(this.store, {channel:f.domain,appId:f.appId,userId:m.senderId}) : '';
-        if(selection?.adapter === 'claude' || m.envelope?.chatType==='group' || f?.access && !(this.config.codex?.allowedModels??[]).includes(preference))preference='';
-        const configured = this.config.codex && selection ? resolveAgent({...this.config,codex:this.config.codex},selection).model : this.config.codex?.model;
-        const task=this.tasks.create(m,workspace,ref,selection,preference || configured || null);
+        const selection = this.selectedAgent(m,ref), codex = this.config.codex;
+        const agent = codex ? resolveAgent({ ...this.config, codex }, selection) : undefined;
+        const model = agent ? readAgentModel(agent) ?? null : null;
+        const task=this.tasks.create(m,workspace,ref,selection,model);
         if(this.runtime.summarizeTitle&&this.config.feishu?.cards)enqueueTitle(this.store,task.id,'task');
         if(delivery)this.artifacts.intent(m,task,delivery[1]);
       });
@@ -952,7 +960,7 @@ export class Engine {
       }
     } catch (e) {
       if(e instanceof ArtifactError){this.reply(m,`文件交付指令无效：${e.code}`);return;}
-      if (e instanceof TaskInputError || e instanceof WaitInputError) { this.reply(m, e.message); return; }
+      if (e instanceof TaskInputError || e instanceof WaitInputError || e instanceof AgentModelError) { this.reply(m, e.message); return; }
       if (e instanceof AgentRegistryError || e instanceof RuntimeError && e.code.startsWith('agent_')) {
         this.reply(m, '当前执行器不可用。请发送 /agent 切换，或在本机工作台检查配置。');
         return;

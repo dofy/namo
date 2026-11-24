@@ -1,3 +1,4 @@
+import { readAgentModel } from './agent-models.js';
 import { agentCodexConfig, resolveAgent, selectAgent, type AgentProfile, type AgentSelection } from './agent-registry.js';
 import { t as tr } from './locale.js';
 import { accessSync, constants, existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
@@ -26,10 +27,7 @@ export function detectAgents(codexBin = 'codex'): AgentInfo[] {
 export function findClaudeBinary(bin: string): string | undefined {
   return findExecutable(bin) ?? (bin === 'claude' ? findExecutable(join(homedir(), '.local', 'bin', 'claude')) : undefined);
 }
-export function agentLabel(profile: Pick<AgentProfile,'adapter'|'id'>): string {
-  const name = profile.adapter === 'claude' ? 'Claude Code' : 'Codex';
-  return (profile.adapter === 'claude' && profile.id === 'claude') || profile.id === 'codex' ? name : `${name} (${profile.id})`;
-}
+export { agentLabel } from './agent-registry.js';
 export function runtimeFor(config: Config, profile?: string | AgentSelection): Runtime {
   const selection = typeof profile === 'string' ? selectAgent(config, profile) : profile;
   const agent = resolveAgent(config, selection);
@@ -100,7 +98,7 @@ export async function loginAgent(source: Config, profileId?: string, deviceAuth 
 export async function liveAgentTest(c: Config, profileId?: string): Promise<boolean> {
   const cwd = join(c.dataDir, 'workspaces', 'health');
   mkdirSync(cwd,{recursive:true,mode:0o700});
-  const result = await runtimeFor(c, profileId).run({ cwd, prompt: 'Do not call tools. Reply with exactly NAMO_AGENT_OK.', signal: new AbortController().signal, onThread() {}, onTurn() {} });
+  const result = await runtimeFor(c, profileId).run({ cwd, model: readAgentModel(resolveAgent(c, selectAgent(c, profileId))) ?? null, prompt: 'Do not call tools. Reply with exactly NAMO_AGENT_OK.', signal: new AbortController().signal, onThread() {}, onTurn() {} });
   return result.text === 'NAMO_AGENT_OK';
 }
 export function toolchainPaths(): string[] {

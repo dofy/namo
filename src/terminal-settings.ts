@@ -12,9 +12,21 @@ const string=(d:Draft,k:string)=>String(d[k]??'');
 const list=(d:Draft,k:string)=>d[k] as string[];
 
 export async function editExecution(manager:Management,ui:ConfigPrompter,view:ConfigView):Promise<boolean> {
+ const agent=view.agentConnections?.profiles.find(p=>p.id===view.agentConnections?.defaultProfile);
+ if(!agent)throw new ManagementError(t('claude.configInvalid'));
  const v=view.values;
- const fields:Field[]=[field('model',t('model.serviceDefault'),'text',{clearable:true}),field('bin',t('settings.codexCommandFullPath'),'text'),field('concurrency',t('settings.maximumConcurrentTasks'),'number'),field('timeoutMs',t('terminal.timeout'),'number'),field('networkAccess',t('terminal.network'),'boolean'),field('denyPaths',t('terminal.denyPaths'),'list',{clearable:true})];
- return editForm(ui,t('terminal.menuModel'),{model:v.model,bin:v.bin,concurrency:v.concurrency,timeoutMs:v.timeoutMs,networkAccess:v.networkAccess,denyPaths:v.denyPaths},fields,(d,keys)=>{manager.save(view.revision,changedPatch(d,keys));});
+ const fields:Field[]=[field('model',t('model.agentModel'),'text',{clearable:true}),
+  field('bin',t('settings.agentCommandPath',agent.label),'text'),field('timeoutMs',t('terminal.timeout'),'number'),
+  field('concurrency',t('settings.maximumConcurrentTasks'),'number'),field('denyPaths',t('terminal.denyPaths'),'list',{clearable:true})];
+ if(agent.adapter==='codex')fields.push(field('networkAccess',t('settings.allowNetworkAccessCommands'),'boolean'));
+ return editForm(ui,t('terminal.menuModel'),{model:agent.model,bin:agent.bin,concurrency:v.concurrency,
+  timeoutMs:agent.timeoutMs,networkAccess:v.networkAccess,denyPaths:v.denyPaths},fields,(d,keys)=>{
+  const {model,bin,timeoutMs,...patch}=changedPatch(d,keys);
+  const execution=bin!==undefined||timeoutMs!==undefined ? {agentExecution:{profile:agent.id,bin:d.bin,timeoutMs:d.timeoutMs}} : {};
+  if(Object.keys(patch).length||Object.hasOwn(execution,'agentExecution'))view=manager.save(view.revision,{...patch,...execution});
+  if(model!==undefined)manager.saveExecutionModel(view.revision,agent.id,agent.model,model);
+ });
+
 }
 export async function editDirectories(manager:Management,ui:ConfigPrompter,view:ConfigView):Promise<boolean> {
  return editForm(ui,t('terminal.menuDirectories'),{directories:view.values.directories??[]},[field('directories',t('terminal.directories'),'list',{clearable:true})],d=>{manager.save(view.revision,d);});
@@ -53,12 +65,11 @@ export async function editProfiles(manager:Management,ui:ConfigPrompter):Promise
  const profiles:ProfileState=manager.profiles();if(!profiles.available||!profiles.entries.length)throw new ManagementError(profiles.reason??t('profiles.noPairedUsersYetRunNamoInit'));
  let active:string|undefined;
  for(;;){
-  ui.screen?.();const choice=await ui.select(t('profiles.pairedUser'),[...profiles.entries.map(p=>({value:p.userId,label:`${p.name||t('profiles.nameNotSet')} · ${p.userId}`,availableActions:['profile','model']})),{value:'profile',label:t('terminal.profileEditSelected'),action:true,shortcut:'E',targeted:true},{value:'model',label:t('terminal.profileModelSelected'),action:true,shortcut:'M',targeted:true}],active);
+  ui.screen?.();const choice=await ui.select(t('profiles.pairedUser'),[...profiles.entries.map(p=>({value:p.userId,label:`${p.name||t('profiles.nameNotSet')} · ${p.userId}`,availableActions:['profile']})),{value:'profile',label:t('terminal.profileEditSelected'),action:true,shortcut:'E',targeted:true}],active);
   const target=parseSelectedAction(choice),id=target?.[1]??choice;
   active=id;
   const p=profiles.entries.find(p=>p.userId===id)!;
-  const type=target?.[0]??'profile';
-   const saved=type==='model'?await editForm(ui,t('design.profileModel'),{model:p.defaultModel??''},[field('model',t('model.userDefault'),'text',{clearable:true})],d=>{manager.saveUserModel(profiles.configRevision,id,p.defaultModel??'',string(d,'model'));}):await editForm(ui,t('design.profileIdentity'),{name:p.name,language:p.language,timezone:p.timezone},[field('name',t('profiles.preferredName'),'text',{clearable:true}),field('language',t('common.language'),'text',{clearable:true}),field('timezone',t('common.timezone'),'text',{clearable:true})],d=>{manager.saveProfile(profiles.configRevision,id,p.version,d);});
+  const saved=await editForm(ui,t('design.profileIdentity'),{name:p.name,language:p.language,timezone:p.timezone},[field('name',t('profiles.preferredName'),'text',{clearable:true}),field('language',t('common.language'),'text',{clearable:true}),field('timezone',t('common.timezone'),'text',{clearable:true})],d=>{manager.saveProfile(profiles.configRevision,id,p.version,d);});
   if(saved)return true;
  }
 }

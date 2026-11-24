@@ -1,3 +1,4 @@
+import { AgentRegistryError } from './agent-registry.js';
 import { directoryConfiguration } from './legacy-config.js';
 import {addsDuplicateMcpEndpoint} from './mcp-endpoint-contract.js';
 import { listCodexMcp, selectCodexMcp, CodexMcpImportError } from './codex-mcp-import.js';
@@ -22,14 +23,14 @@ import { doctor } from './doctor.js';
 import { acquireLock, makeRedactor, chatWorkspace } from './safety.js';
 import { Schedules } from './schedules.js';
 import { executionPolicy } from './access.js';
-import { selectAgent, selectedPolicyHash } from './agent-registry.js';
+import { agentCodexConfig, selectAgent, selectedPolicyHash } from './agent-registry.js';
 import { scopeOf } from './tasks.js';
 import { AssistantSettings, AssistantSettingsError } from './assistant.js';
 import { Memories, MemoryError, MEMORY_LIMITS, type MemoryAuthority, type MemoryScope } from './memory.js';
 import { MEMORY_EXTRACTION_MAX_ATTEMPTS } from './auto-memory.js';
 import { MigrationMemory, MigrationMemoryError, migrationMemoryStatus } from './migration-memory.js';
 import { Profiles, ProfileError } from './profiles.js';
-import { userModel, setUserModel, ModelPreferenceError } from './model-preferences.js';
+import { AgentModelError, readAgentModel, saveAgentModel } from './agent-models.js';
 import { listCodexModels } from './codex-connection.js';
 import { CodexUpdates } from './codex-updates.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
@@ -103,20 +104,29 @@ export class Management {
     try { parsed = parseConfig(raw, this.file); } catch { /* Keep the repair form available. */ }
     const registry = parsed && getAgentRegistry(parsed);
     const agentConnections = registry && { defaultProfile: registry.defaultProfile,
-      profiles: registry.profiles.map(p => ({ id: p.id, adapter: p.adapter, label: agentLabel(p), enabled: p.enabled,
-        bin: p.id === 'claude' && typeof raw.agents?.profiles?.claude?.bin === 'string' ? raw.agents.profiles.claude.bin : p.bin,
-        model: p.model ?? '', ...(p.gateway ? { gateway: p.gateway } : {}) })) };
+      profiles: registry.profiles.map(p => {
+        let model: string | undefined;
+        let modelError: string | undefined;
+        try { model = readAgentModel(p); } catch (error) {
+          modelError = error instanceof AgentModelError ? error.message : '无法读取 Agent 模型。';
+        }
+        const saved = p.id === 'codex' ? raw.codex : raw.agents?.profiles?.[p.id];
+        return { id: p.id, adapter: p.adapter, label: agentLabel(p), enabled: p.enabled,
+          bin: typeof saved?.bin === 'string' ? saved.bin : p.bin, timeoutMs: p.timeoutMs,
+          model: model ?? '', ...(modelError ? {modelError} : {}), ...(p.gateway ? {gateway:p.gateway} : {}) };
+      }) };
     let github=publicGitHubAccess();try {github=publicGitHubAccess(parseGitHubAccessConfig(raw.github,process.env));}catch{/* Keep an invalid credential out of the projection. */}
     let mcpConnections:ReturnType<typeof publicMcpConnections>;try{mcpConnections=publicMcpConnections(parseMcpConnections(raw.mcpConnections));}catch{mcpConnections=[];}
     const service=this.status();let applied:string|undefined,automaticConfiguration=false,configurationReload:string|undefined;
-    try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid){applied=h.configRevision;automaticConfiguration=h.automaticConfiguration===true;configurationReload=h.configurationReload;}}catch{/* Not yet instrumented. */}
+    let agentModelEditing = !service.running;
+    try{const h=readJson(join(this.dataDir,'health.json'));if(service.running&&h.pid===service.pid){applied=h.configRevision;automaticConfiguration=h.automaticConfiguration===true;configurationReload=h.configurationReload;agentModelEditing=h.isolatedAgentModels===true;}}catch{/* Not yet instrumented. */}
     let activeModelDefault:{model:string;profile:string}|undefined;
     if(parsed&&service.running&&applied===revision){
-      try {const agent=resolveAgent(parsed);activeModelDefault={model:agent.model??'',profile:agent.id};}catch{/* Unavailable profiles must not be presented as active. */}
+      try {const agent=resolveAgent(parsed);activeModelDefault={model:readAgentModel(agent)??'',profile:agent.id};}catch{/* Unavailable profiles must not be presented as active. */}
     }
-    return {revision,valid:!!parsed,github,mcpConnections,agentConnections,activeModelDefault,automaticConfiguration,configurationReload,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
+    return {revision,valid:!!parsed,github,mcpConnections,agentConnections,agentModelEditing,activeModelDefault,automaticConfiguration,configurationReload,application:!service.running?'stopped':!applied?'unknown':applied===revision?'applied':'pending',
       values:{directories:c.directories??[],sandbox:'workspace-write',networkAccess:c.networkAccess??false,allowLocalCommits:true,
-        concurrency:Number.isInteger(raw.concurrency)&&raw.concurrency>=1&&raw.concurrency<4?4:raw.concurrency??8,model:c.model??'',bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
+        concurrency:Number.isInteger(raw.concurrency)&&raw.concurrency>=1&&raw.concurrency<4?4:raw.concurrency??8,bin:c.bin??'codex',timeoutMs:c.timeoutMs??600000,readPaths:c.readPaths??[],denyPaths:c.denyPaths??[],cards:f.cards===true,requireMention:f.requireMention!==false,
         reactions:f.reactions!==false,progressUpdates:f.progressUpdates!==false,progressDelayMs:f.progressDelayMs??200,progressIntervalMs:f.progressIntervalMs??5000,progressHeartbeatMs:f.progressHeartbeatMs??30000},
       feishu:{appId:f.appId??'',domain:f.domain??'feishu',secretConfigured:!!f.appSecret||!!process.env[f.appSecretEnv??'FEISHU_APP_SECRET'],pairedUsers:Array.isArray(f.allowedUserIds)?f.allowedUserIds.length:0,
         restrictedChats:Array.isArray(f.allowedChatIds)?f.allowedChatIds.length:0,access:f.access??null,allowedUserIds:f.allowedUserIds??[],allowedChatIds:f.allowedChatIds??[]},file:this.file};
@@ -291,22 +301,26 @@ export class Management {
     if(typeof f.appId!=='string'||!f.appId||!['feishu','lark'].includes(f.domain??'feishu')||!Array.isArray(f.allowedUserIds)||f.allowedUserIds.some((id:unknown)=>typeof id!=='string'||!id))return unavailable(tr("management.completeAppSetupUserPairingFirst"));
     try{return this.read(s=>{
       if(Number(s.db.prepare('PRAGMA user_version').get()?.user_version)!==SCHEMA_VERSION)return unavailable(tr("management.databaseSchemaUnsupported"));
-      return this.sanitize({available:true,configRevision:revision,entries:[...new Set<string>([...f.allowedUserIds,...(f.access?s.db.prepare("SELECT DISTINCT senderId FROM inbox WHERE chatKey LIKE ? AND json_extract(envelope,'$.tenantKey')=? LIMIT 1000").all(`${f.appId}:%`,f.access.tenantKey).map(r=>String(r.senderId)):[])])].map(userId=>{const identity={channel:f.domain??'feishu',appId:f.appId,userId};return {...new Profiles(s,identity).get(),defaultModel:userModel(s,identity)};})});
+      return this.sanitize({available:true,configRevision:revision,entries:[...new Set<string>([...f.allowedUserIds,...(f.access?s.db.prepare("SELECT DISTINCT senderId FROM inbox WHERE chatKey LIKE ? AND json_extract(envelope,'$.tenantKey')=? LIMIT 1000").all(`${f.appId}:%`,f.access.tenantKey).map(r=>String(r.senderId)):[])])].map(userId=>{const identity={channel:f.domain??'feishu',appId:f.appId,userId};return new Profiles(s,identity).get();})});
     })??unavailable(tr("management.noServiceDatabaseCompleteSetupFirst"));}
     catch(e){if(e instanceof ProfileError)return unavailable(e.message);throw e;}
   }
-  saveUserModel(configRevision:string,userId:string,expected:unknown,model:unknown):string {
-    const release=acquireLock(join(this.dataDir,'config-edit.lock'));
+  saveExecutionModel(revision: string, profile: unknown, expected: unknown, model: unknown): string {
+    if (typeof profile !== 'string' || typeof expected !== 'string') throw new ManagementError('请选择 Agent 并刷新模型设置。', 400);
     try {
-    const {raw,revision}=this.source(),f=raw.feishu??{};
-    if(configRevision!==revision)throw new ManagementError(tr("management.appConfigurationChangedRefreshSelectUserAgain"));
-    if(typeof userId!=='string'||!this.profiles().entries.some(p=>p.userId===userId))throw new ManagementError(tr("management.profilesUsersPairedAppCanManaged"));
-    const identity={channel:f.domain??'feishu',appId:f.appId,userId};
-    try { return this.write(s=>s.transaction(()=>{
-      if(typeof expected!=='string'||userModel(s,identity)!==expected)throw new ManagementError('模型设置已变化，请刷新后重试。');
-      return setUserModel(s,identity,model);
-    })); } catch(e) {if(e instanceof ModelPreferenceError)throw new ManagementError(e.message,400);throw e;}
-    } finally {release();}
+      const current = this.source();
+      if (current.revision !== revision) throw new ManagementError(tr('management.configurationChangedAnotherPageProgramRefreshTry'));
+      const config = parseConfig(current.raw, this.file);
+      const agent = resolveAgent(config, selectAgent(config, profile));
+      return saveAgentModel(config, agent, model, expected, () => {
+        if (this.source().revision !== revision) throw new ManagementError(tr('management.configurationChangedAnotherPageProgramRefreshTry'));
+        if (!this.config().agentModelEditing) throw new ManagementError(tr('model.receiverRequiresUpgrade'));
+      });
+    } catch (error) {
+      if (error instanceof AgentModelError) throw new ManagementError(error.message, 409);
+      if (error instanceof AgentRegistryError) throw new ManagementError('所选 Agent 不可用。', 400);
+      throw error;
+    }
   }
   saveProfile(configRevision:string,userId:string,version:number,patch:unknown):UserProfile {
     const release=acquireLock(join(this.dataDir,'config-edit.lock'));
@@ -320,8 +334,11 @@ export class Management {
       return this.write(s=>new Profiles(s,{channel:f.domain??'feishu',appId:f.appId,userId}).update(version,patch,{source:'local-owner'}));
     }catch(e){if(e instanceof ProfileError)throw new ManagementError(e.message);throw e;}finally{release();}
   }
-  async models(): Promise<{id:string;name:string;isDefault:boolean}[]> {
-    try {return await listCodexModels(loadConfig(this.file).codex);} catch {throw new ManagementError('模型列表暂不可用，请检查 Codex 登录和服务配置。',503);}
+  async models(profile = 'codex'): Promise<{id:string;name:string;isDefault:boolean}[]> {
+    try {
+      const config = loadConfig(this.file);
+      return await listCodexModels(agentCodexConfig(config, selectAgent(config, profile)));
+    } catch { throw new ManagementError('模型列表暂不可用，请检查 Codex 登录和 Agent 配置。',503); }
   }
   async codexUpdate(input?: {action:string;configRevision:string;enabled?:boolean}) {
     const {revision}=this.source();
@@ -398,8 +415,8 @@ export class Management {
     try {
       const {raw,revision:current}=this.source();if(current!==revision)throw new ManagementError(tr("management.configurationChangedAnotherPageProgramRefreshTry"));
       if(!patch||typeof patch!=='object'||Array.isArray(patch))throw new ManagementError(tr("management.invalidConfigurationContent"));
-      const allowed=['directories','serviceAccess','sandbox','networkAccess','allowLocalCommits','concurrency','model','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'];
-      if(Object.keys(patch).some(k=>!allowed.includes(k)&&!['defaultAgentProfile','claudeCode'].includes(k)))throw new ManagementError(tr("management.configurationIncludesFieldsCannotEdited"));
+      const allowed=['directories','serviceAccess','sandbox','networkAccess','allowLocalCommits','concurrency','bin','timeoutMs','readPaths','denyPaths','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'];
+      if(Object.keys(patch).some(k=>!allowed.includes(k)&&!['defaultAgentProfile','claudeCode','agentExecution'].includes(k)))throw new ManagementError(tr("management.configurationIncludesFieldsCannotEdited"));
       const next=structuredClone(raw);next.codex??={};next.feishu??={};
       if (Object.hasOwn(patch, 'defaultAgentProfile') || Object.hasOwn(patch, 'claudeCode')) {
         next.agents ??= {};
@@ -411,9 +428,8 @@ export class Management {
         if (Object.hasOwn(patch, 'claudeCode')) {
           const value = patch.claudeCode;
           if (!value || typeof value !== 'object' || Array.isArray(value)
-            || Object.keys(value).some(key => !['enabled', 'bin', 'model', 'gateway'].includes(key))
-            || typeof value.enabled !== 'boolean' || typeof value.bin !== 'string' || !value.bin.trim()
-            || typeof value.model !== 'string')
+            || Object.keys(value).some(key => !['enabled', 'gateway'].includes(key))
+            || typeof value.enabled !== 'boolean')
             throw new ManagementError(tr('claude.configInvalid'), 400);
           next.agents.profiles ??= {};
           const prior = next.agents.profiles.claude;
@@ -440,13 +456,26 @@ export class Management {
             if (!secret) throw new ManagementError(tr('claude.gatewayCredentialRequired'), 400);
             gateway = { ...target, secret };
           }
-          next.agents.profiles.claude = { adapter: 'claude', enabled: value.enabled, bin: value.bin.trim(),
-            ...(value.model.trim() ? { model: value.model.trim() } : {}), ...(prior?.timeoutMs ? { timeoutMs: prior.timeoutMs } : {}),
+          next.agents.profiles.claude = { ...prior, adapter: 'claude', enabled: value.enabled, bin: prior?.bin ?? 'claude',
+            gateway: undefined,
             ...(gateway ? { gateway } : {}) };
           if (!value.enabled && next.agents.defaultProfile === 'claude') next.agents.defaultProfile = 'codex';
         }
       }
       for(const key of allowed.filter(k=>!['serviceAccess','concurrency','cards','requireMention','reactions','progressUpdates','progressDelayMs','progressIntervalMs','progressHeartbeatMs','newSecret','github','newGithubToken','clearGithubToken','mcpConnections'].includes(k))) if(Object.hasOwn(patch,key))next.codex[key]=patch[key];
+      if (Object.hasOwn(patch, 'agentExecution')) {
+        const value = patch.agentExecution;
+        if (!value || typeof value !== 'object' || Array.isArray(value)
+          || Object.keys(value).some(key => !['profile', 'bin', 'timeoutMs'].includes(key))
+          || typeof value.profile !== 'string' || typeof value.bin !== 'string' || !value.bin.trim()
+          || !Number.isSafeInteger(value.timeoutMs) || value.timeoutMs < 1000 || value.timeoutMs > 7200000)
+          throw new ManagementError(tr('claude.configInvalid'), 400);
+        const agent = value.profile === 'codex' ? next.codex
+          : Object.hasOwn(next.agents?.profiles ?? {}, value.profile) ? next.agents.profiles[value.profile] : undefined;
+        if (!agent) throw new ManagementError('所选 Agent 不可用。', 400);
+        agent.bin = value.bin.trim();
+        agent.timeoutMs = value.timeoutMs;
+      }
       if(patch.serviceAccess!==undefined) {
         const a=patch.serviceAccess;
         if (!a || typeof a!=='object' || Array.isArray(a) || Object.keys(a).some(k=>!['access','allowedUserIds','allowedChatIds'].includes(k))) throw new ManagementError(tr("management.invalidOrganizationAccessSettings"),400);
@@ -534,7 +563,7 @@ export class Management {
     if(!/^N-[A-F0-9]{12}$/.test(id))throw new ManagementError(tr("management.invalidTaskId"));
     return this.readCurrent(s=>{const tasks=new Tasks(s),t=tasks.get(id);if(!t)throw new ManagementError(tr("tasks.notFound"));
       const summary=this.projections(s).taskSummary(id);
-      return this.sanitize({...tasks.detail(t) as object,title:summary?.title,ownerId:summary?.ownerId,ownerName:summary?.ownerName,createdAt:summary?.createdAt,
+      return this.sanitize({...tasks.detail(t) as object,title:summary?.title,ownerId:summary?.ownerId,ownerName:summary?.ownerName,createdAt:summary?.createdAt,model:tasks.reportedModel(t.id),
         results:s.db.prepare("SELECT content,state,part FROM outbox WHERE inboxKey=? AND kind='result' ORDER BY part").all(t.inboxKey)});});
   }
   issue(id:string):any {

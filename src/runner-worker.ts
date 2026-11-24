@@ -123,6 +123,7 @@ async function main(): Promise<void> {
       const raw = await runtimeFor(effectiveConfig, selection).run({ taskId: task.id, runId,
         model: tasks.model(task.id),
         onModel: model => write(() => tasks.freezeDefaultModel(task.id, model)),
+        onRuntimeModel: model => write(() => tasks.recordRuntimeModel(runId, model)),
         cwd: task.cwd, prompt: runnerJob(store, runId)!.prompt, images:loadRunImages(store,config.dataDir,runId),
         threadId: tasks.thread(task), signal: abort.signal,
         onProcess: pid => write(() => { store.db.prepare('UPDATE runner_jobs SET runtimePid=? WHERE runId=?').run(pid, runId); runnerEvent(store, runId, 'runtime_started'); }),
@@ -183,7 +184,7 @@ async function main(): Promise<void> {
           return conversationControl(store,latest,message,task,args,callId,redact,t=>{
             try {const source=store.get(t.inboxKey);if(!source||!admitted(latest.feishu,source.senderId,source.chatId,source.envelope?.tenantKey))return false;
               assertReviewDelivery(store,latest,t);assertMcpDelivery(store,latest,t);return true;}catch{return false;}
-          });
+          }, {agentConfig:effectiveConfig});
         },
         onSchedule: (args,callId) => {
           if(abort.signal.aborted || !taskAuthorizationValid(config,loadConfig(file),message)) throw new RuntimeError('access_configuration_changed');

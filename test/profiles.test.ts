@@ -1,4 +1,4 @@
-import { storeFixture } from './helpers.js';
+import { storeFixture, waitFor } from './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -7,7 +7,7 @@ import { Profiles } from '../src/profiles.js';
 import { Engine } from '../src/engine.js';
 import { normalizeEvent } from '../src/feishu.js';
 import { Tasks } from '../src/tasks.js';
-import { userModel } from '../src/model-preferences.js';
+import { readFileSync } from 'node:fs';
 import type { ProfileIdentity } from '../src/ui-contract.js';
 
 const identity: ProfileIdentity = { channel: 'feishu', appId: 'app', userId: 'alice' };
@@ -24,7 +24,7 @@ function message(id: string, text: string, user = 'alice', chatType = 'p2p', ext
 }
 function engine(t: any) {
   const f = fixture(t); let calls = 0;
-  const e = new Engine(f.store, { async run() { calls++; throw Error('must not infer'); } }, { async send(_c, _s, id) { return id; } }, { dataDir: f.dir, concurrency: 1, feishu });
+  const e = new Engine(f.store, { async run() { calls++; throw Error('must not infer'); } }, { async send(_c, _s, id) { return id; } }, { dataDir: f.dir, concurrency: 1, feishu, codex:{bin:'codex',home:f.dir+'/codex-home',sandbox:'read-only',timeoutMs:1000} });
   t.after(() => e.stop());
   const reply = (id: string) => f.store.db.prepare("SELECT content FROM outbox WHERE inboxKey=? AND kind='result'").all(`app:${id}`).map(r => r.content).join('');
   return { ...f, e, reply, calls: () => calls };
@@ -83,10 +83,10 @@ test('private self-service is durable and duplicate commands do not repeat profi
   assert.equal(f.calls(), 0); assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM tasks').get()?.n, 0);
 });
 
-test('model commands are private and new tasks capture the user selection', t => {
-  const f=engine(t);
+test('model commands update the isolated Agent model and new tasks keep their selected value', t => {
+  const f=engine(t), file=f.dir+'/codex-home/config.toml';
   f.e.accept(message('choose','/model model-one'));
-  assert.equal(userModel(f.store,identity),'model-one');
+  assert.match(readFileSync(file,'utf8'),/model = "model-one"/);
   f.e.accept(message('first','do a task'));
   const first=f.store.get('app:first')!.taskId!;
   f.e.accept(message('change','/model model-two'));
@@ -96,13 +96,11 @@ test('model commands are private and new tasks capture the user selection', t =>
   assert.equal(new Tasks(f.store).model(second),'model-two');
   f.e.accept(message('group','/model attack','alice','group'));
   f.e.accept(message('quote','/model attack','alice','p2p',{parent_id:'other'}));
-  f.e.accept(message('bob','/model model-bob','bob'));
-  assert.equal(userModel(f.store,identity),'model-two');
-  assert.equal(userModel(f.store,{...identity,userId:'bob'}),'model-bob');
+  assert.match(readFileSync(file,'utf8'),/model = "model-two"/);
   f.e.accept(message('reset','/model default'));
-  assert.equal(userModel(f.store,identity),'');
-  f.e.accept(message('invalid','/model bad/path'));
-  assert.equal(userModel(f.store,identity),'');
+  assert.ok(f.reply('reset').includes('**新任务模型**  跟随 Codex 运行时默认'));
+  f.e.accept(message('invalid','/model ../bad'));
+  assert.doesNotMatch(readFileSync(file,'utf8'),/model\s*=/);
 });
 
 test('group, unknown chat type, quotes and rich text cannot reveal or edit a private profile', t => {
@@ -136,24 +134,39 @@ test('profile command receipt failure rolls back inbox acceptance and profile mu
   assert.equal(f.profiles.get().version, 0); assert.equal(f.store.get('app:write'), undefined);
 });
 
-test('model list formats copyable IDs and indicates the current and recommended model', async t => {
-  const f=fixture(t), posts: any[]=[], texts: string[]=[];
+test('/model reads and writes the selected Agent in isolation without inference', async t => {
+  const f=fixture(t), posts: any[]=[];
+  const codex={bin:'codex',home:f.dir,sandbox:'read-only' as const,timeoutMs:1000,model:'gpt-6.2-sol'};
+  const agents={defaultProfile:'codex',profiles:{claude:{adapter:'claude' as const,enabled:true,model:'sonnet'}}};
   const e=new Engine(f.store,{async run(){throw Error('unexpected inference');}},
-    {async send(_chat,text,id){texts.push(text);return id;},async sendPost(_chat,post,id){posts.push(post);return id;}},
-    {dataDir:f.dir,concurrency:1,feishu});
+    {async send(_chat,_text,id){return id;},async sendPost(_chat,post,id){posts.push(post);return id;}},
+    {dataDir:f.dir,concurrency:1,feishu,codex,agents});
   t.after(()=>e.stop());
-  (e as any).modelCatalog={models:[{id:'gpt-6.1-sol',isDefault:true},{id:'gpt-6.1-terra',isDefault:false}],start:()=>{},refresh:async()=>{},stop:async()=>{}};
+  (e as any).modelCatalog={models:[{id:'gpt-6.2-sol',isDefault:true},{id:'gpt-6.1-terra',isDefault:false}],start:()=>{},refresh:async()=>{},stop:async()=>{}};
   e.start();
-  e.accept(message('select-pretty','/model gpt-6.1-terra'));
-  for(let i=0;i<50&&!posts.length;i++)await new Promise(resolve=>setTimeout(resolve,10));
-  assert.equal(posts.length,1); assert.deepEqual(texts,[]);
-  const markdown=posts[0].zh_cn.content[0][0].text;
-  assert.match(markdown,/\*\*个人默认模型\*\*\n`gpt-6\.1-terra`/);
-  assert.match(markdown,/- `gpt-6\.1-sol` · 推荐/);
-  assert.match(markdown,/- `gpt-6\.1-terra` · 当前/);
-  assert.match(markdown,/`\/model gpt-6\.1-sol`/);
-  assert.match(markdown,/`\/model default`/);
-  assert.equal(userModel(f.store,identity),'gpt-6.1-terra');
+  const send = async (id: string, text: string) => {
+    e.accept(message(id, text));
+    await waitFor(() => f.store.get(`app:${id}`)?.state === 'replied');
+  };
+  await send('select-pretty','/model gpt-6.1-terra');
+  await send('read-pretty','/model');
+  await send('switch-agent','/agent claude');
+  await send('set-claude','/model router/sonnet[1m]');
+  await send('read-claude','/model');
+  const content=(id:string)=>String(f.store.db.prepare("SELECT content FROM outbox WHERE inboxKey=? AND kind='result'").get(`app:${id}`)?.content);
+  const codexStatus=content('read-pretty');
+  assert.ok(codexStatus.includes('**当前 Agent**  Codex'));
+  assert.ok(codexStatus.includes('**新任务模型**  `gpt-6.1-terra`'));
+  assert.ok(codexStatus.includes('**最近任务模型**  暂无记录'));
+  assert.ok(codexStatus.includes('- `gpt-6.1-terra` · 当前'));
+  assert.ok(codexStatus.includes('`/model default`'));
+  const claudeStatus=content('read-claude');
+  assert.ok(claudeStatus.includes('**当前 Agent**  Claude Code'));
+  assert.ok(claudeStatus.includes('**新任务模型**  `router/sonnet[1m]`'));
+  assert.equal(JSON.parse(readFileSync(f.dir+'/agents/claude/.claude/settings.json','utf8')).model,'router/sonnet[1m]');
+  assert.match(readFileSync(f.dir+'/config.toml','utf8'),/gpt-6.1-terra/);
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM tasks').get()?.n,0);
+  assert.ok(posts.some(post=>post.zh_cn.content[0][0].text===codexStatus));
 });
 
 test('help explains natural language controls without requiring commands', t => {

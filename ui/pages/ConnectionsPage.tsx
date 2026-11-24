@@ -86,36 +86,23 @@ function ExecutorConnections({ config, refresh, expired }: { config: ConfigView;
   const agents = config.agentConnections;
   const claude = agents?.profiles.find(p => p.id === 'claude');
   const available = claude?.adapter !== 'codex' && !!agents;
-  const [draft, setDraft] = useState({ enabled: available && !!claude?.enabled, bin: claude?.bin ?? 'claude', model: claude?.model ?? '' });
+  const [enabled, setEnabled] = useState(available && !!claude?.enabled);
   const [auth, setAuth] = useState<'login' | ClaudeGatewayView['auth']>(claude?.gateway?.auth ?? 'login');
   const [baseUrl, setBaseUrl] = useState(claude?.gateway?.baseUrl ?? '');
   const [newSecret, setNewSecret] = useState('');
   const [saving, setSaving] = useState(false);
-  const [feedback, setFeedback] = useState<{ target: 'default' | 'claude'; text: string; error?: boolean }>();
-  const dirty = draft.enabled !== !!claude?.enabled || draft.bin !== (claude?.bin ?? 'claude') || draft.model !== (claude?.model ?? '')
+  const [feedback, setFeedback] = useState<{ text: string; error?: boolean }>();
+  const dirty = enabled !== !!claude?.enabled
     || auth !== (claude?.gateway?.auth ?? 'login') || (auth !== 'login' && (baseUrl !== claude?.gateway?.baseUrl || !!newSecret));
   async function save(patch: AgentConfigPatch) {
-    const target = patch.defaultAgentProfile === undefined ? 'claude' : 'default';
     setSaving(true); setFeedback(undefined);
     try { await api.saveAgents(config.revision, patch); }
-    catch (error) { setFeedback({ target, text: message(error), error: true }); setSaving(false); return; }
-    try { await refresh(); setFeedback({ target, text: tr('claude.saved') }); }
-    catch { setFeedback({ target, text: tr('settings.savedRefreshFailed'), error: true }); }
+    catch (error) { setFeedback({ text: message(error), error: true }); setSaving(false); return; }
+    try { await refresh(); setFeedback({ text: tr('claude.saved') }); }
+    catch { setFeedback({ text: tr('settings.savedRefreshFailed'), error: true }); }
     finally { setSaving(false); }
   }
   return <>
-    {agents && <div className="page-panel">
-      <div className="default-executor">
-        <div>
-          <Text as="label" htmlFor="default-agent" size="2" weight="medium">{tr('claude.defaultAgent')}</Text>
-          <Text as="p" size="2" color="gray" mt="1">{tr('claude.defaultHelp')}</Text>
-        </div>
-        <Choice id="default-agent" value={agents.defaultProfile} disabled={expired || saving || dirty}
-          options={agents.profiles.filter(p => p.enabled).map(p => ({ value: p.id, label: p.label }))}
-          onChange={defaultAgentProfile => void save({ defaultAgentProfile })} />
-      </div>
-      {feedback?.target === 'default' && <Notice error={feedback.error}>{feedback.text}</Notice>}
-    </div>}
     <div className="executor-connections">
       <CodexConnection file={config.file} expired={expired} />
       <PageSection icon="assistant" title="Claude Code">
@@ -125,18 +112,14 @@ function ExecutorConnections({ config, refresh, expired }: { config: ConfigView;
           {available && <form onSubmit={event => {
             event.preventDefault();
             const gateway = auth === 'login' ? null : { baseUrl, auth, ...(newSecret ? { newSecret } : {}) };
-            void save({ claudeCode: { ...draft, gateway } });
+            void save({ claudeCode: { enabled, gateway } });
           }}>
             <Flex align="center" gap="2" asChild>
-              <Text as="label" size="2"><Checkbox checked={draft.enabled} disabled={expired || saving}
-                onCheckedChange={value => setDraft({ ...draft, enabled: value === true })} />{tr('claude.enable')}</Text>
+              <Text as="label" size="2"><Checkbox checked={enabled} disabled={expired || saving}
+                onCheckedChange={value => setEnabled(value === true)} />{tr('claude.enable')}</Text>
             </Flex>
             <Text as="p" size="2" color="gray" mt="1">{tr('claude.enableHelp')}</Text>
             <div className="form-grid claude-connection-fields">
-              <Field label={tr('claude.bin')} htmlFor="claude-bin"><TextField.Root id="claude-bin" value={draft.bin}
-                required disabled={expired || saving} onChange={event => setDraft({ ...draft, bin: event.target.value })} /></Field>
-              <Field label={tr('claude.model')} htmlFor="claude-model"><TextField.Root id="claude-model" value={draft.model}
-                disabled={expired || saving} onChange={event => setDraft({ ...draft, model: event.target.value })} /></Field>
               <Field label={tr('claude.authMethod')} htmlFor="claude-auth" className="gateway-field">
                 <Choice id="claude-auth" value={auth} disabled={expired || saving}
                   options={[{ value: 'login', label: tr('claude.authLogin') }, { value: 'bearer', label: tr('claude.authGatewayBearer') },
@@ -155,7 +138,7 @@ function ExecutorConnections({ config, refresh, expired }: { config: ConfigView;
             <Button type="submit" disabled={expired || !dirty} loading={saving}>{tr('claude.save')}</Button>
           </form>}
           {claude?.adapter === 'codex' && <Notice error>{tr('claude.profileConflict')}</Notice>}
-          {feedback?.target === 'claude' && <Notice error={feedback.error}>{feedback.text}</Notice>}
+          {feedback && <Notice error={feedback.error}>{feedback.text}</Notice>}
           {claude?.adapter === 'claude' && claude.enabled && <div className="connection-help">
             {claude.gateway ? <Text as="p" size="2" color="gray">{tr('claude.gatewayHelp')}</Text> : <>
               <Text as="p" size="2" color="gray">{tr('claude.loginHelp')}</Text>

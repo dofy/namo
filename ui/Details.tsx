@@ -47,6 +47,7 @@ export function Details({ target, close, changed, notify, restoreFocus }: {
         <Text as="p" size="2" color="gray">{data.value.ownerName || data.value.ownerId || tr("common.unnamedUser")} · {data.value.id}</Text>
         <div className="detail-times"><div><span>{tr("common.createdAt")}</span><DateTime value={data.value.createdAt} empty={tr("taskDetails.notRecorded")} /></div><div><span>{tr("taskDetails.firstStarted")}</span><DateTime value={data.value.startedAt} /></div><div><span>{tr("common.finishedAt")}</span><DateTime value={data.value.finishedAt} empty={tr("common.notFinished")} /></div></div>
         <Text as="p" size="2" color="gray">{tr("nav.sessions")} {data.value.workstream}</Text>
+        {data.value.model && <Text as="p" size="2" color="gray">{tr("taskDetails.model")} <code>{data.value.model}</code></Text>}
         {data.value.error && <Notice error>{tr("taskDetails.reason")}{data.value.error}</Notice>}
         {!!data.value.waits?.length && <section>
           <Heading as="h2" size="4">{tr("taskDetails.waitingResuming")}</Heading>

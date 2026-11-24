@@ -19,7 +19,7 @@ const HOST_FILES = ['cli', 'service-bootstrap', 'runtime-host', 'live-upgrade', 
   'config-reload','engine','daily-turns','tasks','waits','external-waits','external-wait-bridge','business-storage','runner','runner-store',
   'memory','memory-access','auto-memory','schedules','feedback','cards','mcp-connections','mcp-write-approval',
   'github-api','github-access','github-review','approval-service','approvals','recovery','artifact-delivery','inbox-retention',
-  'assistant','profiles','model-preferences','task-progress','public-progress','evidence','artifacts','model-catalog',
+  'assistant','profiles','agent-models','model-preferences','task-progress','public-progress','evidence','artifacts','model-catalog',
   'task-context','image-inputs','memory-commands','memory-extractor','materials','task-materials','mcp-oauth',
   'conversation-control','control-classifier','directory-approval','title-summary',
   // Row codecs and startup migrations imported by the modules above.

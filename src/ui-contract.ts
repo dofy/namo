@@ -15,7 +15,6 @@ export interface ConfigValues {
   networkAccess: boolean;
   allowLocalCommits: boolean;
   concurrency: number;
-  model: string;
   bin: string;
   timeoutMs: number;
   readPaths: string[];
@@ -31,16 +30,18 @@ export interface ConfigValues {
 export interface McpConnectionView { id:string; type:'remote'|'stdio'; url:string; command?:string; args?:string[]; oauthScope?:string; ownerUserId?:string; credentialConfigured:boolean; credentialSource?:'oauth' }
 export interface McpConnectionPatch { id:string; type:'remote'|'stdio'; url:string; command?:string; args?:string[]; oauthScope?:string; ownerUserId?:string; newToken?:string; clearToken?:boolean }
 export interface ClaudeGatewayView { baseUrl: string; auth: 'bearer' | 'api-key' }
-export interface AgentConnectionView { id: string; adapter: 'codex' | 'claude'; label: string; enabled: boolean; bin: string; model: string; gateway?: ClaudeGatewayView }
+export interface AgentConnectionView { id: string; adapter: 'codex' | 'claude'; label: string; enabled: boolean; bin: string; timeoutMs: number; model: string; modelError?: string; gateway?: ClaudeGatewayView }
 export interface AgentConfigPatch {
   defaultAgentProfile?: string;
-  claudeCode?: { enabled: boolean; bin: string; model: string; gateway?: (ClaudeGatewayView & { newSecret?: string }) | null };
+  agentExecution?: { profile: string; bin: string; timeoutMs: number };
+  claudeCode?: { enabled: boolean; gateway?: (ClaudeGatewayView & { newSecret?: string }) | null };
 }
 export interface ConfigView {
   revision: string;
   mcpConnections: McpConnectionView[];
   agentConnections?: { defaultProfile: string; profiles: AgentConnectionView[] };
   valid: boolean;
+  agentModelEditing?: boolean;
   application: 'stopped' | 'unknown' | 'applied' | 'pending';
   automaticConfiguration?:boolean;
   configurationReload?:string;
@@ -148,13 +149,12 @@ export interface ProfileChange {
 }
 export interface UserProfile extends ProfileIdentity, ProfileValues {
   version: number; updatedAt: number | null; changes: ProfileChange[];
-  defaultModel?: string;
 }
 export interface ProfileState { available: boolean; reason?: string; configRevision: string; entries: UserProfile[] }
 export interface TaskDetail {
   id: string; workstream: string; cwd: string; execution: string; inputVersion: number;
   startedAt: number | null; finishedAt: number | null; error: string | null;
-  title?: string; ownerId?: string; ownerName?: string; createdAt?: number;
+  title?: string; ownerId?: string; ownerName?: string; createdAt?: number; model?: string;
   messages: { role: string; version: number; dispatch: string }[];
   runs: { id: string; inputVersion: number; state: string; startedAt: number; finishedAt: number | null; error: string | null }[];
   delivery: { kind: string; part: number; state: string; error: string | null }[];
