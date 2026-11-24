@@ -660,7 +660,8 @@ export class Engine {
       if(!this.configurationDraining&&Date.now()>=this.nextSchedulePoll){
         const now=Date.now(); this.nextSchedulePoll=now+1000;
         this.store.transaction(()=>{if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return;
-        new Schedules(this.store).due(now,(schedule,source)=>{
+        const schedules=new Schedules(this.store);
+        schedules.due(now,(schedule,source)=>{
           const statusKey=`schedule-status:${schedule.id}`;
           const status=()=>{const row=this.store.db.prepare('SELECT value FROM settings WHERE key=?').get(statusKey);return row?JSON.parse(String(row.value)) as {reason?:string;skipped?:number}:{};};
           const saveStatus=(value:unknown)=>this.store.db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(statusKey,JSON.stringify(value));
@@ -688,8 +689,7 @@ export class Engine {
           } catch { allowed=false; }
           if(!allowed){pause(admittedNow?'目录或权限绑定已变化':'接入权限已变化',admittedNow);return;}
           const prefix=`schedule:${schedule.id}:`,upper=prefix+'\uffff';
-          const uncertain=this.store.db.prepare("SELECT 1 FROM inbox i LEFT JOIN tasks t ON t.id=i.taskId WHERE i.key>=? AND i.key<? AND (i.state IN ('delivery_unknown','delivery_failed') OR i.error='interrupted' OR t.state IN ('interrupted','lost')) LIMIT 1").get(prefix,upper);
-          if(uncertain){pause('此前触发的结果需要核对',true);return;}
+          if(schedules.priorIssue(schedule.id)){pause('此前触发的结果需要核对',true);return;}
           const pending=this.store.db.prepare("SELECT 1 FROM inbox WHERE key>=? AND key<? AND state IN ('queued','running','waiting','awaiting_reply') LIMIT 1").get(prefix,upper);
           if(pending){const previous=status();saveStatus({...previous,skipped:(previous.skipped??0)+1});return;}
           const m:Incoming={...source,key:`schedule:${schedule.id}:${schedule.nextAt}`,text:schedule.content,createdAt:now};
