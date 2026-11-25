@@ -8,6 +8,8 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { loadConfig } from '../src/config.js';
 import { Store, type Incoming } from '../src/store.js';
 import { RuntimeError, type Runtime } from '../src/runtime.js';
@@ -27,6 +29,8 @@ import { resolveAgent } from '../src/agent-registry.js';
 import { loginAgent, probeAgent, runtimeFor } from '../src/agents.js';
 import { memoryJobs } from '../src/business-storage.js';
 import { readEvidence } from '../src/evidence.js';
+import { explicitReviewUrl, openClaudeReview } from '../src/claude-review.js';
+import { REVIEW_AST_MAX_BYTES, scanReviewSource } from '../src/review-ast-grep.js';
 
 const wait = (condition: () => boolean, timeoutMs = 7000) => waitFor(condition, timeoutMs);
 const fake = `#!/usr/bin/env node
@@ -225,6 +229,48 @@ else output({ type: 'result', subtype: 'success', is_error: false, session_id: i
   assert.equal(f.tasks.selection(scheduledTask.id)?.adapter, 'claude');
   assert.notEqual(scheduledTask.workstreamId, first.workstreamId);
   assert.equal(f.tasks.binding(message('current'))?.id, f.tasks.get(codexAgain.taskId!)?.workstreamId);
+});
+
+test('Claude PR reads send only the selected target to the authenticated host tool', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'namo-review-'));
+  t.after(() => rmSync(dir, {recursive:true,force:true}));
+  const url = 'https://github.com/example/project/pull/303';
+  assert.equal(explicitReviewUrl(`请审查 [这个 PR](${url})`), url);
+  assert.equal(explicitReviewUrl(`${url} ${url.replace('303','304')}`), undefined);
+  assert.equal(explicitReviewUrl(url + 'x'), undefined);
+  const calls: unknown[] = [], evidence: string[] = [];
+  const bridge = await openClaudeReview(dir, url, {cwd:dir,prompt:'test',signal:new AbortController().signal,
+    onThread(){},onTurn(){},onEvidence:item=>evidence.push(item.status),onReview:async args=>{calls.push(args);return {source:'fixture'};}});
+  const connection = JSON.parse(readFileSync(bridge.configFile, 'utf8')).mcpServers.namo_review;
+  const client = new McpClient({name:'fixture',version:'1'});
+  try {
+    assert.equal((await fetch(connection.url, {method:'POST'})).status,403);
+    assert.equal((await fetch(connection.url, {method:'POST',headers:{...connection.headers,Origin:'https://example.org'}})).status,403);
+    await client.connect(new StreamableHTTPClientTransport(new URL(connection.url), {requestInit:{headers:connection.headers}}));
+    const {tools} = await client.listTools();
+    assert.deepEqual(tools.map(tool=>tool.name),['read_pull_request']);
+    assert.ok(tools[0].inputSchema.properties?.astGrepPattern);
+    const wrong = await client.callTool({name:'read_pull_request',arguments:{url:url.replace('303','304')}});
+    assert.equal(wrong.isError,true);
+    const reply = await client.callTool({name:'read_pull_request',arguments:{url}});
+    assert.deepEqual(reply.content,[{type:'text',text:'{"source":"fixture"}'}]);
+    assert.deepEqual(calls,[{url}]);
+    assert.deepEqual(evidence,['running','completed']);
+  } finally { await client.close(); await bridge.close(); }
+  assert.equal(existsSync(bridge.configFile),false);
+});
+
+test('PR ast-grep matches syntax instead of text and bounds its output', async () => {
+  const code = '// fetch("comment")\nconst text = "fetch(1)";\n  fetch(input);\n';
+  assert.deepEqual(await scanReviewSource('src/index.ts',code,'fetch($ARG)'),{pattern:'fetch($ARG)',totalMatches:1,
+    truncated:false,matches:[{line:3,column:3,endLine:3}]});
+  assert.equal((await scanReviewSource('src/index.tsx','const el = <div>{fetch(x)}</div>;','fetch($X)')).totalMatches,1);
+  const many = await scanReviewSource('index.mjs','fetch(x);\n'.repeat(31),'fetch($X)');
+  assert.equal(many.totalMatches,31);
+  assert.equal(many.matches.length,30);
+  assert.equal(many.truncated,true);
+  await assert.rejects(scanReviewSource('README.md','fetch(x)','fetch($X)'),/github_review_ast_language_unsupported/);
+  await assert.rejects(scanReviewSource('index.ts','你'.repeat(REVIEW_AST_MAX_BYTES),'fetch($X)'),/github_review_ast_source_too_large/);
 });
 
 test('a Claude gateway authenticates the persistent worker without OAuth and redacts the credential from replies', async t => {

@@ -153,7 +153,7 @@ export class ScopedGitHubAdapter implements GitHubObservationAdapter {
       taskId:context.taskId,ownerId:context.ownerId,chatId:context.chatId})).digest('hex');
   }
 
-  async readPullRequest(target: Pick<GitHubTarget,'owner'|'repo'|'pullNumber'>, context: GitHubAccessContext, deadlineMs: number, cursor?: {baseSha:string;headSha:string;index:number;offset:number}, source?: import('./external-waits.js').ReviewContext) {
+  async readPullRequest(target: Pick<GitHubTarget,'owner'|'repo'|'pullNumber'>, context: GitHubAccessContext, deadlineMs: number, cursor?: {baseSha:string;headSha:string;index:number;offset:number}, source?: import('./external-waits.js').ReviewContext, contextChars?: number) {
     const selected = {...target,headSha:'0'.repeat(40)};
     const scope = this.authorizeStable(selected,context);
     const local = this.config?.localGh;
@@ -163,7 +163,7 @@ export class ScopedGitHubAdapter implements GitHubObservationAdapter {
       const account = await adapter.account(deadlineMs);
       if (account.id!==local.userId || account.login.toLowerCase()!==local.login.toLowerCase()) throw new GitHubAccessError('github_access_changed');
     }
-    const result = source ? await adapter.reviewContext(selected,deadlineMs,source) : await adapter.reviewBatch(selected,deadlineMs,cursor);
+    const result = source ? await adapter.reviewContext(selected,deadlineMs,source,contextChars) : await adapter.reviewBatch(selected,deadlineMs,cursor);
     if (this.authorizeStable(selected,context)!==scope) throw new GitHubAccessError('github_access_changed');
     return {snapshot:result,scope};
   }

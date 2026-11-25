@@ -8,6 +8,7 @@ import { dirname, isAbsolute, join, relative } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
 import { evidenceItem } from './evidence.js';
+import { CLAUDE_REVIEW_TOOL, openClaudeReview } from './claude-review.js';
 import type { AgentProfile, ClaudeGateway } from './agent-registry.js';
 import type { AutoMemoryInput } from './auto-memory.js';
 import type { Config } from './config.js';
@@ -201,34 +202,45 @@ export class ClaudeRuntime implements Runtime {
     const directories = policy?.directories ?? [];
     const commandTools = r.taskId && policy;
     const model = r.model === undefined ? readAgentModel(this.profile) : r.model;
-    const settings = {
-      disableAllHooks: true,
-      permissions: {
-        deny: policy?.deny ?? [], blockReadsOutsideWorkingDirectories: true, blockWritesOutsideWorkingDirectories: true,
-        ...(commandTools ? { allow: ['Bash'] } : {}),
-      },
-      ...(commandTools ? { sandbox: commandSandbox(policy, r.cwd, this.config.codex.networkAccess === true) } : {}),
-    };
-    const args = ['--print', '--restricted', '--safe-mode', '--no-chrome', '--strict-mcp-config',
-      '--permission-mode', extracting ? 'dontAsk' : 'acceptEdits', '--permission-prompts', 'none',
-      '--tools', commandTools ? 'Read,Glob,Grep,Edit,Write,Bash' : '', '--disallowed-tools', 'mcp__*', '--settings', JSON.stringify(settings),
-      '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
-      r.threadId ? '--resume' : '--session-id', threadId];
     const checkpoint = gateway && r.threadId ? refusalCheckpoint(this.profile.home, r.cwd, threadId) : undefined;
-    if (checkpoint) args.push('--resume-session-at', checkpoint);
-    if (model) args.push('--model', model);
-    if (directories.length) args.push('--add-dir', ...directories);
-    if (extracting) args.push('--no-session-persistence', '--disable-slash-commands', '--system-prompt', memorySystemPrompt);
-
     const content: unknown[] = [{ type: 'text', text: r.prompt }];
     for (const image of r.images ?? []) {
       const bytes = verifyImageInput(this.config.dataDir, image);
       content.push({ type: 'image', source: { type: 'base64', media_type: image.mime, data: bytes.toString('base64') } });
     }
+    const sandbox = commandTools ? commandSandbox(policy, r.cwd, this.config.codex.networkAccess === true) : undefined;
+    const review = commandTools && r.reviewUrl && r.onReview
+      ? await openClaudeReview(this.config.dataDir, r.reviewUrl, r) : undefined;
     const input = JSON.stringify({ type: 'user', session_id: threadId, parent_tool_use_id: null, message: { role: 'user', content } }) + '\n';
-    return new Promise<RunResult>((resolve, reject) => {
+    const settings = {
+      disableAllHooks: true,
+      permissions: {
+        deny: policy?.deny ?? [], blockReadsOutsideWorkingDirectories: true, blockWritesOutsideWorkingDirectories: true,
+        ...(commandTools && !review ? { allow: ['Bash'] } : {}),
+      },
+      ...(review ? { disableClaudeAiConnectors: true } : {}),
+      ...(sandbox ? { sandbox } : {}),
+    };
+    const args = ['--print', '--restricted', '--no-chrome', '--strict-mcp-config',
+      '--permission-mode', extracting || review ? 'dontAsk' : 'acceptEdits', '--permission-prompts', 'none',
+      '--tools', commandTools && !review ? 'Read,Glob,Grep,Edit,Write,Bash' : '', '--settings', JSON.stringify(settings),
+      '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+      r.threadId ? '--resume' : '--session-id', threadId];
+    if (review) args.push('--disable-slash-commands', '--allowed-tools', CLAUDE_REVIEW_TOOL, '--mcp-config', review.configFile, '--append-system-prompt', review.instructions);
+    else args.push('--safe-mode', '--disallowed-tools', 'mcp__*');
+    if (checkpoint) args.push('--resume-session-at', checkpoint);
+    if (model) args.push('--model', model);
+    if (directories.length && !review) args.push('--add-dir', ...directories);
+    if (extracting) args.push('--no-session-persistence', '--disable-slash-commands', '--system-prompt', memorySystemPrompt);
+    const result = new Promise<RunResult>((resolve, reject) => {
       const env = claudeEnvironment(this.profile.home, gateway);
-      if (extracting) env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
+      if (extracting || review) env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
+      if (review) {
+        env.CLAUDE_CODE_DISABLE_CLAUDE_MDS = '1';
+        env.CLAUDE_CODE_DISABLE_DEFERRED_TOOL_RESUME = '1';
+        env.ENABLE_CLAUDEAI_MCP_SERVERS = 'false';
+        env.ENABLE_TOOL_SEARCH = 'false';
+      }
       if (commandTools) {
         env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = '1';
         env.GIT_CONFIG_GLOBAL = '/dev/null';
@@ -275,6 +287,8 @@ export class ClaudeRuntime implements Runtime {
         const event = JSON.parse(line);
         if (event.type === 'system' && event.subtype === 'init') {
           if (event.session_id !== threadId) throw new RuntimeError('claude_session_mismatch');
+          if (review && (!Array.isArray(event.tools) || event.tools.length !== 1 || event.tools[0] !== CLAUDE_REVIEW_TOOL))
+            throw new RuntimeError('github_review_tool_unavailable');
           r.onActivity?.('working');
           if (isModelId(event.model)) { r.onModel?.(event.model); r.onRuntimeModel?.(event.model); }
         } else if (event.type === 'assistant') {
@@ -322,11 +336,13 @@ export class ClaudeRuntime implements Runtime {
           if (code !== 0 || !result || result.failed || !result.text.trim()) throw new RuntimeError('claude_turn_failed');
           r.onThread(threadId);
           r.onTurn(turnId);
-          resolve({ threadId, turnId, text: result.text });
+          const text = review && !review.ready() ? '本轮没有成功读取 Namo 的 PR 审查材料。\n\n' + result.text : result.text;
+          resolve({ threadId, turnId, text });
         } catch (error) { reject(error instanceof RuntimeError ? error : new RuntimeError('claude_protocol_failed')); }
       });
       if (r.signal.aborted) cancel();
       child.stdin.end(input);
     });
+    return review ? result.finally(review.close) : result;
   }
 }

@@ -510,7 +510,7 @@ export class GitHubRestAdapter implements GitHubObservationAdapter {
   }
 
   /** Return a small, resumable slice. A cursor always binds both revisions. */
-  async reviewContext(target: GitHubTarget, deadlineMs:number, context:ReviewContext) {
+  async reviewContext(target: GitHubTarget, deadlineMs:number, context:ReviewContext, maxChars=8000) {
     const path=`${this.path(target)}/pulls/${target.pullNumber}`;
     const before=await this.get(path,deadlineMs);
     const stable=(p:Json)=>p.head?.sha===context.headSha && p.base?.sha===context.baseSha;
@@ -524,7 +524,7 @@ export class GitHubRestAdapter implements GitHubObservationAdapter {
     let content:string;
     try {content=new TextDecoder('utf-8',{fatal:true}).decode(buffer);} catch {throw new GitHubReadError('github_context_unavailable');}
     if (context.offset>content.length) throw new GitHubReadError('github_review_invalid_cursor');
-    const text=content.slice(context.offset,context.offset+8000), end=context.offset+text.length;
+    const text=content.slice(context.offset,context.offset+maxChars), end=context.offset+text.length;
     if (!stable(await this.get(path,deadlineMs))) throw new GitHubReadError('github_head_changed');
     return {source:'github_rest' as const,repository:`${target.owner}/${target.repo}`,pullNumber:target.pullNumber,
       headSha:context.headSha,baseSha:context.baseSha,totalFiles:Number(before.changed_files),files:[] as Array<Record<string,unknown>>,next:null,fileListLimited:false,
