@@ -202,8 +202,8 @@ export function SettingsPage({ config, expired, recoveryAvailable, refresh, noti
       <Tabs.Content value="work" forceMount hidden={tab !== 'work'} data-settings-form="work" className="settings-tab-panel"><PageSection icon="settings" title={tr('directories.title')} description={tr(agent?.adapter==='claude'?'directories.claudeHelp':'directories.help')}>
         <DirectoryPicker directories={draft.directories} onChange={value=>edit('directories',value)} onPicking={setPickingDirectory}/>
       </PageSection>
-      {agent?.adapter==='codex' && <PageSection icon="connections" title={tr('settings.executionPermissions')}>
-        <SettingToggle icon="connections" title={tr('settings.allowNetworkAccessCommands')} description={tr('settings.codexNetworkHelp')} checked={draft.networkAccess!==false}
+      {agent && <PageSection icon="connections" title={tr('settings.executionPermissions')}>
+        <SettingToggle icon="connections" title={tr('settings.allowNetworkAccessCommands')} description={tr('settings.agentNetworkHelp')} checked={draft.networkAccess!==false}
           disabled={saving||switching} onChange={value=>edit('networkAccess',value)}/>
       </PageSection>}
       <PageSection icon="play" title={tr('settings.executionSettings')} description={tr('settings.agentExecutionHelp')}>

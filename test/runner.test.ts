@@ -8,6 +8,8 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { loadConfig } from '../src/config.js';
 import { Store, type Incoming } from '../src/store.js';
 import { RuntimeError, type Runtime } from '../src/runtime.js';
@@ -26,6 +28,9 @@ import { saveAgentModel } from '../src/agent-models.js';
 import { resolveAgent } from '../src/agent-registry.js';
 import { loginAgent, probeAgent, runtimeFor } from '../src/agents.js';
 import { memoryJobs } from '../src/business-storage.js';
+import { readEvidence } from '../src/evidence.js';
+import { explicitReviewUrl, openClaudeReview } from '../src/claude-review.js';
+import { REVIEW_AST_MAX_BYTES, scanReviewSource } from '../src/review-ast-grep.js';
 
 const wait = (condition: () => boolean, timeoutMs = 7000) => waitFor(condition, timeoutMs);
 const fake = `#!/usr/bin/env node
@@ -127,10 +132,16 @@ let stdin = '';
 for await (const chunk of process.stdin) stdin += chunk;
 const input = JSON.parse(stdin), id = input.session_id, output = value => console.log(JSON.stringify(value));
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input, home: process.env.HOME,
-  config: process.env.CLAUDE_CONFIG_DIR, codexHome: process.env.CODEX_HOME, anthropicKey: !!process.env.ANTHROPIC_API_KEY,
+  config: process.env.CLAUDE_CONFIG_DIR, codexHome: process.env.CODEX_HOME, anthropicKey: !!process.env.ANTHROPIC_API_KEY, subprocessScrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
   feishuSecret: !!process.env.FEISHU_APP_SECRET }) + '\\n');
 output({ type: 'system', subtype: 'init', session_id: id, model: 'claude-sonnet-test' });
 const text = input.message.content[0].text;
+if (text !== 'hold' && JSON.parse(text).messages?.[0]?.text === 'hello') {
+  output({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', id: 'cmd-ok', input: { command: 'curl https://example.test/private-command-argument' } }] } });
+  output({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'cmd-ok', content: 'private-command-output' }] } });
+  output({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', id: 'cmd-failed', input: { command: 'git status' } }] } });
+  output({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'cmd-failed', is_error: true, content: 'private-failure-output' }] } });
+}
 if (text === 'hold') { process.on('SIGTERM', () => {}); setInterval(() => {}, 20); }
 else output({ type: 'result', subtype: 'success', is_error: false, session_id: id, result: 'Claude reply' });
 `, { mode: 0o700 });
@@ -157,6 +168,12 @@ else output({ type: 'result', subtype: 'success', is_error: false, session_id: i
   assert.equal(f.tasks.selection(first.id)?.adapter, 'claude');
   assert.equal(f.tasks.model(first.id), 'sonnet');
   assert.equal(f.tasks.reportedModel(first.id), 'claude-sonnet-test');
+  const [evidence] = readEvidence(f.store, first.id);
+  assert.deepEqual(evidence.items.map(({ kind, label, status }) => ({ kind, label, status })), [
+    { kind: 'command', label: 'curl（参数未保存）', status: 'completed' },
+    { kind: 'command', label: 'git status', status: 'failed' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(evidence), /private-(?:command|failure)-/);
   const thread = f.tasks.thread(first);
   assert.match(thread ?? '', /^[0-9a-f-]{36}$/);
   await send('to-codex', '/agent codex');
@@ -171,11 +188,23 @@ else output({ type: 'result', subtype: 'success', is_error: false, session_id: i
   assert.ok(rows[0].args.includes('--session-id'));
   assert.equal(rows[1].args[rows[1].args.indexOf('--resume') + 1], thread);
   assert.equal(rows[1].args[rows[1].args.indexOf('--model') + 1], 'sonnet');
-  assert.equal(rows[1].args[rows[1].args.indexOf('--tools') + 1], 'Read,Glob,Grep,Edit,Write');
+  assert.equal(rows[1].args[rows[1].args.indexOf('--tools') + 1], 'Read,Glob,Grep,Edit,Write,Bash');
   assert.ok(rows[1].args.includes('--restricted'));
   assert.ok(rows[1].args.includes('--strict-mcp-config'));
   const policy = JSON.parse(rows[1].args[rows[1].args.indexOf('--settings') + 1]);
   assert.ok(policy.permissions.deny.includes(`Read(/${raw.codex.denyPaths[0]})`));
+  assert.deepEqual(policy.permissions.allow, ['Bash']);
+  assert.equal(policy.sandbox.enabled, true);
+  assert.equal(policy.sandbox.failIfUnavailable, true);
+  assert.equal(policy.sandbox.allowUnsandboxedCommands, false);
+  assert.equal(policy.sandbox.autoAllowBashIfSandboxed, true);
+  assert.ok(policy.sandbox.filesystem.denyRead.includes(f.data));
+  assert.ok(policy.sandbox.filesystem.denyRead.includes(join(f.data,'agents','claude')));
+  assert.ok(policy.sandbox.filesystem.allowRead.includes(first.cwd));
+  assert.ok(policy.sandbox.filesystem.denyWrite.includes(raw.codex.denyPaths[0]));
+  assert.deepEqual(policy.sandbox.network.allowedDomains, ['*']);
+  assert.equal(policy.sandbox.network.allowLocalBinding, false);
+  assert.equal(rows[1].subprocessScrub, '1');
   assert.equal(rows[1].home, join(f.data, 'agents', 'claude'));
   assert.equal(rows[1].config, join(rows[1].home, '.claude'));
   assert.equal(rows[1].codexHome, undefined);
@@ -202,6 +231,48 @@ else output({ type: 'result', subtype: 'success', is_error: false, session_id: i
   assert.equal(f.tasks.binding(message('current'))?.id, f.tasks.get(codexAgain.taskId!)?.workstreamId);
 });
 
+test('Claude PR reads send only the selected target to the authenticated host tool', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'namo-review-'));
+  t.after(() => rmSync(dir, {recursive:true,force:true}));
+  const url = 'https://github.com/example/project/pull/303';
+  assert.equal(explicitReviewUrl(`请审查 [这个 PR](${url})`), url);
+  assert.equal(explicitReviewUrl(`${url} ${url.replace('303','304')}`), undefined);
+  assert.equal(explicitReviewUrl(url + 'x'), undefined);
+  const calls: unknown[] = [], evidence: string[] = [];
+  const bridge = await openClaudeReview(dir, url, {cwd:dir,prompt:'test',signal:new AbortController().signal,
+    onThread(){},onTurn(){},onEvidence:item=>evidence.push(item.status),onReview:async args=>{calls.push(args);return {source:'fixture'};}});
+  const connection = JSON.parse(readFileSync(bridge.configFile, 'utf8')).mcpServers.namo_review;
+  const client = new McpClient({name:'fixture',version:'1'});
+  try {
+    assert.equal((await fetch(connection.url, {method:'POST'})).status,403);
+    assert.equal((await fetch(connection.url, {method:'POST',headers:{...connection.headers,Origin:'https://example.org'}})).status,403);
+    await client.connect(new StreamableHTTPClientTransport(new URL(connection.url), {requestInit:{headers:connection.headers}}));
+    const {tools} = await client.listTools();
+    assert.deepEqual(tools.map(tool=>tool.name),['read_pull_request']);
+    assert.ok(tools[0].inputSchema.properties?.astGrepPattern);
+    const wrong = await client.callTool({name:'read_pull_request',arguments:{url:url.replace('303','304')}});
+    assert.equal(wrong.isError,true);
+    const reply = await client.callTool({name:'read_pull_request',arguments:{url}});
+    assert.deepEqual(reply.content,[{type:'text',text:'{"source":"fixture"}'}]);
+    assert.deepEqual(calls,[{url}]);
+    assert.deepEqual(evidence,['running','completed']);
+  } finally { await client.close(); await bridge.close(); }
+  assert.equal(existsSync(bridge.configFile),false);
+});
+
+test('PR ast-grep matches syntax instead of text and bounds its output', async () => {
+  const code = '// fetch("comment")\nconst text = "fetch(1)";\n  fetch(input);\n';
+  assert.deepEqual(await scanReviewSource('src/index.ts',code,'fetch($ARG)'),{pattern:'fetch($ARG)',totalMatches:1,
+    truncated:false,matches:[{line:3,column:3,endLine:3}]});
+  assert.equal((await scanReviewSource('src/index.tsx','const el = <div>{fetch(x)}</div>;','fetch($X)')).totalMatches,1);
+  const many = await scanReviewSource('index.mjs','fetch(x);\n'.repeat(31),'fetch($X)');
+  assert.equal(many.totalMatches,31);
+  assert.equal(many.matches.length,30);
+  assert.equal(many.truncated,true);
+  await assert.rejects(scanReviewSource('README.md','fetch(x)','fetch($X)'),/github_review_ast_language_unsupported/);
+  await assert.rejects(scanReviewSource('index.ts','你'.repeat(REVIEW_AST_MAX_BYTES),'fetch($X)'),/github_review_ast_source_too_large/);
+});
+
 test('a Claude gateway authenticates the persistent worker without OAuth and redacts the credential from replies', async t => {
   const f = fixture(t), bin = join(f.dir, 'claude-gateway.mjs'), token = 'fixture-gateway-credential';
   const checkpoint = '12b4ae64-753e-4389-aabd-7f2c0c4f1ff0';
@@ -212,6 +283,9 @@ if (args[0] === 'auth') process.exit(93);
 if (env.ANTHROPIC_BASE_URL !== 'https://gateway.example/anthropic' || env.ANTHROPIC_AUTH_TOKEN !== ${JSON.stringify(token)}
   || env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC !== '1' || args.includes(env.ANTHROPIC_AUTH_TOKEN))
   process.exit(94);
+const sandbox = JSON.parse(args[args.indexOf('--settings') + 1]).sandbox;
+if (!sandbox || sandbox.network.allowedDomains.length !== 0 || !sandbox.network.strictAllowlist || env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB !== '1')
+  process.exit(97);
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
 const message = JSON.parse(input), session_id = message.session_id;
@@ -232,6 +306,7 @@ if (text === 'gateway refusal') {
 }
 `, { mode: 0o700 });
   const raw = JSON.parse(readFileSync(f.file, 'utf8'));
+  raw.codex.networkAccess = false;
   raw.agents = { defaultProfile: 'claude', profiles: { claude: { adapter: 'claude', enabled: true, bin,
     gateway: { baseUrl: 'https://gateway.example/anthropic/', auth: 'bearer', secret: token } } } };
   writeFileSync(f.file, JSON.stringify(raw));

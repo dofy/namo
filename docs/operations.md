@@ -17,7 +17,7 @@ Codex 可使用 `namo login --profile codex --device-auth` 调用官方设备登
 
 工作台的默认执行器用于没有个人选择的新工作线。飞书私聊中用 `/agent` 查看当前和可用的执行器，用 `/agent claude` 或 `/agent codex` 切换，用 `/agent default` 恢复服务默认。切回时会续接该执行器最近的工作线。请先完成或停止当前会话里尚未结束的任务。
 
-Claude Code 在 macOS 和 Linux 上支持文字、图片、授权目录内的文件搜索、读取和编辑。需要 Shell、Skills、Namo MCP、GitHub 工具、模型触发的持久等待或运行中追加指令时，可切换到 Codex。后台自动记忆跟随服务的默认执行器，两者共用记忆库。卡片标题仍使用 Codex。授权目录应与 Namo 的数据和登录目录分开，避免重叠。
+Claude Code 支持文字、图片、获准目录内的文件工具和沙箱 Bash。命令联网开关适用于 Codex 和 Claude Code，Claude 的命令通过沙箱代理联网，Linux 需要 bubblewrap 和 socat。消息带有单个 GitHub PR 审查链接时，Claude 进入只读审查轮，经宿主读取该 PR 的补丁和固定提交的源码。GitHub 凭据由宿主持有。Skills、通用 Namo MCP、模型触发的持久等待和运行中追加指令由 Codex 支持。后台自动记忆跟随服务的默认执行器，两者共用记忆库。卡片标题仍使用 Codex。授权目录应与 Namo 的数据和登录目录分开，避免重叠。
 
 仅有终端时，可在配置文件的顶层加入 `"agents": {"defaultProfile":"codex","profiles":{"claude":{"adapter":"claude","enabled":true,"bin":"claude"}}}`。使用自定义网关时，在 Claude 配置中增加 `"gateway":{"baseUrl":"https://gateway.example/anthropic","auth":"bearer","secret":"替换为网关凭据"}`，API Key 则使用 `"auth":"api-key"`。将 `defaultProfile` 改为 `claude` 可让新工作线默认使用 Claude Code。
 
@@ -37,6 +37,8 @@ Claude Code 在 macOS 和 Linux 上支持文字、图片、授权目录内的文
 在**连接设置 → GitHub**选择本机 `gh` 登录或独立令牌，保存后自动生效。所有获准与机器人对话的成员，无论私聊还是群聊，都可按用户请求使用该账号的实际读写权限；不再另设本人、群聊或仓库范围，也不再逐次审批。旧配置中的范围字段仅供兼容读取。
 
 切换本机 `gh` 当前账号不会自动改绑；重新保存才能换账号。“仅公开仓库”停用账号访问。PR 审查与检查等待本身不会触发额外写入；用户已请求的后续操作可直接继续。写请求结果不明时先核对，不能换请求编号重复执行。
+
+审查时可以要求在某个 JS 或 TS 文件中用 ast-grep 匹配指定语法模式。Namo 读取已授权 PR 的固定版本，对完整文件做搜索并返回行号。每次搜索支持最多 64 KB 的单个文件，返回前 30 个位置及命中总数。现有 Codex 会话使用旧工具参数时，可发送 `/refresh` 更新工具定义。
 
 ## 异常处理
 

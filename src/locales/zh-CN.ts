@@ -1192,7 +1192,7 @@ export const chinese = {
   "model.agentHelp": "使用此 Agent 的任务共享模型，保存后对新任务生效。",
   "settings.agentExecutionHelp": "选择默认 Agent，配置其启动参数和服务共享的并发上限。",
   "settings.agentCommandPath": "{0} 命令或完整路径",
-  "settings.codexNetworkHelp": "允许 Codex 通过命令访问网络，例如下载依赖。",
+  "settings.agentNetworkHelp": "允许 Codex 和 Claude Code 的沙箱命令访问网络。",
   "directories.claudeHelp": "Claude Code 可在任务目录和下方授权目录中读写。",
   "model.loading": "正在加载可选模型…",
   "model.custom": "手动填写模型 ID…",

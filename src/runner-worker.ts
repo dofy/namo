@@ -11,6 +11,7 @@ import { Store } from './store.js';
 import { Tasks } from './tasks.js';
 import { RuntimeError, type RunControls, type RunResult } from './runtime.js';
 import { EvidenceRecorder } from './evidence.js';
+import { explicitReviewUrl } from './claude-review.js';
 import { runnerJob, runnerEvent } from './runner-store.js';
 import { recordActivity } from './feedback.js';
 import { recordProgress } from './public-progress.js';
@@ -175,7 +176,8 @@ async function main(): Promise<void> {
             catch(error){finish?.('unknown');throw error;}
           } finally {browserBusy=false;}
         }} : {}),
-        onReview: args => readReview(store,file,task,args,abort.signal),
+        onReview: (args, signal = abort.signal) => readReview(store,file,task,args,signal),
+        ...(selection.adapter==='claude' && !message.key.startsWith('schedule:') ? {reviewUrl:explicitReviewUrl(message.text)} : {}),
         ...(config.github && (config.github.source==='gh'||!!config.github.token)?{onGitHub:(args:unknown,signal:AbortSignal)=>githubApi(store,file,task,args,signal)}:{}),
         onControl: (args,callId) => {
           const latest=loadConfig(file);

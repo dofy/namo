@@ -18,7 +18,8 @@ export interface RunRequest {
   onWait?: (request: WaitRequest) => string;
   onControl?: (arguments_: unknown, callId: string) => unknown;
   onSchedule?: (arguments_: unknown, callId: string) => unknown;
-  onReview?: (arguments_: unknown) => Promise<unknown>;
+  onReview?: (arguments_: unknown, signal?: AbortSignal) => Promise<unknown>;
+  reviewUrl?: string;
   onGitHub?: (arguments_: unknown, signal: AbortSignal) => Promise<unknown>;
   onMcp?: (arguments_: unknown, signal: AbortSignal) => Promise<unknown>;
   onBrowser?: (arguments_: unknown, signal: AbortSignal) => Promise<unknown>;
