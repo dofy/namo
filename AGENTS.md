@@ -59,6 +59,6 @@ Tests are archived by feature with shared fixtures in `test/helpers.ts`. Add bou
 
 ## Docs
 
-Write single-language public documentation in English. Keep the English and Simplified Chinese editions of bilingual documentation in sync.
+Write single-language public documentation in English, including directory READMEs for multilingual sites. Keep the English and Simplified Chinese editions of bilingual documentation in sync.
 
 `docs/architecture.md` defines module entry points and the behavior each must preserve. `docs/operations.md` covers maintenance and recovery. When prose and scripts/config disagree, the executable wins.
