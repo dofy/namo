@@ -12,20 +12,36 @@ const string=(d:Draft,k:string)=>String(d[k]??'');
 const list=(d:Draft,k:string)=>d[k] as string[];
 
 export async function editExecution(manager:Management,ui:ConfigPrompter,view:ConfigView):Promise<boolean> {
- const agent=view.agentConnections?.profiles.find(p=>p.id===view.agentConnections?.defaultProfile);
+ const registry = view.agentConnections;
+ if (!registry) throw new ManagementError(t('claude.configInvalid'));
+ const profiles = registry.profiles.filter(profile => profile.enabled);
+ const options = profiles.map(profile => ({value: profile.id, label: profile.label}));
+ let id = registry.defaultProfile;
+ if (profiles.length > 1) {
+  const selected = await ui.select(t('terminal.menuModel'), [...options,
+   {value:'$default',label:t('claude.defaultAgent'),detail:profiles.find(p=>p.id===id)?.label}], id);
+  if (selected === '$default') {
+   return editForm(ui, t('claude.defaultAgent'), {defaultAgentProfile:id}, [
+    field('defaultAgentProfile',t('claude.defaultAgent'),'choice',{choices:options}),
+   ], draft => { manager.save(view.revision, {defaultAgentProfile:draft.defaultAgentProfile}); }, false, t('claude.defaultHelp'));
+  }
+  id = selected;
+ }
+ const agent=profiles.find(profile=>profile.id===id);
  if(!agent)throw new ManagementError(t('claude.configInvalid'));
  const v=view.values;
- const fields:Field[]=[field('model',t('model.agentModel'),'text',{clearable:true}),
+ const modelNotice = agent.modelError || (view.agentModelEditing === false ? t('model.receiverRequiresUpgrade') : '');
+ const fields:Field[]=[...(modelNotice ? [] : [field('model',t('model.agentModel'),'text',{clearable:true})]),
   field('bin',t('settings.agentCommandPath',agent.label),'text'),field('timeoutMs',t('terminal.timeout'),'number'),
   field('concurrency',t('settings.maximumConcurrentTasks'),'number'),field('denyPaths',t('terminal.denyPaths'),'list',{clearable:true})];
  fields.push(field('networkAccess',t('settings.allowNetworkAccessCommands'),'boolean'));
- return editForm(ui,t('terminal.menuModel'),{model:agent.model,bin:agent.bin,concurrency:v.concurrency,
+ return editForm(ui,`${t('terminal.menuModel')} · ${agent.label}`,{model:agent.model,bin:agent.bin,concurrency:v.concurrency,
   timeoutMs:agent.timeoutMs,networkAccess:v.networkAccess,denyPaths:v.denyPaths},fields,(d,keys)=>{
   const {model,bin,timeoutMs,...patch}=changedPatch(d,keys);
   const execution=bin!==undefined||timeoutMs!==undefined ? {agentExecution:{profile:agent.id,bin:d.bin,timeoutMs:d.timeoutMs}} : {};
   if(Object.keys(patch).length||Object.hasOwn(execution,'agentExecution'))view=manager.save(view.revision,{...patch,...execution});
   if(model!==undefined)manager.saveExecutionModel(view.revision,agent.id,agent.model,model);
- });
+ }, false, modelNotice);
 
 }
 export async function editDirectories(manager:Management,ui:ConfigPrompter,view:ConfigView):Promise<boolean> {
@@ -80,16 +96,4 @@ export async function editAssistantMenu(manager:Management,ui:ConfigPrompter,act
  if(action==='preview')return String(manager.assistant('preview',a.version,a.values));
  if(action==='reset'&&await ui.confirm(t('terminal.assistantReset'))){manager.assistant('reset',a.version,{});return t('terminal.saved');}
  return '';
-}
-export async function manageUpdates(manager:Management,ui:ConfigPrompter,view:ConfigView,action:'check'|'automatic'|'upgrade'|'rollback'='check'):Promise<string> {
- const status=await manager.codexUpdate();
- ui.info(t('terminal.updateStatus',status.currentVersion??'—',status.latestVersion??'—',status.automatic?t('terminal.yes'):t('terminal.no'),status.state));
- if(action==='automatic') {
-  ui.screen?.();const enabled=await ui.confirm(t('terminal.updateAuto'),status.automatic);
-  if(enabled===status.automatic)return '';
-  ui.screen?.();if(!await ui.confirm(t('terminal.confirm')))return '';
-  const result=await manager.codexUpdate({action,configRevision:view.revision,enabled});return t('terminal.updateStatus',result.currentVersion??'—',result.latestVersion??'—',result.automatic?t('terminal.yes'):t('terminal.no'),result.state);
- }
- ui.screen?.();if(!await ui.confirm(t('terminal.updateConfirm')))return '';
- const result=await manager.codexUpdate({action,configRevision:view.revision});return t('terminal.updateStatus',result.currentVersion??'—',result.latestVersion??'—',result.automatic?t('terminal.yes'):t('terminal.no'),result.state);
 }

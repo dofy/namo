@@ -4,7 +4,9 @@ import { McpOAuthFlow } from './mcp-oauth-flow.js';
 import { beginMcpOAuth } from './mcp-oauth.js';
 import type { Prompter } from './prompts.js';
 import type { ConfigView, McpConnectionPatch } from './ui-contract.js';
-import { editExecution, editDirectories, editFeishu, editGitHub, editAccess, editAssistantMenu, editProfiles, manageUpdates } from './terminal-settings.js';
+import { editExecution, editDirectories, editFeishu, editGitHub, editAccess, editAssistantMenu, editProfiles } from './terminal-settings.js';
+import { manageUpdates } from './terminal-updates.js';
+import { manageAgentConnections } from './terminal-agents.js';
 import { t } from './locale.js';
 import { Back, Home, parseSelectedAction, type ConfigPrompter } from './config-prompts.js';
 
@@ -35,7 +37,9 @@ export async function terminalConfig(manager: Management, ui: ConfigPrompter): P
   for (;;) {
     ui.screen?.();
     const view: ConfigView = manager.config();
-    const values=[{applied:t('terminal.statusApplied'),pending:t('terminal.statusPending'),stopped:t('terminal.statusStopped'),unknown:t('terminal.statusUnknown')}[view.application],view.valid?t('terminal.valid'):t('terminal.invalid'),view.agentConnections?.profiles.find(agent=>agent.id===view.agentConnections?.defaultProfile)?.model||t('terminal.defaultModel'),String(view.values.concurrency),String((view.values.directories??[]).length),String(view.mcpConnections.length)];
+    const agent = view.agentConnections?.profiles.find(profile => profile.id === view.agentConnections?.defaultProfile);
+    const model = agent ? `${agent.label} · ${agent.model || t('terminal.defaultModel')}` : t('terminal.defaultModel');
+    const values=[{applied:t('terminal.statusApplied'),pending:t('terminal.statusPending'),stopped:t('terminal.statusStopped'),unknown:t('terminal.statusUnknown')}[view.application],view.valid?t('terminal.valid'):t('terminal.invalid'),model,String(view.values.concurrency),String((view.values.directories??[]).length),String(view.mcpConnections.length)];
     if(ui.summary)ui.summary(([['terminal.summaryService','terminal.summaryConfig'],['terminal.summaryModel','terminal.summaryConcurrency'],['terminal.summaryDirectories','terminal.summaryMcp']] as const).map((labels,index)=>labels.map((label,column)=>[t(label),values[index*2+column]] as [string,string])));
     else ui.info(t('terminal.summary',...values));
     if (notice) { ui.info(notice); notice = ''; }
@@ -46,13 +50,10 @@ export async function terminalConfig(manager: Management, ui: ConfigPrompter): P
         {value:'3',label:t('terminal.menuFeishu')}, {value:'4',label:t('terminal.menuGithub')},
         {value:'5',label:t('terminal.menuMcp')}, {value:'6',label:t('terminal.menuLogin')},
         {value:'7',label:`${t('terminal.menuAccess')}  ${t('terminal.accessShortcuts')}`,availableActions:['detect']}, {value:'8',label:`${t('terminal.menuAssistant')}  ${t('terminal.assistantShortcuts')}`,availableActions:['preview','reset']},
-        {value:'9',label:t('terminal.menuProfiles')}, {value:'10',label:`${t('terminal.menuUpdate')}  ${t('terminal.updateShortcuts')}`,availableActions:['automatic','upgrade','rollback']},
+        {value:'9',label:t('terminal.menuProfiles')}, {value:'10',label:t('terminal.menuUpdate')},
         {value:'detect',label:t('terminal.detectOrg'),action:true,shortcut:'D',targeted:true,hidden:true},
         {value:'preview',label:t('terminal.assistantPreview'),action:true,shortcut:'P',targeted:true,hidden:true},
-        {value:'reset',label:t('terminal.assistantReset'),action:true,shortcut:'R',targeted:true,hidden:true},
-        {value:'automatic',label:t('terminal.updateAuto'),action:true,shortcut:'O',targeted:true,hidden:true},
-        {value:'upgrade',label:t('terminal.updateUpgrade'),action:true,shortcut:'U',targeted:true,hidden:true},
-        {value:'rollback',label:t('terminal.updateRollback'),action:true,shortcut:'B',targeted:true,hidden:true}
+        {value:'reset',label:t('terminal.assistantReset'),action:true,shortcut:'R',targeted:true,hidden:true}
       ],active,'root');
       const target=parseSelectedAction(selected),choice=target?.[1]??selected;
       active=choice;
@@ -69,7 +70,7 @@ export async function terminalConfig(manager: Management, ui: ConfigPrompter): P
       } else if (choice === '5') {
         notice=await (await import('./terminal-mcp.js')).manageMcp(manager,ui);
       } else if (choice === '6') {
-        notice = t('terminal.loginHelp');
+        notice = await manageAgentConnections(manager,ui,view);
       } else if (choice === '7') {
         if(await editAccess(manager,ui,view,target?.[0]==='detect'?'detect':'edit'))notice=t('terminal.saved');
       } else if (choice === '8') {
@@ -77,7 +78,7 @@ export async function terminalConfig(manager: Management, ui: ConfigPrompter): P
       } else if (choice === '9') {
         if(await editProfiles(manager,ui))notice=t('terminal.saved');
       } else if (choice === '10') {
-        notice=await manageUpdates(manager,ui,view,target?.[0]==='automatic'?'automatic':target?.[0]==='upgrade'?'upgrade':target?.[0]==='rollback'?'rollback':'check');
+        notice=await manageUpdates(manager,ui,view);
       } else notice = t('terminal.invalidChoice');
     } catch (error) {
       if (error instanceof Home) { notice = t('terminal.cancelled'); continue; }

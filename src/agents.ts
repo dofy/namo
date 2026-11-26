@@ -34,6 +34,10 @@ export function runtimeFor(config: Config, profile?: string | AgentSelection): R
   if (agent.adapter === 'claude') return new ClaudeRuntime(config, agent, findClaudeBinary(agent.bin));
   return new CodexRuntime({...agentCodexConfig(config, selection), managedMcp:!!config.mcpConnections?.length});
 }
+export function agentLoginCommand(profileId: string, file: string): string {
+  const escaped = file.replaceAll("'", process.platform === 'win32' ? "''" : "'\"'\"'");
+  return `namo login --profile ${profileId} --config '${escaped}'`;
+}
 export async function probeAgent(source: Config, profileId?: string): Promise<Check[]> {
   let agent: AgentProfile;
   try { agent = resolveAgent(source, selectAgent(source, profileId)); }
@@ -44,11 +48,11 @@ export async function probeAgent(source: Config, profileId?: string): Promise<Ch
   const path = findExecutable(resolveCodexBinary(c.codex.bin,c.codex.home));
   if (!path) return [{ id: 'agent.binary', status: 'fail', message: tr("agents.codexExecutableNotFound"), next: tr("agents.installOfficialCodexSetItsFullPath") }];
   checks.push({ id: 'agent.binary', status: 'ok', message: `Codex：${realpathSync(path)}` });
-  if (!existsSync(c.codex.home)) return [...checks, { id: 'agent.auth', status: 'fail', message: tr("agents.namosIsolatedCodexEnvironmentNotCreatedSigned"), next: tr("agents.runNamoLoginPersonalCodexCredentialsNot") }];
+  if (!existsSync(c.codex.home)) return [...checks, { id: 'agent.auth', status: 'fail', message: tr("agents.namosIsolatedCodexEnvironmentNotCreatedSigned"), next: tr("agents.runNamoLoginPersonalCodexCredentialsNot", agentLoginCommand(agent.id, source.file)) }];
   try {
     const p = await probeRuntime(c.codex);
     checks.push({ id: 'agent.protocol', status: 'ok', message: tr("agents.appServerInitializationAccountRequestedPermissionSettings") });
-    checks.push({ id: 'agent.auth', status: p.authenticated ? 'ok' : 'fail', message: p.authenticated ? tr("agents.codexSignedIn") : tr("agents.codexNotSignedIn"), next: p.authenticated ? undefined : tr("agents.runNamoLogin") });
+    checks.push({ id: 'agent.auth', status: p.authenticated ? 'ok' : 'fail', message: p.authenticated ? tr("agents.codexSignedIn") : tr("agents.codexNotSignedIn"), next: p.authenticated ? undefined : agentLoginCommand(agent.id, source.file) });
   } catch (e) {
     checks.push({ id: 'agent.protocol', status: 'fail', message: tr("agents.appServerProbeFailed", e instanceof RuntimeError ? e.code : 'probe_failed'), next: tr("agents.runCodexVersionCheckInstallationProtocolBaseline") });
   }
@@ -66,7 +70,7 @@ async function probeClaude(config: Config, agent: AgentProfile): Promise<Check[]
   return [
     binary,
     { id: 'agent.auth', status: authenticated ? 'ok' : 'fail', message: tr(authenticated ? 'claude.signedIn' : 'claude.loginRequired'),
-      next: authenticated ? undefined : `namo login --profile ${agent.id}` },
+      next: authenticated ? undefined : agentLoginCommand(agent.id, config.file) },
   ];
 }
 export async function loginAgent(source: Config, profileId?: string, deviceAuth = false): Promise<void> {
@@ -92,7 +96,7 @@ export async function loginAgent(source: Config, profileId?: string, deviceAuth 
   await new Promise<void>((resolve, reject) => {
     const p = spawn(path, deviceAuth ? ['login', '--device-auth'] : ['login'], { env: codexEnvironment(c.codex.home), stdio: 'inherit' });
     p.once('error', () => reject(new Error(tr("agents.codexLoginProcessCouldNotStart"))));
-    p.once('exit', code => code === 0 ? resolve() : reject(new Error(tr("agents.codexLoginIncompleteRunNamoLoginAgain"))));
+    p.once('exit', code => code === 0 ? resolve() : reject(new Error(tr("agents.codexLoginIncompleteRunNamoLoginAgain", agentLoginCommand(agent.id, source.file)))));
   });
 }
 export async function liveAgentTest(c: Config, profileId?: string): Promise<boolean> {
