@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, chmodSync, existsSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { Store, type Incoming } from '../src/store.js';
 import { Management, ManagementError } from '../src/management.js';
 import { ClaudeUpdates, fetchLatestClaudeVersion } from '../src/claude-updates.js';
@@ -696,6 +696,22 @@ esac
     assert.deepEqual(await (await automatic('yes')).json(), { error: 'update_action_invalid' });
     assert.equal((await automatic(true)).status, 200);
     assert.equal((await receiver.status(config))[0].automatic, true);
+    const previousPath = process.env.PATH, previousConfig = readFileSync(f.file, 'utf8');
+    try {
+      process.env.PATH = [join(f.dir, '.local', 'bin'), previousPath].filter(Boolean).join(delimiter);
+      writeFileSync(f.file, JSON.stringify({ ...f.raw, agents: { profiles: {
+        renamed: { adapter: 'claude', bin: 'claude', enabled: true },
+      } } }));
+      const byName = loadConfig(f.file), renamedRevision = manager.config().revision;
+      assert.equal((await receiver.status(byName))[0].automatic, true);
+      await receiver.action('automatic', byName, 'renamed', renamedRevision, false);
+      assert.equal((await receiver.status(byName))[0].automatic, false);
+      await receiver.action('automatic', byName, 'renamed', renamedRevision, true);
+    } finally {
+      writeFileSync(f.file, previousConfig);
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
     await receiver.tick(config, revision);
     assert.equal((await status())[0].state, 'idle');
     assert.equal((await status())[0].currentVersion, '2.1.100');
@@ -739,6 +755,18 @@ esac
     assert.equal(failed[0].currentVersion, '2.1.331');
     assert.doesNotMatch(JSON.stringify(failed), /PRIVATE_UPDATE_OUTPUT|namo-ui-/);
     assert.equal(store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get(), undefined);
+
+    await automatic(true);
+    const replaced = new ClaudeUpdates(f.dir, async () => published, async () => {
+      const external = join(f.dir, 'external-cli');
+      writeFileSync(external, '#!/bin/sh\nif [ "$1" = update ]; then touch "$PWD/external-updated"; fi\n', { mode: 0o700 });
+      rmSync(launcher); symlinkSync(external, launcher);
+      return published;
+    }, () => now);
+    await assert.rejects(replaced.tick(config, revision), /update_cli_unavailable/);
+    await replaced.close();
+    assert.equal(store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get(), undefined);
+    assert.equal(existsSync(join(f.dir, 'external-updated')), false);
   } finally { await Promise.all([ui.close(), receiver.close(), restarted.close()]); store.close(); }
 });
 

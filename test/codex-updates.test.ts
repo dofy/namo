@@ -144,6 +144,39 @@ test('automatic updates defer while tasks are queued and continue when the queue
   assert.equal((await f.updater.status()).currentVersion, '0.200.0'); assert.equal(f.state.installs, 1);
 });
 
+test('disabling Codex automatic updates cancels only the deferred automatic request', async t => {
+  for (const manual of [false, true]) {
+    const f = fixture(t);
+    f.store.enqueue({ key: 'busy', messageId: 'busy', chatKey: 'chat', chatId: 'chat', senderId: 'user', text: 'task' });
+    await f.updater.action('automatic', true);
+    if (manual) await f.updater.action('upgrade');
+    else await f.updater.tick();
+    await f.updater.settled();
+    assert.equal((await f.updater.status()).state, 'deferred');
+    await f.updater.action('check'); await f.updater.settled();
+    assert.equal((await f.updater.status()).state, 'deferred');
+    await f.updater.action('automatic', false);
+    f.store.claim('busy'); f.store.finish('busy', 'done');
+    const output = f.store.nextOutput()!;
+    f.store.sending(output.id); f.store.sent(output.id, 'delivered');
+    const reopened = new CodexUpdates(f.config, f.deps);
+    await reopened.tick(); await reopened.settled();
+    assert.equal(f.state.installs, manual ? 1 : 0);
+    assert.equal((await reopened.status()).state, 'idle');
+  }
+});
+
+test('disabling automatic updates on older records honors manual rollbacks and previously disabled upgrades', async t => {
+  const f = fixture(t);
+  const base = installationState(f.original, f.home);
+  for (const [automatic, pendingAction, expected] of [
+    [true, 'upgrade', 'idle'], [false, 'upgrade', 'deferred'], [true, 'rollback', 'deferred'],
+  ] as const) {
+    saveInstallation(f.home, { ...base, automatic, state: 'deferred', pendingAction });
+    assert.equal((await f.updater.action('automatic', false)).state, expected);
+  }
+});
+
 test('manual upgrade and rollback deferred while busy resume with automatic updates disabled',async t=>{
   const f=fixture(t);
   const busy=(key:string)=>f.store.enqueue({key,messageId:key,chatKey:'chat',chatId:'chat',senderId:'user',text:'task'});

@@ -1,14 +1,13 @@
 import { spawn } from 'node:child_process';
-import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
-import { agentLabel, getAgentRegistry } from './agent-registry.js';
-import { findClaudeBinary } from './agents.js';
+import { join } from 'node:path';
+import { claudeUpdateTargets, isNativeClaudeLauncher, matchesClaudeTarget } from './claude-installation.js';
 import { claudeEnvironment, readClaudeCliVersion } from './claude-runtime.js';
-import { holdCliMaintenance, processRunning, whileCliIdle } from './cli-maintenance.js';
+import { holdCliMaintenance, withIdleCliQueue } from './cli-maintenance.js';
 import type { Config } from './config.js';
 import { atomicJson, digest } from './paths.js';
-import { acquireLock } from './safety.js';
+import { acquireLock, processAlive } from './safety.js';
 import type { ClaudeUpdateStatus } from './ui-contract.js';
 import { newerVersion } from './version.js';
 
@@ -61,7 +60,7 @@ function readRecord(config: Config): UpdateRecord | undefined {
       || !Number.isInteger(state.failures) || state.failures < 0 || state.failures > 5
       || state.ownerPid !== null && (!Number.isSafeInteger(state.ownerPid) || state.ownerPid < 1)
       || state.state === 'updating' && (!state.ownerPid || !state.upgradingFrom)) throw Error();
-    if (state.ownerPid && !processRunning(state.ownerPid)) return { ...state, state: 'failed', ownerPid: null, upgradingFrom: null,
+    if (state.ownerPid && !processAlive(state.ownerPid)) return { ...state, state: 'failed', ownerPid: null, upgradingFrom: null,
       failures: Math.min(state.failures + 1, 5) };
     return state;
   } catch (error) {
@@ -77,41 +76,14 @@ export class ClaudeUpdates {
   constructor(private readonly hostHome = homedir(), private readonly latest = fetchLatestClaudeVersion,
     private readonly stable = () => fetchLatestClaudeVersion(fetch, 'stable'), private readonly now = Date.now) {}
 
-  private targets(config: Config) {
-    const profiles = getAgentRegistry(config).profiles.filter(profile => profile.adapter === 'claude');
-    const configured = profiles.length
-      ? profiles.map(profile => ({ profileId: profile.id, label: agentLabel(profile), bin: profile.bin, home: profile.home }))
-      : [{ profileId: null, label: 'Claude Code', bin: 'claude', home: join(config.dataDir, 'agents', 'claude') }];
-    const seen = new Set<string>();
-    return configured.flatMap(target => {
-      const executable = findClaudeBinary(target.bin, this.hostHome);
-      const path = executable ? resolve(executable) : null;
-      const key = path ?? target.bin;
-      if (seen.has(key)) return [];
-      seen.add(key);
-      return [{ ...target, path }];
-    });
-  }
-
-  private nativeLauncher(path: string, version: string): boolean {
-    if (!['darwin', 'linux'].includes(process.platform) || !['arm64', 'x64'].includes(process.arch)) return false;
-    const local = join(this.hostHome, '.local');
-    const launcher = join(local, 'bin', 'claude');
-    try {
-      // A copy or a launcher pinned to a particular version would not follow the native update.
-      return basename(path) === 'claude' && realpathSync(dirname(launcher)) === realpathSync(dirname(path))
-        && lstatSync(path).isSymbolicLink()
-        && realpathSync(path) === join(realpathSync(join(local, 'share', 'claude', 'versions')), version);
-    } catch { return false; }
-  }
-
   async status(config: Config): Promise<ClaudeUpdateStatus[]> {
     const saved = readRecord(config);
-    return Promise.all(this.targets(config).map(async ({ profileId, label, bin, path, home }) => {
-      const record = saved?.bin === bin ? saved : undefined;
+    return Promise.all(claudeUpdateTargets(config, this.hostHome).map(async target => {
+      const { profileId, label, path, home } = target;
+      const record = saved && matchesClaudeTarget(target, saved.bin, this.hostHome) ? saved : undefined;
       const updating = record?.state === 'updating';
       const version = updating ? record.upgradingFrom : path ? await readClaudeCliVersion(path, home).catch(() => undefined) : undefined;
-      const updateSupported = updating || !!(path && version && this.nativeLauncher(path, version));
+      const updateSupported = updating || !!(path && version && isNativeClaudeLauncher(path, version, this.hostHome));
       return { profileId, label, currentVersion: version ?? null, updateSupported, state: record?.state ?? 'idle',
         latestVersion: record?.latestVersion ?? null, checkedAt: record?.checkedAt ?? null, automatic: record?.automatic ?? false,
         updateAvailable: !!(updateSupported && record?.latestVersion && version && newerVersion(record.latestVersion, version)) };
@@ -130,17 +102,18 @@ export class ClaudeUpdates {
 
   async action(action: 'check' | 'upgrade' | 'automatic', config: Config, profileId: string | null, revision: string, enabled?: boolean): Promise<ClaudeUpdateStatus[]> {
     this.unchanged(config, revision);
-    const target = this.targets(config).find(item => item.profileId === profileId);
+    const target = claudeUpdateTargets(config, this.hostHome).find(item => item.profileId === profileId);
     if (!target) throw Error('update_cli_unavailable');
     if (action === 'automatic' && typeof enabled !== 'boolean') throw Error('update_action_invalid');
     const unlock = this.lock();
     let started = false;
     try {
       const saved = readRecord(config);
-      const state = saved?.bin === target.bin ? saved : emptyRecord(target.bin);
+      const matching = saved && matchesClaudeTarget(target, saved.bin, this.hostHome);
+      const state = matching ? saved : emptyRecord(target.bin);
       if (state.state === 'updating') throw Error('update_busy');
       if (action === 'automatic' && !enabled) {
-        if (saved?.bin === target.bin)
+        if (matching)
           atomicJson(stateFile(config), { ...state, automatic: false, state: 'idle', lastAutoAt: null, failures: 0 });
         return this.status(config);
       }
@@ -148,7 +121,7 @@ export class ClaudeUpdates {
       if (!path) throw Error('update_cli_unavailable');
       const version = await readClaudeCliVersion(path, target.home).catch(() => undefined);
       this.unchanged(config, revision);
-      if (!version || !this.nativeLauncher(path, version)) throw Error('update_cli_unavailable');
+      if (!version || !isNativeClaudeLauncher(path, version, this.hostHome)) throw Error('update_cli_unavailable');
       if (action === 'automatic') {
         atomicJson(stateFile(config), { ...state, automatic: true, state: 'idle', lastAutoAt: null, failures: 0 });
       } else if (action === 'check') {
@@ -169,7 +142,7 @@ export class ClaudeUpdates {
     if (initial.state !== 'deferred' && initial.lastAutoAt !== null
       && this.now() - initial.lastAutoAt < (initial.failures ? RETRY * 2 ** (initial.failures - 1) : DAY)) return;
     this.unchanged(config, revision);
-    const target = this.targets(config).find(item => item.bin === initial.bin);
+    const target = claudeUpdateTargets(config, this.hostHome).find(item => matchesClaudeTarget(item, initial.bin, this.hostHome));
     if (!target?.path) return;
     const path = target.path, unlock = this.lock();
     let started = false;
@@ -179,8 +152,8 @@ export class ClaudeUpdates {
         || state.lastAutoAt !== initial.lastAutoAt || state.state !== initial.state) return;
       const version = await readClaudeCliVersion(path, target.home).catch(() => undefined);
       this.unchanged(config, revision);
-      if (!version || !this.nativeLauncher(path, version)) return;
-      if (state.state === 'deferred' && whileCliIdle(config, () => {}).busy) return;
+      if (!version || !isNativeClaudeLauncher(path, version, this.hostHome)) return;
+      if (state.state === 'deferred' && !withIdleCliQueue(config)) return;
       const release = await Promise.all([this.latest(), this.stable()]).catch(() => undefined);
       this.unchanged(config, revision);
       if (!release) {
@@ -206,10 +179,11 @@ export class ClaudeUpdates {
     if (!maintenance) return false;
     try {
       this.unchanged(config, revision);
+      if (!isNativeClaudeLauncher(path, version, this.hostHome)) throw Error('update_cli_unavailable');
       atomicJson(stateFile(config), { ...state, state: 'updating', ownerPid: process.pid, upgradingFrom: version });
       this.operation = this.run(path, maintenance.child).then(async () => {
         const next = await readClaudeCliVersion(path, home);
-        if (!next || !this.nativeLauncher(path, next) || automatic && newerVersion(version, next)) throw Error();
+        if (!next || !isNativeClaudeLauncher(path, next, this.hostHome) || automatic && newerVersion(version, next)) throw Error();
         atomicJson(stateFile(config), { ...state, state: next === version ? 'unchanged' : 'updated',
           ownerPid: null, upgradingFrom: null, failures: 0 });
       }).catch(() => {

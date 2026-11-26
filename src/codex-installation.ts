@@ -10,6 +10,7 @@ export interface CodexInstallation {
   state: 'idle' | 'checking' | 'installing' | 'deferred' | 'failed';
   ownerPid: number | null; error: string | null;
   pendingAction?: 'upgrade' | 'rollback' | null;
+  pendingSource?: 'manual' | 'automatic';
   candidate?: (InstalledCodex & { target:string; sha256:string; configRevision:string }) | null;
   failureCount?: number;
 }
@@ -32,6 +33,7 @@ export function installationState(bin: string, home: string): CodexInstallation 
       || value.latestVersion !== null && !/^\d+\.\d+\.\d+$/.test(value.latestVersion)
       || value.error !== null && !/^[a-z_]{1,80}$/.test(value.error)
       || value.pendingAction !== undefined && value.pendingAction !== null && !['upgrade','rollback'].includes(value.pendingAction)
+      || value.pendingSource !== undefined && !['manual', 'automatic'].includes(value.pendingSource)
       || value.failureCount !== undefined && (!Number.isSafeInteger(value.failureCount) || value.failureCount<0 || value.failureCount>5)
       || value.candidate !== undefined && value.candidate !== null && (!validRelease(value.candidate) || !value.candidate.directory
         || !/^(?:aarch64|x86_64)-(?:apple-darwin|unknown-linux-musl)$/.test(value.candidate.target)

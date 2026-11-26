@@ -25,6 +25,11 @@ export function codexEnvironment(home: string): NodeJS.ProcessEnv {
   return { ...env, CODEX_HOME: home };
 }
 
+export function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
+}
+
 // Atomic mkdir is the singleton lock. A stale PID is reclaimed only after ESRCH;
 // unknown process state keeps the lock. There are no active leases to steal.
 // Reclaim runs under a second mkdir guard and re-reads the PID inside it, so

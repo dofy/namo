@@ -14,7 +14,7 @@ import { RuntimeHost } from './runtime-host.js';
 const validId = (id: unknown): id is string => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id);
 const HOST_FILES = ['cli', 'service-bootstrap', 'runtime-host', 'live-upgrade', 'release-check',
   'feishu', 'access', 'store', 'schema', 'schema-migrations', 'config', 'paths', 'safety', 'richtext', 'codex-updates', 'codex-installation',
-  'claude-updates', 'cli-maintenance', 'cli-update-scheduler', 'version',
+  'claude-updates', 'claude-installation', 'cli-maintenance', 'cli-update-scheduler', 'version',
   // These modules read or write durable JSON shared with the pinned receiver.
   // A byte change requires restart until a versioned cross-release codec exists.
   'config-reload','engine','daily-turns','tasks','waits','external-waits','external-wait-bridge','business-storage','runner','runner-store',

@@ -766,16 +766,17 @@ export class Engine {
       if(!this.configurationDraining&&!this.memoryRunning&&this.autoMemories?.pending()
         &&this.active.size+this.detachedReservations().length+(this.controlRunning?1:0)+(this.titleRunning?1:0)<this.config.concurrency
         &&!this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get()) {
-        const allowed=this.store.transaction(()=>{
-          if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return false;
-          const charge=this.dailyTurns.charge(this.dailyTurnLimit);
-          if(charge.state==='invalid')throw new Error('daily_turn_count_invalid');
-          return charge.state!=='exhausted';
+        const controller = new AbortController();
+        const work = this.autoMemories.startIfDue(controller.signal, () => {
+          const charge = this.dailyTurns.charge(this.dailyTurnLimit);
+          if (charge.state === 'invalid') throw new Error('daily_turn_count_invalid');
+          return charge.state !== 'exhausted';
         });
-        if(allowed){this.memoryAbort=new AbortController();
-          this.memoryRunning=this.autoMemories.tick(this.memoryAbort.signal)
-            .catch(()=>this.log('memory_extraction_failed'))
-            .finally(()=>{this.memoryRunning=undefined;this.memoryAbort=undefined;void this.pump();});}
+        if (work) {
+          this.memoryAbort = controller;
+          this.memoryRunning = work.catch(() => this.log('memory_extraction_failed'))
+            .finally(() => { this.memoryRunning = undefined; this.memoryAbort = undefined; void this.pump(); });
+        }
       }
       this.startTitleSummary();
       if (!this.outputBusy) {

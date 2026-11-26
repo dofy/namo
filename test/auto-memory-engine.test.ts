@@ -74,6 +74,25 @@ test('background memory extraction waits when the daily model turn limit is exha
  await waitFor(()=>extracts===1);assert.deepEqual(f.fatal,[]);
 });
 
+test('retiring an expired final memory lease does not consume a model turn', async t => {
+  let extracts = 0;
+  const f = fixture(t, {
+    async run() { return { text: 'done', threadId: 'thread', turnId: 'turn' }; },
+    async extractMemory() { extracts++; return { memories: [] }; },
+  });
+  f.config.codex.dailyTurnLimit = 5;
+  f.engine.accept(message('expired')); f.engine.start();
+  await waitFor(() => f.store.get('expired')?.state === 'replied');
+  const job = jobs(f.store)[0].value;
+  memoryJobs(f.store.db).save({ ...job, state: 'running', attempts: 3, lease: 'dead-worker', leaseUntil: 1 });
+  const used = () => f.store.db.prepare("SELECT value FROM settings WHERE key LIKE 'daily-turns:%'").get()?.value;
+  const before = used();
+  await f.engine.pump();
+  await waitFor(() => jobs(f.store)[0].value.state === 'failed');
+  assert.equal(extracts, 0);
+  assert.equal(used(), before);
+});
+
 test('extraction failure never changes a succeeded task or reruns its main model', async t => {
   let mainCalls = 0, extractionCalls = 0;
   const f = fixture(t, {

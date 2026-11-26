@@ -5,7 +5,7 @@ import type { Config } from './config.js';
 import type { CodexUpdateStatus } from './ui-contract.js';
 import { digest } from './paths.js';
 import { acquireLock } from './safety.js';
-import { whileCliIdle } from './cli-maintenance.js';
+import { withIdleCliQueue } from './cli-maintenance.js';
 import { Rpc } from './codex-connection.js';
 import { NAMO_VERSION, newerVersion } from './version.js';
 import { fetchStableRelease, installCodexRelease, readCodexVersion, targetTriple } from './codex-distribution.js';
@@ -31,6 +31,12 @@ const defaults: UpdateDependencies = { latest: fetchStableRelease, install: inst
     } finally { signal?.removeEventListener('abort',abort);await rpc.close(); }
   } };
 const DAY = 86_400_000, RETRY = 3_600_000;
+
+function deferredManualRequest(state: CodexInstallation): boolean {
+  if (state.state !== 'deferred' || !state.pendingAction) return false;
+  // Older records only distinguished rollbacks and requests saved with automatic updates off.
+  return state.pendingSource === 'manual' || (state.pendingSource === undefined && (!state.automatic || state.pendingAction === 'rollback'));
+}
 
 export class CodexUpdates {
   private readonly deps: UpdateDependencies;
@@ -61,6 +67,11 @@ export class CodexUpdates {
     let state: CodexInstallation;
     try {
       state=this.read();
+      const manualPending = deferredManualRequest(state);
+      if (automaticAttempt && !state.automatic && !(manualPending && state.pendingAction === action)) {
+        release();
+        return this.status();
+      }
       let current: string | null = null;
       if(action==='check'||action==='upgrade'||action==='automatic'&&enabled) {
         const bin=resolveCodexBinary(this.config.codex.bin,this.config.codex.home);
@@ -69,20 +80,28 @@ export class CodexUpdates {
         if(!current)throw Error('update_cli_unavailable');
       }
       this.unchanged(this.revision);
-      if (action==='automatic') { this.write({...state,automatic:enabled!,...(enabled?{attemptedAt:null,failureCount:0}: {})}); release(); return this.status(); }
+      if (action==='automatic') {
+        if (!enabled && state.state === 'deferred' && !manualPending)
+          state = { ...state, state: 'idle', pendingAction: null, pendingSource: undefined };
+        else if (manualPending) state = { ...state, pendingSource: 'manual' };
+        this.write({...state,automatic:enabled!,...(enabled?{attemptedAt:null,failureCount:0}: {})});
+        release(); return this.status();
+      }
       if (action==='rollback'&&!state.previous) throw Error('update_no_previous');
       const revision=this.revision;
+      const checkingDeferred = action === 'check' && state.state === 'deferred';
       const priorError=automaticAttempt?state.error:null,priorFailures=automaticAttempt?(state.failureCount??0):0;
       state={...state,state:action==='check'?'checking':'installing',ownerPid:process.pid,error:null,attemptedAt:this.deps.now(),
-        pendingAction:null, ...(automaticAttempt?{}:{failureCount:0}),
+        pendingAction:checkingDeferred ? state.pendingAction : null, pendingSource:checkingDeferred ? state.pendingSource : undefined,
+        ...(automaticAttempt?{}:{failureCount:0}),
         ...(action==='rollback'?{automatic:false}:{})};
       this.write(state);
       this.controller=new AbortController();
-      this.running=this.perform(action,state,revision,current).catch(error=>{
+      this.running=this.perform(action,state,revision,current,automaticAttempt && !manualPending ? 'automatic' : 'manual').catch(error=>{
         // Never publish child output, fetch errors, paths or credentials.
         const code=error instanceof Error && /^[a-z_]{1,80}$/.test(error.message)?error.message:'update_failed';
         const previous=this.read(),count=priorError===code?priorFailures+1:1;
-        this.write({...previous,state:'failed',ownerPid:null,error:code,failureCount:Math.min(count,5)});
+        this.write({...previous,state:checkingDeferred ? 'deferred' : 'failed',ownerPid:null,error:code,failureCount:Math.min(count,5)});
       }).finally(()=>{release();this.running=undefined;this.controller=undefined;});
       void this.running.catch(()=>{});
       // A status read may execute --version; it must not keep the operation lock on failure.
@@ -97,7 +116,7 @@ export class CodexUpdates {
     if(this.closed||this.controller?.signal.aborted)throw Error('update_cancelled');
     if(digest(readFileSync(this.config.file,'utf8'))!==revision)throw Error('update_config_changed');
   }
-  private async perform(action: string, state: CodexInstallation, revision: string, current: string | null): Promise<void> {
+  private async perform(action: string, state: CodexInstallation, revision: string, current: string | null, pendingSource: 'automatic' | 'manual'): Promise<void> {
     const c=this.config.codex;
     if (action==='rollback') {
       const previous=state.previous!;
@@ -105,25 +124,28 @@ export class CodexUpdates {
       if (await this.deps.version(bin,c.home)!==previous.version) throw Error('update_previous_changed');
       await this.deps.probe({...c,bin},this.controller?.signal);
       this.unchanged(revision);
-      const switched=whileCliIdle(this.config,()=>this.write({...state,active:previous.directory?previous:null,
+      const switched=withIdleCliQueue(this.config,()=>this.write({...state,active:previous.directory?previous:null,
         previous:state.active,state:'idle',ownerPid:null,error:null,automatic:false,failureCount:0}));
-      if(switched.busy)this.write({...state,state:'deferred',ownerPid:null,pendingAction:'rollback'});
+      if(!switched)this.write({...state,state:'deferred',ownerPid:null,pendingAction:'rollback',pendingSource});
       return;
     }
     const latest=await this.deps.latest({signal:this.controller?.signal});
     this.unchanged(revision);
     state={...state,latestVersion:latest.version,checkedAt:this.deps.now()};
     this.write(state);
-    if (action==='check'||!newerVersion(latest.version,current)) { this.write({...state,state:'idle',ownerPid:null,failureCount:0,error:null}); return; }
-    if (whileCliIdle(this.config,()=>{}).busy) { this.write({...state,state:'deferred',ownerPid:null,pendingAction:'upgrade'}); return; }
+    if (action==='check'||!newerVersion(latest.version,current)) {
+      this.write({...state,state:action==='check' && state.pendingAction ? 'deferred' : 'idle',ownerPid:null,failureCount:0,error:null}); return;
+    }
+    const deferUpgrade = (candidate = state.candidate) => this.write({ ...state, state: 'deferred', ownerPid: null, pendingAction: 'upgrade', pendingSource, candidate });
+    if (!withIdleCliQueue(this.config)) { deferUpgrade(); return; }
     const candidate=state.candidate;
     if(candidate && candidate.version===latest.version && candidate.target===latest.target && candidate.sha256===latest.sha256 && candidate.configRevision===revision){
       const bin=installedBinary(c.home,candidate);
       if(await this.deps.version(bin,c.home)!==candidate.version)throw Error('update_candidate_changed');
       await this.deps.probe({...c,bin},this.controller?.signal);this.unchanged(revision);
-      const switched=whileCliIdle(this.config,()=>this.write({...state,active:{version:candidate.version,directory:candidate.directory},candidate:null,
+      const switched=withIdleCliQueue(this.config,()=>this.write({...state,active:{version:candidate.version,directory:candidate.directory},candidate:null,
         previous:state.active??(current?{version:current,directory:null}:null),state:'idle',ownerPid:null,error:null,failureCount:0}));
-      if(switched.busy)this.write({...state,state:'deferred',ownerPid:null,pendingAction:'upgrade'});
+      if(!switched)deferUpgrade();
       return;
     }
     const parent=join(installationRoot(c.home),'releases'); mkdirSync(parent,{recursive:true,mode:0o700});
@@ -136,13 +158,13 @@ export class CodexUpdates {
       try { await this.deps.probe({...c,bin},this.controller?.signal); } catch { throw Error(this.closed?'update_cancelled':'update_probe_failed'); }
       this.unchanged(revision);
       const active={version:latest.version,directory:basename(destination)};
-      const switched=whileCliIdle(this.config,()=>{
+      const switched=withIdleCliQueue(this.config,()=>{
         // Retain the directory even if an atomic state write reports an
         // ambiguous failure after rename; the active pointer may reference it.
         activated=true;
         this.write({...state,active,candidate:null,previous:state.active??(current?{version:current,directory:null}:null),state:'idle',ownerPid:null,error:null,failureCount:0});
       });
-      if(switched.busy){retained=true;this.write({...state,state:'deferred',ownerPid:null,pendingAction:'upgrade',candidate:{...active,target:latest.target,sha256:latest.sha256,configRevision:revision}});}
+      if(!switched){retained=true;deferUpgrade({...active,target:latest.target,sha256:latest.sha256,configRevision:revision});}
     } finally {
       // Only this operation's unpublished directory can be removed; old selected versions are retained.
       if(!activated&&!retained)rmSync(destination,{recursive:true,force:true});
@@ -154,7 +176,7 @@ export class CodexUpdates {
     if(this.closed||this.running)return;
     const s=this.read(); if(!s.automatic && !(s.state==='deferred' && s.pendingAction))return;
     const now=this.deps.now();
-    if(s.state==='deferred') { if(whileCliIdle(this.config,()=>{}).busy)return; }
+    if(s.state==='deferred') { if(!withIdleCliQueue(this.config))return; }
     else if(s.state==='failed') { if((s.failureCount??0)>=5)return; if(s.attemptedAt && now-s.attemptedAt<RETRY*2**Math.max(0,(s.failureCount??1)-1))return; }
     else if(s.attemptedAt!==null && s.checkedAt && now-s.checkedAt<DAY)return;
     try { await this.action(s.state==='deferred' && s.pendingAction ? s.pendingAction : 'upgrade',undefined,true); } catch(error) { if(!(error instanceof Error)||error.message!=='update_busy')throw error; }

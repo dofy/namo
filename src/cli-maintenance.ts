@@ -4,11 +4,12 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Config } from './config.js';
 import { SCHEMA_VERSION } from './store.js';
+import { processAlive } from './safety.js';
 
 /** Check for idle and reserve maintenance in the same transaction as task claims. */
-export function whileCliIdle<T>(config: Pick<Config, 'dataDir'>, run: (db?: DatabaseSync) => T): { busy: true } | { busy: false; value: T } {
+export function withIdleCliQueue(config: Pick<Config, 'dataDir'>, run?: (db?: DatabaseSync) => void): boolean {
   const file = join(config.dataDir, 'bot.sqlite');
-  if (!existsSync(file)) return { busy: false, value: run() };
+  if (!existsSync(file)) { run?.(); return true; }
   const db = new DatabaseSync(file);
   try {
     db.exec('PRAGMA busy_timeout=1000; BEGIN IMMEDIATE');
@@ -20,17 +21,12 @@ export function whileCliIdle<T>(config: Pick<Config, 'dataDir'>, run: (db?: Data
       "SELECT 1 FROM memory_jobs WHERE state='running' LIMIT 1",
       "SELECT 1 FROM settings WHERE key='maintenance' LIMIT 1",
     ].some(sql => !!db.prepare(sql).get());
-    if (busy) { db.exec('ROLLBACK'); return { busy: true }; }
-    const value = run(db);
+    if (busy) { db.exec('ROLLBACK'); return false; }
+    run?.(db);
     db.exec('COMMIT');
-    return { busy: false, value };
+    return true;
   } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
   finally { db.close(); }
-}
-
-export function processRunning(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
 }
 
 export function clearStaleCliMaintenance(db: DatabaseSync): void {
@@ -38,19 +34,19 @@ export function clearStaleCliMaintenance(db: DatabaseSync): void {
   if (!row) return;
   const match = /^cli-update:(\d+):(\d+):[a-f0-9-]+$/.exec(String(row.value));
   if (!match) return;
-  if (match.slice(1, 3).map(Number).some(pid => Number.isSafeInteger(pid) && pid > 0 && processRunning(pid))) return;
+  if (match.slice(1, 3).map(Number).some(pid => Number.isSafeInteger(pid) && pid > 0 && processAlive(pid))) return;
   db.prepare("DELETE FROM settings WHERE key='maintenance' AND value=?").run(String(row.value));
 }
 
 export function holdCliMaintenance(config: Pick<Config, 'dataDir'>) {
   const token = randomUUID(), file = join(config.dataDir, 'bot.sqlite');
   let value = `cli-update:${process.pid}:0:${token}`;
-  const reservation = whileCliIdle(config, db => {
+  const reserved = withIdleCliQueue(config, db => {
     // Keep a durable guard even when the configured receiver has never been started.
     if (!db) throw Error('update_database_unavailable');
     db.prepare("INSERT INTO settings VALUES('maintenance', ?)").run(value);
   });
-  if (reservation.busy) return;
+  if (!reserved) return;
   const write = (run: (db: DatabaseSync) => void) => {
     const db = new DatabaseSync(file);
     try { db.exec('PRAGMA busy_timeout=5000'); run(db); }

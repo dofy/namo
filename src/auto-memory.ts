@@ -107,41 +107,49 @@ export class AutoMemories {
 
   /** One leased, bounded extraction. Retrying this operation never replays a user task. */
   async tick(signal?: AbortSignal): Promise<void> {
+    await this.startIfDue(signal);
+  }
+
+  startIfDue(signal?: AbortSignal, admit?: () => boolean): Promise<void> | undefined {
     if (this.busy || signal?.aborted) return;
+    const job = this.store.transaction(() => {
+      if (this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get()) return;
+      const now = Date.now(), next = this.jobs(now).filter(value => this.runnable(value, now))
+        .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))[0];
+      if (!next) return;
+      if (next.attempts >= MAX_ATTEMPTS) {
+        next.state = 'failed'; next.lease = null; next.leaseUntil = 0; next.error = 'extraction_failed'; this.write(next); return;
+      }
+      if (admit && !admit()) return;
+      next.state = 'running'; next.attempts++; next.lease = randomUUID(); next.leaseUntil = now + LEASE_MS;
+      delete next.error;
+      this.write(next); return next;
+    });
+    if (!job) return;
     this.busy = true;
-    let job: Job | undefined;
+    return this.run(job, signal);
+  }
+
+  private async run(job: Job, signal?: AbortSignal): Promise<void> {
     try {
-      job = this.store.transaction(() => {
-        if (this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get()) return;
-        const now = Date.now(), next = this.jobs(now).filter(value => this.runnable(value, now))
-          .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))[0];
-        if (!next) return;
-        if (next.attempts >= MAX_ATTEMPTS) {
-          next.state = 'failed'; next.lease = null; next.leaseUntil = 0; next.error = 'extraction_failed'; this.write(next); return;
-        }
-        next.state = 'running'; next.attempts++; next.lease = randomUUID(); next.leaseUntil = now + LEASE_MS;
-        delete next.error;
-        this.write(next); return next;
-      });
-      if (!job) return;
       const input = this.input(job);
       if (!input.messages.length) { this.complete(job, 0, 0); return; }
       const output = await this.extract(input, signal);
       const candidates = this.candidates(output, input);
       this.store.transaction(() => {
-        if (!this.owns(job!)) return;
-        if (this.input(job!).messages.length!==input.messages.length) { this.complete(job!,0,candidates.accepted.length+candidates.rejected);return; }
+        if (!this.owns(job)) return;
+        if (this.input(job).messages.length!==input.messages.length) { this.complete(job,0,candidates.accepted.length+candidates.rejected);return; }
         const memory = new Memories(this.store, this.options.redact);
         let accepted = 0,capacity=false;
         for (const candidate of candidates.accepted) {
           const evidence = candidate.evidence;
-          const observedAt = Math.max(...evidence.map(ref => this.store.get(job!.inboxKeys.find(key => this.store.get(key)?.messageId === ref.messageId)!)?.createdAt ?? job!.createdAt));
+          const observedAt = Math.max(...evidence.map(ref => this.store.get(job.inboxKeys.find(key => this.store.get(key)?.messageId === ref.messageId)!)?.createdAt ?? job.createdAt));
           try {
             const saved = memory.upsertAutomatic({ ...candidate, sourceMessageIds: evidence.map(item => item.messageId),
               evidence: evidence.map(item => item.quote), observedAt }, {
-              kind: 'local-owner', authenticated: true, ownerId: job!.ownerId,
-              chatKey: job!.chatKey, chatType: job!.chatType, directory: job!.directory,
-              source: { kind: 'automatic', ref: job!.id },
+              kind: 'local-owner', authenticated: true, ownerId: job.ownerId,
+              chatKey: job.chatKey, chatType: job.chatType, directory: job.directory,
+              source: { kind: 'automatic', ref: job.id },
             });
             if (saved) accepted++;
           } catch (error) {
@@ -149,19 +157,19 @@ export class AutoMemories {
             if(error.code==='capacity')capacity=true;
           }
         }
-        this.complete(job!, accepted, candidates.rejected + candidates.accepted.length - accepted,capacity);
+        this.complete(job, accepted, candidates.rejected + candidates.accepted.length - accepted,capacity);
       });
     } catch (error) {
-      if (job) this.store.transaction(() => {
-        if (!this.owns(job!)) return;
+      this.store.transaction(() => {
+        if (!this.owns(job)) return;
         const aborted = signal?.aborted;
-        job!.state = aborted || job!.attempts < MAX_ATTEMPTS ? 'pending' : 'failed';
-        if (aborted) job!.attempts--;
-        job!.dueAt = Date.now() + (aborted ? 0 : Math.min(300_000, 5000 * 2 ** (job!.attempts - 1)));
-        job!.lease = null; job!.leaseUntil = 0;
-        if (aborted) delete job!.error;
-        else job!.error = extractionError(error);
-        this.write(job!);
+        job.state = aborted || job.attempts < MAX_ATTEMPTS ? 'pending' : 'failed';
+        if (aborted) job.attempts--;
+        job.dueAt = Date.now() + (aborted ? 0 : Math.min(300_000, 5000 * 2 ** (job.attempts - 1)));
+        job.lease = null; job.leaseUntil = 0;
+        if (aborted) delete job.error;
+        else job.error = extractionError(error);
+        this.write(job);
       });
     } finally { this.busy = false; }
   }
