@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="{{LANG}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{TITLE}} · Namo</title>
+  <link rel="icon" type="image/png" href="/_namo-remote/logo.png">
+  <link rel="preload" href="/_namo-remote/caveat-latin-500.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/_namo-remote/style.css">
+  <script src="/_namo-remote/form.js" defer></script>
+</head>
+<body>
+  <main class="sign-in">
+    <div class="brand-panel">
+      <span class="wordmark">Namo</span>
+      <div class="emblem" aria-hidden="true">
+        <div class="orbit orbit-inner">
+          <div class="orbit-track">
+            <span class="planet"></span>
+            <span class="planet"></span>
+            <span class="planet"></span>
+          </div>
+        </div>
+        <div class="orbit orbit-outer">
+          <div class="orbit-track">
+            <span class="planet"></span>
+            <span class="planet"></span>
+            <span class="planet planet-ringed"></span>
+            <span class="planet"></span>
+          </div>
+        </div>
+        <img src="/_namo-remote/logo.png" width="1254" height="1254" alt="">
+      </div>
+    </div>
+    <section class="form-panel" aria-labelledby="sign-in-title">
+      <div class="form-content">
+        <header>
+          <h1 id="sign-in-title">{{TITLE}}</h1>
+          <p>{{HELP}}</p>
+        </header>
+        <form method="post" action="/login{{NEXT_QUERY}}">
+          {{ERROR_NOTICE}}
+          <div class="field">
+            <label for="password">{{PASSWORD}}</label>
+            <div class="password-field">
+              <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required{{PASSWORD_ERROR}}>
+              <button id="toggle-password" class="password-toggle" type="button" aria-label="{{SHOW_PASSWORD}}" data-show="{{SHOW_PASSWORD}}" data-hide="{{HIDE_PASSWORD}}" aria-pressed="false" hidden>{{SHOW_PASSWORD}}</button>
+            </div>
+          </div>
+          <button class="sign-in-button" type="submit">{{SUBMIT}}</button>
+        </form>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -72,6 +72,9 @@ p { max-width: 72ch; }
 .service-status p { margin: 6px 0 0; line-height: 1.5; }
 .sidebar-links { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .sidebar-links .version-button { margin: 0; height: 28px; padding: 0 4px; gap: 6px; font-variant-numeric: tabular-nums; }
+.remote-session-actions { grid-column: 1 / -1; }
+.remote-session-actions .rt-Button { min-height: 32px; }
+.mobile-menu-controls .remote-session-actions .rt-Button { width: 100%; min-height: 44px; }
 .version-popover { max-width: min(340px, calc(100vw - 32px)); }
 .version-popover dl { display: grid; gap: 4px; margin: 16px 0; font-size: 12px; }
 .version-popover dt { color: var(--namo-muted); }

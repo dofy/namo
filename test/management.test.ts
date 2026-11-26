@@ -10,6 +10,8 @@ import { startUi } from '../src/ui.js';
 import { digest, atomicJson } from '../src/paths.js';
 import { Tasks, policyHash } from '../src/tasks.js';
 import { request as httpRequest } from 'node:http';
+import { randomBytes } from 'node:crypto';
+import { remoteUiOptions } from '../src/remote-ui.js';
 import { Profiles } from '../src/profiles.js';
 import { execFileSync } from 'node:child_process';
 import { initialConfig } from '../src/onboarding.js';
@@ -194,12 +196,91 @@ test('HTTP UI requires one-time bootstrap, cookie and exact origin; credentials 
  const f=fixture(t),ui=await startUi(f.manager);t.after(()=>ui.close());const origin=ui.url,code=ui.entryUrl.split('#')[1];const post=(path:string,body:any,cookie='',source=origin)=>fetch(origin+path,{method:'POST',headers:{'Content-Type':'application/json',Origin:source,...(cookie?{Cookie:cookie}:{})},body:JSON.stringify(body)});
  const malformed=await new Promise<number|undefined>((resolve,reject)=>{const request=httpRequest(origin,{path:'http://[',headers:{Host:new URL(origin).host}},response=>{response.resume();response.once('end',()=>resolve(response.statusCode));});request.once('error',reject);request.end();});assert.equal(malformed,400);
  assert.equal((await fetch(origin+'/api/state')).status,401);const html=await fetch(origin);assert.match(html.headers.get('content-security-policy')??'',/frame-ancestors 'none'/);assert.doesNotMatch(await html.text(),/PRIVATE_TEST_SECRET/);
+ assert.match(html.headers.get('content-security-policy')??'',/form-action 'none'/);
+ assert.doesNotMatch(await (await fetch(origin)).text(), /data-namo-remote/);
  assert.equal((await post('/api/session',{code},'','https://attacker.invalid')).status,403);const login=await post('/api/session',{code});assert.equal(login.status,200);const cookie=login.headers.get('set-cookie')!;assert.match(cookie,/HttpOnly/);assert.match(cookie,/SameSite=Strict/);assert.equal((await post('/api/session',{code})).status,401);
  const state=await fetch(origin+'/api/state',{headers:{Cookie:cookie}});const text=await state.text();assert.equal(state.status,200);assert.doesNotMatch(text,/PRIVATE_TEST_SECRET|PRIVATE_EXTRA/);const revision=JSON.parse(text).config.revision;
  assert.equal((await post('/api/config',{revision,patch:{concurrency:10}},cookie,'https://attacker.invalid')).status,403);assert.equal(digest(readFileSync(f.file,'utf8')),revision);
  const saved=await post('/api/config',{revision,patch:{concurrency:9}},cookie);assert.equal(saved.status,200);assert.equal(JSON.parse(readFileSync(f.file,'utf8')).concurrency,9);
  assert.equal((await fetch(origin+'/api/state',{headers:{Cookie:cookie,'Sec-Fetch-Site':'cross-site'}})).status,403);
  const diagnostic=await post('/api/diagnose',{},cookie);assert.equal(diagnostic.status,200);assert.match(await diagnostic.text(),/isolated diagnostic/);
+});
+
+test('optional remote workbench authenticates on its configured HTTPS origin and revokes only the signed-out session', async t => {
+ const f=fixture(t), password=randomBytes(32).toString('hex'), file=join(f.dir,'remote-password');
+ const external='https://workbench.example.test:8443', host=new URL(external).host;
+ writeFileSync(file,password+'\n',{mode:0o600});
+ for (const badOrigin of ['http://workbench.example.test','https://workbench.example.test/ui','https://user@workbench.example.test','https://workbench.example.test/?']) {
+   assert.throws(()=>remoteUiOptions(badOrigin,file));
+ }
+ assert.throws(()=>remoteUiOptions(external,file,'0'));
+ chmodSync(file,0o644);
+ assert.throws(()=>remoteUiOptions(external,file));
+ chmodSync(file,0o600);
+ const ui=await startUi(f.manager,{remote:{...remoteUiOptions(external,file),port:0}});
+ t.after(()=>ui.close());
+ assert.equal(new URL(ui.url).hostname,'127.0.0.1');
+ assert.equal(ui.entryUrl,external+'/');
+ const request=(path:string,init:{method?:string;headers?:Record<string,string>;body?:URLSearchParams}={})=>new Promise<Response>((resolve,reject)=>{
+   const request=httpRequest(ui.url+path,{method:init.method,headers:{
+     Host:host,...(init.body?{'Content-Type':'application/x-www-form-urlencoded'}:{}),...init.headers,
+   }},response=>{
+     const chunks:Buffer[]=[];
+     response.on('data',chunk=>chunks.push(chunk));
+     response.once('error',reject);
+     response.once('end',()=>{
+       const headers=new Headers();
+       for(const [name,value] of Object.entries(response.headers))for(const item of [value].flat())if(item)headers.append(name,item);
+       resolve(new Response(Buffer.concat(chunks),{status:response.statusCode,headers}));
+     });
+   });
+   request.once('error',reject);
+   request.end(init.body?.toString());
+ });
+ const post=(path:string,body?:URLSearchParams,headers:Record<string,string>={})=>request(path,{method:'POST',headers:{Origin:external,...headers},body});
+ assert.equal((await fetch(ui.url+'/login')).status,403);
+ const guest=await request('/settings?tab=feishu');
+ assert.equal(guest.status,303);
+ assert.equal(guest.headers.get('location'),'/login?next=%2Fsettings%3Ftab%3Dfeishu');
+ const login=await request(guest.headers.get('location')!);
+ assert.equal(login.status,200);
+ assert.match(login.headers.get('content-security-policy')??'',/font-src 'self'; form-action 'self'/);
+ const html=await login.text();
+ assert.match(html,/id="password"/);
+ assert(!html.includes(password));
+ const font=await request('/_namo-remote/caveat-latin-500.woff2');
+ assert.equal(font.status,200);
+ assert.equal(font.headers.get('content-type'),'font/woff2');
+ assert.equal((await request('/api/state')).status,401);
+ const form=new URLSearchParams({password});
+ assert.equal((await post('/login',form,{Origin:'https://other.example.test'})).status,403);
+ assert.equal((await post('/login',new URLSearchParams({password:'wrong'}))).status,401);
+ const auth=await post(guest.headers.get('location')!,form);
+ assert.equal(auth.status,303);
+ assert.equal(auth.headers.get('location'),'/settings?tab=feishu');
+ const setCookie=auth.headers.get('set-cookie')!;
+ assert.match(setCookie,/^__Host-namo_remote=.*; Path=\/; Max-Age=43200; Secure; HttpOnly; SameSite=Strict$/);
+ const Cookie=setCookie.split(';')[0];
+ const second=await post('/login?next=%2F%2Fother.example.test',form);
+ assert.equal(second.headers.get('location'),'/');
+ const otherCookie=second.headers.get('set-cookie')!.split(';')[0];
+ assert.match(await (await request('/settings',{headers:{Cookie}})).text(),/data-namo-remote/);
+ assert.equal((await request('/api/state',{headers:{Cookie}})).status,200);
+ assert.equal((await post('/api/session',undefined,{Cookie})).status,404);
+ assert.equal((await post('/api/mcp-oauth-start',undefined,{Cookie})).status,403);
+ assert.deepEqual(await (await post('/api/choose-directory',undefined,{Cookie})).json(),{status:'unavailable'});
+ assert.equal((await request('/logout',{headers:{Cookie}})).status,405);
+ assert.equal((await post('/logout',undefined,{Cookie,Origin:'https://other.example.test'})).status,403);
+ const logout=await post('/logout',undefined,{Cookie});
+ assert.equal(logout.status,303);
+ assert.equal(logout.headers.get('location'),'/login');
+ assert.match(logout.headers.get('set-cookie')??'',/^__Host-namo_remote=; Path=\/; Max-Age=0;/);
+ assert.equal((await request('/api/state',{headers:{Cookie}})).status,401);
+ assert.equal((await request('/api/state',{headers:{Cookie:otherCookie}})).status,200);
+ for(let attempt=0;attempt<10;attempt++)assert.equal((await post('/login',new URLSearchParams({password:'wrong'}))).status,401);
+ const limited=await post('/login',form);
+ assert.equal(limited.status,429);
+ assert(Number(limited.headers.get('retry-after'))>0);
 });
 
 test('directory browser requires a session and returns only directory entries',async t=>{

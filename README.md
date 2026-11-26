@@ -47,6 +47,10 @@ pnpm run build
 pnpm cli init
 ```
 
+## Optional remote workbench
+
+`namo ui` opens the local workbench by default. To access it from another device, run `namo ui --remote-guide` and give its output to your agent. The bundled setup guide walks through starting a separate loopback listener behind your HTTPS proxy, setting an owner password, and checking sign-in and sign-out on desktop and mobile. [Remote workbench setup skill](skills/namo-remote-workbench/SKILL.md)
+
 ## Connect Inkflit
 
 In **Settings → Connections → MCP**, choose **Add local MCP**. Set the ID to `inkflit`, the executable to `/Applications/Inkflit.app/Contents/MacOS/Inkflit`, and arguments to `["--mcp"]`, then save and test. You can also add local MCPs in `namo config`. Namo and Inkflit must run as the same user on the same Mac. Only configure trusted programs: they run with the Namo user’s OS permissions, and all admitted bot users can call their tools.

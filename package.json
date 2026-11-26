@@ -71,6 +71,8 @@
     "README.zh-CN.md",
     "docs/",
     "docs-site/",
+    "remote-ui/",
+    "skills/namo-remote-workbench/SKILL.md",
     "assets/namo-logo.png",
     "assets/fonts/"
   ]

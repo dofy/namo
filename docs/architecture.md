@@ -104,6 +104,8 @@ flowchart TB
 
 **管理与升级。** `namo config` 在 TTY 中管理执行、组织准入、连接、助手、用户档案和更新设置，字段草稿在内存中编辑，复用管理层的权限、版本检查、保存与自动切换；Esc 返回时可放弃当前草稿，MCP OAuth 通过隐藏输入接收本地回调地址并复用原有 state、PKCE 和配置版本检查。终端入口不启动接收器；工作台的浏览器本地主题和桌面原生目录选择不适用于终端。UI 仅绑定 loopback，使用一次性启动授权、HttpOnly 会话、Host / Origin 校验和 CSP；浏览器仅导入 [ui-contract](../src/ui-contract.ts)。接收器固定在校验过的发布快照。兼容的执行代码可通过 [runtime-host](../src/runtime-host.ts) 在线替换，接收连接持续存在，切换期间消息落库后才确认收件；新任务使用新执行版本，已运行的独立 worker 保留原版本。备份使用 WAL 一致性快照；校验、加载失败保留旧执行版本，发送结果未知的记录不重放。接收器、存储或依赖不兼容时保留在线服务并拒绝热更新。维护操作见[运维指南](operations.md)。
 
+**远程工作台。** `namo ui --remote` 显式启动独立的回环进程。 [remote-ui](../src/remote-ui.ts) 在共享工作台路由前校验配置的 HTTPS Host 和 Origin，处理登录、退出及进程内会话。反向代理负责 HTTPS 和访问边界；普通 `namo ui` 继续使用本机启动授权。配置和验收见[随包指南](../skills/namo-remote-workbench/SKILL.md)。
+
 **扩展。** [runtime-contract](../src/runtime-contract.ts) 预留执行、修订、等待、取消和证据接口；没有其他 Agent SDK、探针、注册 UI、动态加载器或多 Agent 路由。旧 Codex profile 绑定只为兼容，退休适配器不回退执行。未来插件也必须遵守统一权限、调度和投递。
 
 ## 开发与验证

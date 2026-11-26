@@ -92,6 +92,8 @@ Create and publish an internal Feishu or Lark app with a bot, and set its availa
 
 After initialization, run `namo start` in the foreground if you did not install the background service. `namo ui` opens the local workbench without starting a receiver; keep that terminal process open while using it. From a source checkout, the equivalent commands are `pnpm cli start` and `pnpm cli ui`.
 
+Use `namo ui --remote-guide` for the optional owner login behind an HTTPS proxy. The remote listener is a separate loopback process with its own password file and sessions. [Setup and verification](../skills/namo-remote-workbench/SKILL.md)
+
 ### Service maintenance
 
 On macOS, `namo service install` installs and starts the background service; `start`, `stop`, `restart`, `upgrade` and `uninstall` manage it. Uninstall retains configuration, data and login. A source build alone does not switch the running service. `namo service upgrade` creates and verifies a release snapshot and backup. Compatible changes can be applied while the receiver remains online; a new execution version is provisional for five minutes and rolls back on receiver restart if it has not been confirmed. Incompatible receiver, storage or dependency changes require a planned stop, an idle check and a verified backup before upgrading. Stopping the receiver does not itself stop independent runners. Inspect tasks, waits, runners and delivery state before a stopped upgrade, and never overwrite newer data with an old backup.
