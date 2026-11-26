@@ -296,12 +296,14 @@ test('remote workbench stops accepting connections while management cleanup is p
   const openConnection = () => connect(Number(port), hostname);
   const existing = openConnection();
   await once(existing, 'connect');
-  const disconnected = once(existing, 'close', { signal: AbortSignal.timeout(5000) });
+  const disconnected = once(existing, 'close', { signal: AbortSignal.timeout(5000) }).catch(error => {
+    // Closing an accepted socket can send a FIN or a TCP reset.
+    if (error.code !== 'ECONNRESET') throw error;
+  });
   const closing = ui.close();
   const next = openConnection();
   try {
-    await assert.rejects(once(next, 'connect'), { code: 'ECONNREFUSED' });
-    await disconnected;
+    await Promise.all([disconnected, assert.rejects(once(next, 'connect'), { code: 'ECONNREFUSED' })]);
   } finally {
     next.destroy();
     existing.destroy();
