@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store, type Incoming } from '../src/store.js';
 import { Management, ManagementError } from '../src/management.js';
+import { ClaudeUpdates, fetchLatestClaudeVersion } from '../src/claude-updates.js';
 import { startUi } from '../src/ui.js';
 import { digest, atomicJson } from '../src/paths.js';
 import { Tasks, policyHash } from '../src/tasks.js';
@@ -606,6 +607,139 @@ test('CLI update controls require local authentication, exact origin, and curren
  assert.equal((await post({action:'automatic',enabled:'yes',configRevision:revision},cookie)).status,409);
  assert.equal((await post({action:'exec',configRevision:revision},cookie)).status,409);
  assert.equal((await post({action:'automatic',enabled:false,configRevision:revision},cookie)).status,200);
+ rmSync(fake);
+ const missing=await post({action:'upgrade',configRevision:revision},cookie);
+ assert.equal(missing.status,409);assert.deepEqual(await missing.json(),{error:'update_cli_unavailable'});
+ const after=await fetch(ui.url+'/api/codex-update',{headers:{Cookie:cookie}});
+ assert.equal((await after.json() as any).currentVersion,null);
+});
+
+test('Claude release checks read a bounded version from the official release source', async () => {
+  assert.equal(await fetchLatestClaudeVersion(async (url, options) => {
+    assert.equal(url, 'https://downloads.claude.ai/claude-code-releases/latest');
+    assert.equal(options?.redirect, 'error');
+    return new Response('2.1.331\n');
+  }), '2.1.331');
+  for (const body of ['2.1.331-beta', '1'.repeat(33), '<html>unavailable</html>']) {
+    await assert.rejects(fetchLatestClaudeVersion(async () => new Response(body)), /update_check_failed/);
+  }
+});
+
+test('Claude maintenance checks releases, persists opt-in and upgrades the native launcher only when idle', async t => {
+  const f = fixture(t), launcher = join(f.dir, '.local', 'bin', 'claude');
+  const versions = join(f.dir, '.local', 'share', 'claude', 'versions');
+  const current = join(versions, '2.1.100'), next = join(versions, '2.1.331');
+  mkdirSync(versions, { recursive: true }); mkdirSync(join(f.dir, '.local', 'bin'), { recursive: true });
+  writeFileSync(current, `#!/bin/sh
+case "$1" in
+  --version) echo '2.1.100 (Claude Code)' ;;
+  update)
+    test "$CLAUDE_CONFIG_DIR" = "$HOME/.claude" && test "$HOME" -ef . || exit 1
+    remaining=50
+    until test -e "$PWD/release-update"; do
+      test "$remaining" -gt 0 || exit 1
+      remaining=$((remaining - 1))
+      /bin/sleep 0.1
+    done
+    /bin/ln -sfn "$PWD/.local/share/claude/versions/2.1.331" "$PWD/.local/bin/claude"
+    ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o700 });
+  writeFileSync(next, '#!/bin/sh\ncase "$1" in\n  --version) echo "2.1.331 (Claude Code)" ;;\n  *) echo PRIVATE_UPDATE_OUTPUT >&2; exit 1 ;;\nesac\n', { mode: 0o700 });
+  symlinkSync(current, launcher);
+  writeFileSync(f.file, JSON.stringify({ ...f.raw, agents: { profiles: {
+    claude: { adapter: 'claude', enabled: true, bin: launcher },
+    duplicate: { adapter: 'claude', enabled: true, bin: launcher },
+    pinned: { adapter: 'claude', enabled: true, bin: current },
+    missing: { adapter: 'claude', enabled: false, bin: join(f.dir, 'missing-claude') },
+  } } }));
+  let published = '2.1.331', stable = '2.1.99', now = 1000, stableChecks = 0;
+  const newUpdater = () => new ClaudeUpdates(f.dir, async () => published, async () => { stableChecks++; return stable; }, () => now);
+  const updater = newUpdater(), receiver = newUpdater(), restarted = newUpdater();
+  const manager = new Management(f.file, { claudeUpdates: updater });
+  const config = loadConfig(f.file), store = new Store(join(f.data, 'bot.sqlite'));
+  const ui = await startUi(manager);
+  try {
+    const path = ui.url + '/api/claude-update', revision = manager.config().revision;
+    assert.equal((await fetch(path)).status, 401);
+    const login = await fetch(ui.url + '/api/session', { method: 'POST', headers: { Origin: ui.url, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: new URL(ui.entryUrl).hash.slice(1) }) });
+    const headers = { Cookie: login.headers.get('set-cookie')! };
+    const post = (profileId: string, configRevision = revision, Origin = ui.url, endpoint = path, enabled?: unknown) => fetch(endpoint, { method: 'POST',
+      headers: { ...headers, Origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ profileId, configRevision, enabled }) });
+    const status = async () => await (await fetch(path, { headers })).json() as import('../src/ui-contract.js').ClaudeUpdateStatus[];
+    assert.deepEqual((await status()).map(value => [value.profileId, value.currentVersion, value.updateSupported]), [
+      ['claude', '2.1.100', true], ['pinned', '2.1.100', false], ['missing', null, false],
+    ]);
+    assert.equal((await post('claude', revision, 'https://attacker.invalid')).status, 403);
+    assert.deepEqual(await (await post('claude', 'stale')).json(), { error: 'update_config_changed' });
+    for (const profileId of ['missing', 'pinned']) {
+      const rejected = await post(profileId);
+      assert.equal(rejected.status, 409);
+      assert.deepEqual(await rejected.json(), { error: 'update_cli_unavailable' });
+    }
+    const check = () => post('claude', revision, ui.url, path + '/check');
+    assert.equal((await check()).status, 200);
+    const [checked, pinned] = await status();
+    assert.equal(checked.currentVersion, '2.1.100');
+    assert.equal(checked.latestVersion, '2.1.331');
+    assert.ok(checked.checkedAt);
+    assert.equal(checked.updateAvailable, true);
+    assert.equal(checked.state, 'idle');
+    assert.equal(pinned.latestVersion, null);
+    assert.equal(checked.automatic, false);
+    const automatic = (enabled: unknown, profileId = 'claude') => post(profileId, revision, ui.url, path + '/automatic', enabled);
+    await receiver.tick(config, revision);
+    assert.equal(stableChecks, 0);
+    assert.deepEqual(await (await automatic(true, 'pinned')).json(), { error: 'update_cli_unavailable' });
+    assert.deepEqual(await (await automatic('yes')).json(), { error: 'update_action_invalid' });
+    assert.equal((await automatic(true)).status, 200);
+    assert.equal((await receiver.status(config))[0].automatic, true);
+    await receiver.tick(config, revision);
+    assert.equal((await status())[0].state, 'idle');
+    assert.equal((await status())[0].currentVersion, '2.1.100');
+    stable = published;
+    await receiver.tick(config, revision);
+    assert.equal(stableChecks, 1);
+    now += 86_400_000;
+    const queued = { key: 'queued', messageId: 'queued', chatKey: 'chat', chatId: 'chat', senderId: 'alice', text: 'task' };
+    store.enqueue(queued);
+    await receiver.tick(config, revision);
+    assert.equal((await status())[0].state, 'deferred');
+    assert.deepEqual(await (await post('claude')).json(), { error: 'update_queue_busy' });
+    await receiver.tick(config, revision);
+    assert.equal(stableChecks, 2);
+    store.claim(queued.key); store.finish(queued.key, 'done');
+    const output = store.nextOutput()!; store.sending(output.id); store.sent(output.id, 'test-result');
+    await restarted.tick(config, revision);
+    assert.equal((await status())[0].state, 'updating');
+    assert.ok(store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get());
+    assert.deepEqual(await (await post('claude')).json(), { error: 'update_busy' });
+    writeFileSync(join(f.dir, 'release-update'), '');
+    await restarted.settled();
+    const updated = await status();
+    assert.equal(updated[0].currentVersion, '2.1.331');
+    assert.equal(updated[0].state, 'updated');
+    assert.equal(updated[0].updateAvailable, false);
+    assert.equal(updated[1].currentVersion, '2.1.100');
+    assert.equal(store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get(), undefined);
+    assert.equal((await post('claude')).status, 200);
+    assert.equal((await status())[0].state, 'updated');
+    assert.equal((await automatic(false)).status, 200);
+    now += 86_400_000;
+    await restarted.tick(config, revision);
+    assert.equal(stableChecks, 3);
+    published = '2.1.332';
+    assert.equal((await check()).status, 200);
+    assert.equal((await post('claude')).status, 200);
+    await updater.settled();
+    const failed = await status();
+    assert.equal(failed[0].state, 'failed');
+    assert.equal(failed[0].currentVersion, '2.1.331');
+    assert.doesNotMatch(JSON.stringify(failed), /PRIVATE_UPDATE_OUTPUT|namo-ui-/);
+    assert.equal(store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get(), undefined);
+  } finally { await Promise.all([ui.close(), receiver.close(), restarted.close()]); store.close(); }
 });
 
 test('scheduled task list is authenticated, paginated, redacted and read-only',async t=>{

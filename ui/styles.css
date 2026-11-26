@@ -880,7 +880,8 @@ html { scroll-padding-bottom:180px; }
 .inline-action-row { margin-top: 12px; }
 .inline-action-row > p, .inline-action-row > div:first-child, .user-profiles-page .profile-save > p { flex: 1 1 240px; min-width: 0; margin: 0; }
 .inline-action-row > .rt-Button, .inline-action-row > .rt-Flex, .profile-save-actions { margin-left: auto; }
-.codex-update-actions .rt-Flex, .profile-save-actions { justify-content: flex-end; }
+.cli-update-actions > .rt-Flex, .profile-save-actions { justify-content: flex-end; }
+.cli-update-target + .cli-update-target { border-top: 1px solid var(--namo-border); margin-top: 16px; padding-top: 16px; }
 .directory-row, .directory-location { display: flex; align-items: center; gap: 12px; }
 .directory-row { justify-content: space-between; padding: 10px 12px; border: 1px solid var(--gray-a5); border-radius: 8px; }
 .directory-path { min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, monospace; font-size: 13px; }

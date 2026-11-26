@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadConfig } from '../src/config.js';
 import { Store } from '../src/store.js';
-import { CodexUpdates, newerVersion, type UpdateDependencies } from '../src/codex-updates.js';
+import { CodexUpdates, type UpdateDependencies } from '../src/codex-updates.js';
+import { startCliAutoUpdates } from '../src/cli-update-scheduler.js';
+import { digest } from '../src/paths.js';
+import { newerVersion } from '../src/version.js';
 import { installationRoot, installationState, resolveCodexBinary, saveInstallation } from '../src/codex-installation.js';
 
 function fixture(t: TestContext, overrides: Partial<UpdateDependencies> = {}) {
@@ -46,6 +49,48 @@ test('checking records the latest stable release without installing or selecting
   assert.equal(f.state.installs, 0); assert.deepEqual(f.state.probes, []);
   assert.equal(resolveCodexBinary(f.original, f.home), f.original);
   assert.equal(readFileSync(f.file, 'utf8'), before);
+});
+
+test('the shared CLI scheduler dispatches both updaters and waits for in-flight checks on shutdown', async t => {
+  const f = fixture(t);
+  let finishFirst!: () => void, finishSecond!: () => void;
+  const first = new Promise<void>(resolve => { finishFirst = resolve; });
+  const second = new Promise<void>(resolve => { finishSecond = resolve; });
+  const config = readFileSync(f.file, 'utf8'), events: string[] = [];
+  let checks = 0;
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const stop = startCliAutoUpdates(f.config, digest(config), [
+    {
+      async tick() { events.push('codex'); throw Error('temporary failure'); },
+      async close() { events.push('close codex'); },
+    },
+    {
+      async tick() { events.push('claude'); checks++; await (checks === 1 ? first : second); },
+      async close() { events.push('close claude'); },
+    },
+  ]);
+  t.after(async () => { finishFirst(); finishSecond(); await stop(); });
+  assert.deepEqual(events, ['codex', 'claude']);
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(events, ['codex', 'claude']);
+  finishFirst();
+  await new Promise(resolve => setImmediate(resolve));
+  writeFileSync(f.file, config + '\n');
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(events, ['codex', 'claude']);
+  writeFileSync(f.file, config);
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(events, ['codex', 'claude', 'codex', 'claude']);
+  const stopped = stop();
+  assert.equal(stop(), stopped);
+  let finished = false;
+  void stopped.then(() => { finished = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(finished, false);
+  finishSecond();
+  await stopped;
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(events, ['codex', 'claude', 'codex', 'claude', 'close codex', 'close claude']);
 });
 
 test('upgrade activates a validated private binary, survives reconstruction and can roll back to the original', async t => {

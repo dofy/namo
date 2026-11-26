@@ -1,4 +1,4 @@
-import type { AgentConfigPatch, ApprovalAction, ApprovalList, ApprovalView, McpConnectionPatch, CodexUpdateStatus, ServiceLog, MigrationInspection, ServiceAccessPatch } from '../src/ui-contract';
+import type { AgentConfigPatch, ApprovalAction, ApprovalList, ApprovalView, McpConnectionPatch, ClaudeUpdateStatus, CodexUpdateStatus, ServiceLog, MigrationInspection, ServiceAccessPatch } from '../src/ui-contract';
 import { t as tr, getLocale } from './i18n';
 import type { ApplyResult, AssistantView, AssistantValues, BrowseOptions, ConfigValues, ConfigView, GitHubConfigPatch, Dashboard, Diagnostic, Issue, ManagementState, MemoryMutation, MemoryViewState, PageResult, ProfileValues, ResolutionAction, ScheduleListItem, SessionSummary, TaskDetail, TaskList, UserProfile } from '../src/ui-contract';
 
@@ -43,6 +43,11 @@ export const api = {
   codexUpdate: (signal?: AbortSignal) => request<CodexUpdateStatus>('/api/codex-update', undefined, signal),
   changeCodexUpdate: (configRevision: string, action: 'check' | 'upgrade' | 'automatic' | 'rollback', enabled?: boolean) =>
     request<CodexUpdateStatus>('/api/codex-update', { action, configRevision, ...(enabled === undefined ? {} : { enabled }) }),
+  claudeUpdate: (signal?: AbortSignal) => request<ClaudeUpdateStatus[]>('/api/claude-update', undefined, signal),
+  changeClaudeUpdate: (configRevision: string, profileId: string | null, action: 'check' | 'upgrade') =>
+    request<ClaudeUpdateStatus[]>(action === 'check' ? '/api/claude-update/check' : '/api/claude-update', { configRevision, profileId }),
+  setClaudeAutomaticUpdate: (configRevision: string, profileId: string | null, enabled: boolean) =>
+    request<ClaudeUpdateStatus[]>('/api/claude-update/automatic', { configRevision, profileId, enabled }),
   tasks: (query: string, signal?: AbortSignal) => request<TaskList>(`/api/tasks?${query}`, undefined, signal),
   schedules: (query: string, signal?: AbortSignal) => request<PageResult<ScheduleListItem>>(`/api/schedules?${query}`, undefined, signal),
   scheduleAction: (item:ScheduleListItem,action:'pause'|'resume'|'delete') => request<{ok:true}>('/api/schedules/action',{id:item.id,action,state:item.state,nextAt:item.nextAt}),

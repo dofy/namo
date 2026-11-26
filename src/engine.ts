@@ -1,3 +1,4 @@
+import { clearStaleCliMaintenance } from './cli-maintenance.js';
 import { sessionList } from './session-list.js';
 import { decideMcpApproval, mcpApprovalCommand, revokeBrowserGrant } from './mcp-write-approval.js';
 import { memoryDirectories } from './memory-access.js';
@@ -509,7 +510,10 @@ export class Engine {
     this.feedback.recover();
     this.store.db.prepare("UPDATE settings SET value=? WHERE key LIKE 'title-summary:%' AND json_valid(value) AND json_extract(value,'$.state')='running'").run(JSON.stringify({state:'failed'}));
     this.artifacts.recover();
-    if (!paused) this.store.db.prepare("DELETE FROM settings WHERE key='maintenance'").run();
+    if (!paused) {
+      clearStaleCliMaintenance(this.store.db);
+      this.store.db.prepare("DELETE FROM settings WHERE key='maintenance' AND value NOT LIKE 'cli-update:%'").run();
+    }
     if(!paused)this.routeQueued();
     this.started = true;
     if (this.runtime.persistent) {
@@ -652,6 +656,7 @@ export class Engine {
     this.pumping = true;
     try {
       for(const active of this.active.values()) if(this.store.get(active.key)?.cancelRequested) active.abort.abort();
+      clearStaleCliMaintenance(this.store.db);
       this.tasks.expireMaterials();
       new Waits(this.store).expire();
       if(Date.now()>=this.nextRetentionPoll){this.nextRetentionPoll=Date.now()+3_600_000;redactExpiredInbox(this.store,this.config.retention?.inboxDays??0);}
@@ -762,6 +767,7 @@ export class Engine {
         &&this.active.size+this.detachedReservations().length+(this.controlRunning?1:0)+(this.titleRunning?1:0)<this.config.concurrency
         &&!this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get()) {
         const allowed=this.store.transaction(()=>{
+          if(this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get())return false;
           const charge=this.dailyTurns.charge(this.dailyTurnLimit);
           if(charge.state==='invalid')throw new Error('daily_turn_count_invalid');
           return charge.state!=='exhausted';

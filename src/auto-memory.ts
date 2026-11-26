@@ -112,6 +112,7 @@ export class AutoMemories {
     let job: Job | undefined;
     try {
       job = this.store.transaction(() => {
+        if (this.store.db.prepare("SELECT 1 FROM settings WHERE key='maintenance'").get()) return;
         const now = Date.now(), next = this.jobs(now).filter(value => this.runnable(value, now))
           .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))[0];
         if (!next) return;

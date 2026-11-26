@@ -24,8 +24,8 @@ export function detectAgents(codexBin = 'codex'): AgentInfo[] {
     return { id, kind: 'local-cli', supported: true, path: path ? realpathSync(path) : undefined, installed: !!path };
   });
 }
-export function findClaudeBinary(bin: string): string | undefined {
-  return findExecutable(bin) ?? (bin === 'claude' ? findExecutable(join(homedir(), '.local', 'bin', 'claude')) : undefined);
+export function findClaudeBinary(bin: string, home = homedir()): string | undefined {
+  return findExecutable(bin) ?? (bin === 'claude' ? findExecutable(join(home, '.local', 'bin', 'claude')) : undefined);
 }
 export { agentLabel } from './agent-registry.js';
 export function runtimeFor(config: Config, profile?: string | AgentSelection): Runtime {
