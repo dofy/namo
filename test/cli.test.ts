@@ -54,6 +54,14 @@ test('CLI keeps lifecycle commands and rejects invalid arguments before loading 
  const dir=mkdtempSync(join(tmpdir(),'namo-cli-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const run=(...a:string[])=>spawnSync(process.execPath,[bin,...a],{cwd:dir,encoding:'utf8',env:{...process.env,NAMO_HOME:dir,NAMO_LANG:'system',LC_ALL:'en_US.UTF-8'}});
  assert.match(run('--help').stdout,/\bdocs\b/);
+ assert.match(run('--help').stdout,/ui --remote-guide/);
+ const remoteGuide=run('ui','--remote-guide');
+ assert.equal(remoteGuide.status,0);
+ assert.match(remoteGuide.stdout,/name: namo-remote-workbench/);
+ assert.match(remoteGuide.stdout,/--password-file/);
+ assert.match(run('ui','--remote','https://namo.example.com').stderr,/--password-file/);
+ assert.match(run('ui','--port','18789').stderr,/--remote/);
+ assert.match(run('start','--remote-guide').stderr,/namo ui/);
  for(const command of ['doctor','check','status','logs','agent','issues','issue','resolve','access','github','approval']) {const result=run(command);assert.equal(result.status,1);assert.match(result.stderr,/namo ui/);}
  assert.match(run('migrate').stderr,/namo init --import/);
  assert.match(run('init','--import').stderr,/interactive (?:local )?terminal/);

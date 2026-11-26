@@ -33,7 +33,8 @@ function AppTheme({children}:{children:ReactNode}) {
 // Exchange the single-use bootstrap before React mounts, including StrictMode's
 // extra development effect cycle. Never persist the token or put it in logs.
 async function boot() {
-  let code = location.hash.slice(1); history.replaceState(null, '', location.pathname + location.search);
+  let code = document.documentElement.hasAttribute('data-namo-remote') ? '' : location.hash.slice(1);
+  history.replaceState(null, '', location.pathname + location.search);
   let initial, startupError;
   try { if (code) await api.session(code); initial = await api.state(); } catch (e) { startupError = message(e); } finally { code = ''; }
   createRoot(document.getElementById('root')!).render(<StrictMode><AppTheme>

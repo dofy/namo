@@ -47,6 +47,10 @@ pnpm run build
 pnpm cli init
 ```
 
+## 可选的远程工作台
+
+`namo ui` 默认打开本机工作台。想从其他设备访问时，运行 `namo ui --remote-guide`，把输出交给协助安装的 agent。随包指南包含独立回环监听、HTTPS 反向代理、管理密码，以及桌面和手机登录、退出的验收步骤。[远程工作台配置 Skill](skills/namo-remote-workbench/SKILL.md)
+
 ## 连接 Inkflit
 
 在**设置 → 连接设置 → MCP 连接**中选择**添加本地 MCP**：ID 填写 `inkflit`，可执行文件填写 `/Applications/Inkflit.app/Contents/MacOS/Inkflit`，参数填写 `["--mcp"]`，保存后测试连接。也可以在 `namo config` 中配置本地 MCP。Namo 和 Inkflit 需在同一台 Mac 以同一用户运行。请只添加可信程序：它们以 Namo 的系统用户权限运行，所有获准对话的成员都能调用其工具。

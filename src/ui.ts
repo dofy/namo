@@ -13,6 +13,7 @@ import { uiRoutes } from './ui-contract.js';
 import { McpOAuthFlow } from './mcp-oauth-flow.js';
 import { BrowseError } from './browse.js';
 import { THEME_COOKIE, parseThemePreference } from './theme-contract.js';
+import { createRemoteUi, type RemoteUiOptions } from './remote-ui.js';
 
 const assetRoot = new URL('../ui/', import.meta.url);
 // Radix Themes' Table/Select do not forward a nonce to their viewport styles.
@@ -55,10 +56,12 @@ end try`;
     return resolve(output.startsWith('selected:')?{status:'selected',path:output.slice(9)}:{status:'unavailable'});
   }));
 }
-export async function startUi(manager:Management,options:{chooseDirectory?:()=>Promise<NativeDirectoryResult>}={}):Promise<{url:string;entryUrl:string;close:()=>Promise<void>}> {
-  try { readFileSync(new URL('index.html',assetRoot)); }
+export async function startUi(manager:Management,options:{chooseDirectory?:()=>Promise<NativeDirectoryResult>;remote?:RemoteUiOptions}={}):Promise<{url:string;entryUrl:string;close:()=>Promise<void>}> {
+  let index:string;
+  try { index=readFileSync(new URL('index.html',assetRoot),'utf8'); }
   catch { throw new ManagementError(tr("ui.workbenchAssetsMissingSourceDevelopmentRunPnpm")); }
-  let bootstrap=randomBytes(32).toString('hex');const bootstrapUntil=Date.now()+300000;
+  const remote=options.remote&&createRemoteUi(options.remote,index,assetRoot);
+  let bootstrap=remote?'':randomBytes(32).toString('hex');const bootstrapUntil=Date.now()+300000;
   let session='';let sessionUntil=0,attempts=0,busy=false,pickingDirectory=false,origin='',cookieName='';
   const oauth=new McpOAuthFlow(manager,()=>origin);
   async function body(req:IncomingMessage):Promise<any>{
@@ -69,10 +72,15 @@ export async function startUi(manager:Management,options:{chooseDirectory?:()=>P
   const server=createServer((req,res)=>withLocale(parseLocale(req.headers['accept-language']?.split(',')[0]?.split(';')[0]) ?? 'en', async()=>{
     const send=(status:number,value:unknown,type='application/json')=>{res.writeHead(status,{'Content-Type':`${type}; charset=utf-8`});res.end(type==='application/json'?JSON.stringify(value):value as string);};
     const styleNonce=randomBytes(18).toString('base64');
-    headers(res,styleNonce);
-    if(req.headers.host!==origin.slice('http://'.length))return send(403,{error:tr("ui.invalidRequestOrigin")});
-    let path:string;
-    try{path=new URL(req.url??'/',origin).pathname;}catch{return send(400,{error:tr("ui.invalidRequestPath")});}
+    headers(res,styleNonce,Boolean(remote));
+    if(req.headers.host!==(options.remote?.origin.host??origin.slice('http://'.length)))return send(403,{error:tr("ui.invalidRequestOrigin")});
+    let target:URL;
+    try{target=new URL(req.url??'/',options.remote?.origin??origin);}catch{return send(400,{error:tr("ui.invalidRequestPath")});}
+    if(remote){
+      if(!req.url?.startsWith('/')||req.url.startsWith('//')||target.origin!==options.remote?.origin.origin)return send(400,{error:tr("ui.invalidRequestPath")});
+      if(!await remote.authorize(req,res,target))return;
+    }
+    const path=target.pathname;
     const themeCookie=(req.headers.cookie??'').split(';').map(part=>part.trim()).find(part=>part.startsWith(`${THEME_COOKIE}=`))?.slice(THEME_COOKIE.length+1);
     const theme=parseThemePreference(themeCookie);
     if(req.method==='GET'&&path==='/api/mcp-oauth/callback'){
@@ -91,9 +99,10 @@ export async function startUi(manager:Management,options:{chooseDirectory?:()=>P
       const reason=Object.hasOwn(reasons,key)?reasons[key]:tr('mcp.resultDefaultError');
       return send(200,oauthResultPage(ok?'success':'failed',reason,styleNonce,theme),'text/html');
     }
-    if(req.headers['sec-fetch-site']==='cross-site')return send(403,{error:tr("ui.invalidRequestOrigin")});
+    if(!remote&&req.headers['sec-fetch-site']==='cross-site')return send(403,{error:tr("ui.invalidRequestOrigin")});
     if(req.method==='GET'&&Object.values(uiRoutes).some(route=>route===path)) {
-      try{return send(200,readFileSync(new URL('index.html',assetRoot),'utf8').replace('__NAMO_STYLE_NONCE__',styleNonce).replace('<html lang="en">',`<html lang="en" data-theme="${theme}">`),'text/html');}
+      const remoteMarker=remote?' data-namo-remote':'';
+      try{return send(200,readFileSync(new URL('index.html',assetRoot),'utf8').replace('__NAMO_STYLE_NONCE__',styleNonce).replace('<html lang="en">',`<html lang="en" data-theme="${theme}"${remoteMarker}>`),'text/html');}
       catch{return send(503,{error:tr("ui.workbenchBuildingRefreshShortly")});}
     }
     // Only Vite's public JS/CSS/font files are served. Never expose arbitrary paths,
@@ -112,16 +121,18 @@ export async function startUi(manager:Management,options:{chooseDirectory?:()=>P
       try{res.writeHead(200,{'Content-Type':'image/png'});return res.end(readFileSync(new URL('../../assets/namo-logo.png',import.meta.url)));}catch{return res.end();}
     }
     if(req.method!=='GET'&&req.method!=='POST')return send(405,{error:tr("ui.operationNotSupported")});
-    if(req.method==='POST'&&req.headers.origin!==origin)return send(403,{error:tr("ui.invalidRequestOrigin")});
+    if(!remote&&req.method==='POST'&&req.headers.origin!==origin)return send(403,{error:tr("ui.invalidRequestOrigin")});
     try{
-      if(req.method==='POST'&&path==='/api/session'){
-        const input=await body(req);attempts++;
-        if(attempts>20||Date.now()>bootstrapUntil||!bootstrap||typeof input.code!=='string'||!equal(input.code,bootstrap))return send(401,{error:tr("ui.launchAuthorizationExpiredRunNamoUiAgain")});
-        bootstrap='';session=randomBytes(32).toString('hex');sessionUntil=Date.now()+7200000;
-        res.setHeader('Set-Cookie',`${cookieName}=${session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=7200`);return send(200,{ok:true});
+      if(!remote){
+        if(req.method==='POST'&&path==='/api/session'){
+          const input=await body(req);attempts++;
+          if(attempts>20||Date.now()>bootstrapUntil||!bootstrap||typeof input.code!=='string'||!equal(input.code,bootstrap))return send(401,{error:tr("ui.launchAuthorizationExpiredRunNamoUiAgain")});
+          bootstrap='';session=randomBytes(32).toString('hex');sessionUntil=Date.now()+7200000;
+          res.setHeader('Set-Cookie',`${cookieName}=${session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=7200`);return send(200,{ok:true});
+        }
+        const token=(req.headers.cookie??'').split(';').map(x=>x.trim()).find(x=>x.startsWith(cookieName+'='))?.slice(cookieName.length+1)??'';
+        if(!session||Date.now()>sessionUntil||!equal(token,session))return send(401,{error:tr("ui.runNamoUiLocalTerminalOpenAuthorized")});
       }
-      const token=(req.headers.cookie??'').split(';').map(x=>x.trim()).find(x=>x.startsWith(cookieName+'='))?.slice(cookieName.length+1)??'';
-      if(!session||Date.now()>sessionUntil||!equal(token,session))return send(401,{error:tr("ui.runNamoUiLocalTerminalOpenAuthorized")});
       if(req.method==='POST'&&path==='/api/choose-directory'){
         await body(req);
         if(pickingDirectory)return send(409,{error:tr('ui.previousActionStillRunningTryAgainShortly')});
@@ -195,14 +206,28 @@ export async function startUi(manager:Management,options:{chooseDirectory?:()=>P
     }catch(e){return send(e instanceof BrowseError?400:e instanceof ManagementError?e.status:e instanceof RecoveryError?409:500,{error:e instanceof BrowseError||e instanceof ManagementError||e instanceof RecoveryError?e.message:tr("ui.actionIncompleteCheckConfigurationLocalServiceCredentials")});}
   }));
   server.requestTimeout=10000;server.headersTimeout=5000;server.maxHeadersCount=30;
-  await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
+  await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(options.remote?.port??0,'127.0.0.1',resolve);});
   const address=server.address();if(!address||typeof address==='string')throw new Error('ui_listen_failed');
   origin=`http://127.0.0.1:${address.port}`;cookieName=`namo_ui_${address.port}`;
-  return {url:origin,entryUrl:`${origin}/#${bootstrap}`,close:async()=>{session='';bootstrap='';oauth.clear();server.closeAllConnections();await manager.close();await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
+  async function close(): Promise<void> {
+    const serverClosed = new Promise<void>((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve());
+    });
+    server.closeAllConnections();
+    session = '';
+    bootstrap = '';
+    remote?.clear();
+    oauth.clear();
+    await Promise.all([serverClosed, manager.close()]);
+  }
+  return { url: origin, entryUrl: options.remote?.origin.href ?? `${origin}/#${bootstrap}`, close };
 }
-function headers(res:ServerResponse,styleNonce:string):void{
-  res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Content-Type-Options','nosniff');
-  res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'self'; style-src 'self' 'nonce-${styleNonce}' ${viewportStyleHashes}; font-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`);
+function headers(res:ServerResponse,styleNonce:string,remote:boolean):void{
+  res.setHeader('Cache-Control','no-store');
+  // Browsers can serialize form-navigation Origin as "null" under no-referrer.
+  res.setHeader('Referrer-Policy',remote?'same-origin':'no-referrer');
+  res.setHeader('X-Content-Type-Options','nosniff');
+  res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'self'; style-src 'self' 'nonce-${styleNonce}' ${viewportStyleHashes}; font-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action ${remote?"'self'":"'none'"}`);
 }
 export async function openUi(url:string):Promise<void>{
   if(!['darwin','linux'].includes(process.platform))throw new ManagementError(tr("ui.automaticBrowserOpeningSupportsMacosLinuxUse"));

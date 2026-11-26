@@ -1,0 +1,282 @@
+@font-face {
+  font-family: 'Caveat';
+  src: url('/_namo-remote/caveat-latin-500.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+  --canvas: #f4eef5;
+  --paper: #fffcff;
+  --plum: #2d2038;
+  --text: #271b2d;
+  --quiet: #665569;
+  --outline: #ddd3df;
+  --ember: #ac3f1c;
+  --ember-hover: #902f13;
+  --halo: #f1d9dc;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  display: grid;
+  min-height: 100vh;
+  min-height: 100svh;
+  margin: 0;
+  padding: clamp(14px, 4vw, 48px);
+  place-items: center;
+  background: var(--canvas);
+  color: var(--text);
+}
+
+.sign-in {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  width: min(100%, 920px);
+  min-height: 540px;
+  overflow: hidden;
+  border: 1px solid #e3d9e6;
+  border-radius: 28px;
+  background: var(--paper);
+  box-shadow: 0 28px 70px -42px #44224780, 0 7px 22px -15px #44224742;
+}
+
+.brand-panel {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  place-items: center;
+  isolation: isolate;
+  background: var(--plum);
+  color: #fcf3fa;
+}
+
+.wordmark {
+  position: absolute;
+  z-index: 1;
+  top: 32px;
+  left: 34px;
+  font-family: 'Caveat', cursive;
+  font-size: 38px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.emblem {
+  position: relative;
+  display: grid;
+  width: min(65%, 275px);
+  aspect-ratio: 1;
+  place-items: center;
+  isolation: isolate;
+  border-radius: 50%;
+  background: var(--halo);
+}
+
+.orbit {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 50%;
+}
+
+.orbit-inner {
+  inset: -17%;
+  border: 1px dashed #ba94c085;
+}
+
+.orbit-outer {
+  inset: -34%;
+  border: 1px solid #a383ad55;
+}
+
+.orbit-track, .planet {
+  position: absolute;
+  inset: 0;
+}
+
+.planet {
+  transform: rotate(var(--phase));
+  animation: orbit-spin var(--period) linear infinite;
+}
+
+.orbit-outer .planet { animation-direction: reverse; }
+
+.planet::before, .planet-ringed::after {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  content: '';
+}
+
+.planet::before {
+  width: var(--size);
+  height: var(--size);
+  border-radius: 50%;
+  background: radial-gradient(circle at 31% 25%, #fff9, transparent 62%), var(--color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color) 16%, transparent),
+    0 0 11px color-mix(in srgb, var(--color) 34%, transparent);
+  transform: translate(-50%, -50%);
+}
+
+.planet-ringed::after {
+  width: calc(var(--size) + 8px);
+  height: 6px;
+  border: 1px solid #ffe7b4b8;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) rotate(-21deg);
+}
+
+.orbit-inner .planet:nth-child(1) { --phase: 25deg; --size: 8px; --period: 35s; --color: #c098ed; }
+.orbit-inner .planet:nth-child(2) { --phase: 151deg; --size: 10px; --period: 38s; --color: #9de0bf; }
+.orbit-inner .planet:nth-child(3) { --phase: 258deg; --size: 7px; --period: 41s; --color: #ef8d9d; }
+.orbit-outer .planet:nth-child(1) { --phase: 57deg; --size: 11px; --period: 47s; --color: #f7ae91; }
+.orbit-outer .planet:nth-child(2) { --phase: 137deg; --size: 8px; --period: 50s; --color: #a9baf8; }
+.orbit-outer .planet:nth-child(3) { --phase: 208deg; --size: 12px; --period: 53s; --color: #ffda8b; }
+.orbit-outer .planet:nth-child(4) { --phase: 309deg; --size: 9px; --period: 56s; --color: #92d9ec; }
+
+@keyframes orbit-spin {
+  from { transform: rotate(var(--phase)); }
+  to { transform: rotate(calc(var(--phase) + 1turn)); }
+}
+
+.emblem img {
+  position: relative;
+  display: block;
+  width: 91%;
+  height: auto;
+  filter: drop-shadow(0 9px 8px #3b22372b);
+}
+
+.form-panel {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  padding: 52px clamp(32px, 5.7vw, 74px);
+  place-items: center start;
+}
+
+.form-content { width: 100%; }
+
+h1 {
+  margin: 0;
+  font-size: clamp(25px, 3vw, 34px);
+  font-weight: 680;
+  letter-spacing: -0.045em;
+  line-height: 1.25;
+}
+
+header p {
+  margin: 11px 0 0;
+  color: var(--quiet);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+form { margin-top: 32px; }
+
+label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+input {
+  display: block;
+  width: 100%;
+  min-height: 49px;
+  padding: 11px 13px;
+  border: 1px solid var(--outline);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+}
+
+input:hover { border-color: #b5a2b9; }
+input[aria-invalid='true'] { border-color: var(--ember); }
+
+input:focus-visible, button:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 3px;
+}
+
+.password-field { position: relative; }
+.password-field input { padding-inline-end: 70px; }
+
+.password-toggle {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  bottom: 4px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--quiet);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.password-toggle:hover { background: #f4edf5; color: var(--plum); }
+
+.sign-in-button {
+  width: 100%;
+  min-height: 50px;
+  margin-top: 25px;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ember);
+  color: #fff;
+  font: inherit;
+  font-weight: 650;
+  letter-spacing: 0.012em;
+  cursor: pointer;
+}
+
+.sign-in-button:hover { background: var(--ember-hover); }
+.sign-in-button:active { transform: translateY(1px); }
+
+.notice {
+  margin: 0 0 17px;
+  padding: 10px 12px;
+  border-inline-start: 3px solid var(--ember);
+  border-radius: 6px;
+  background: #fff0ea;
+  color: #782710;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+@media (max-width: 630px) {
+  .sign-in { grid-template-columns: minmax(0, 1fr); min-height: 0; max-width: 430px; border-radius: 22px; }
+  .brand-panel { min-height: 218px; }
+  .wordmark { top: 20px; left: 23px; font-size: 31px; }
+  .emblem { width: 131px; margin-left: 10%; }
+  .orbit-inner { inset: -14%; }
+  .orbit-outer { inset: -27%; }
+  .form-panel { padding: 31px clamp(20px, 7vw, 34px) 34px; }
+  form { margin-top: 23px; }
+}
+
+@media (max-width: 360px) {
+  .brand-panel { min-height: 180px; }
+  .emblem { width: 106px; }
+  .form-panel { padding-inline: 17px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .planet { animation: none; }
+  .sign-in-button:active { transform: none; }
+}

@@ -11,6 +11,9 @@ async function request<T>(path: string, body?: unknown, signal?: AbortSignal): P
     headers: { 'Accept-Language': getLocale(), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }),
   });
+  if (response.status === 401 && document.documentElement.hasAttribute('data-namo-remote')) {
+    window.location.replace('/login?next=' + encodeURIComponent(location.pathname + location.search));
+  }
   const data = await response.json();
   if (!response.ok) throw new ApiError(data.error || tr("api.requestIncompleteRefreshTryAgain"), response.status);
   return data as T;

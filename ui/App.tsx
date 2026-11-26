@@ -60,6 +60,9 @@ function SidebarControls({ state, expired, navigate, onRefresh, refreshing, mobi
         </Popover.Content></Popover.Root>
       <Link className="repository-link" href={REPOSITORY_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub · dofy/namo"><Icon name="external" /><span>GitHub</span></Link>
     </div>
+    {document.documentElement.hasAttribute('data-namo-remote') && <form className="remote-session-actions" method="post" action="/logout">
+      <Button type="submit" variant="soft" color="gray" size="1">{tr('remoteUi.signOut')}</Button>
+    </form>}
   </div>;
 }
 export function App({ initial, startupError }: { initial?: ManagementState; startupError?: string }) {

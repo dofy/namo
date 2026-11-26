@@ -25,7 +25,7 @@ import { runtimeSecrets } from './runtime-config.js';
 
 process.umask(0o077);
 const args = process.argv.slice(2);
-const valueFlags = ['--config', '--lang', '--profile'];
+const valueFlags = ['--config', '--lang', '--profile', '--remote', '--password-file', '--port'];
 const positional = args.filter((a, i) => !a.startsWith('-') && (i === 0 || !valueFlags.includes(args[i - 1])));
 const startupRelease = positional[0] === 'start' ? currentRuntimeRelease(import.meta.url) : undefined;
 function flag(name: string): string | undefined {
@@ -47,7 +47,7 @@ async function main(): Promise<void> {
   if (command === 'migrate') throw new Error(tr('cli.importMoved'));
   for (let i = 0; i < args.length; i++) {
     if (valueFlags.includes(args[i])) { flag(args[i]); i++; continue; }
-    if (args[i].startsWith('-') && !['--help','-h','--version','-v','--import','--device-auth'].includes(args[i])) throw new Error(tr('cli.unknownOptionRunNamoHelpUsage'));
+    if (args[i].startsWith('-') && !['--help','-h','--version','-v','--import','--device-auth','--remote-guide'].includes(args[i])) throw new Error(tr('cli.unknownOptionRunNamoHelpUsage'));
   }
   if (args.includes('--version') || args.includes('-v')) { console.log(NAMO_VERSION); return; }
   if (args.includes('--help') || args.includes('-h') || command === 'help') { console.log(tr('cli.help') + '\n' + tr('cli.directory', REPOSITORY_URL)); return; }
@@ -56,6 +56,17 @@ async function main(): Promise<void> {
   if (requestedProfile && command !== 'login') throw new Error(tr('cli.profileOnlyLogin'));
   if (args.includes('--device-auth') && command !== 'login') throw new Error(tr('terminal.deviceLoginOnly'));
   if (args.includes('--import') && command !== 'init') throw new Error(tr('cli.importOnlyInit'));
+  const remoteOrigin = flag('--remote'), passwordFile = flag('--password-file'), remotePort = flag('--port');
+  const remoteGuide = args.includes('--remote-guide');
+  if (remoteOrigin || passwordFile || remotePort || remoteGuide) {
+    if (command !== 'ui' || (remoteGuide ? remoteOrigin || passwordFile || remotePort : !remoteOrigin || !passwordFile)) {
+      throw new Error(tr('remoteUi.usage'));
+    }
+  }
+  if (remoteGuide) {
+    console.log((await import('./remote-ui.js')).remoteUiGuide().trimEnd());
+    return;
+  }
   if (command === 'service' && !['install','start','stop','restart','upgrade','uninstall'].includes(positional[1])) throw new Error(tr('cli.serviceUsage'));
   if (command === 'docs') {
     const {startDocs} = await import('./docs-site.js'); const docs = await startDocs();
@@ -85,9 +96,14 @@ async function main(): Promise<void> {
     return;
   }
   if (command === 'ui') {
-    const {startUi,openUi} = await import('./ui.js'); const ui = await startUi(new Management(file));
-    try { await openUi(ui.entryUrl); } catch (error) { await ui.close(); throw error; }
-    console.log(tr('cli.namoWorkbenchOpenedLocalAccessClosingProcess', ui.url));
+    const {startUi,openUi} = await import('./ui.js');
+    const remote = remoteOrigin && passwordFile ? (await import('./remote-ui.js')).remoteUiOptions(remoteOrigin, passwordFile, remotePort) : undefined;
+    const ui = await startUi(new Management(file), { remote });
+    if (remote) console.log(tr('remoteUi.started', ui.url, ui.entryUrl));
+    else {
+      try { await openUi(ui.entryUrl); } catch (error) { await ui.close(); throw error; }
+      console.log(tr('cli.namoWorkbenchOpenedLocalAccessClosingProcess', ui.url));
+    }
     let stopping = false;
     const close = async () => { if (stopping) return; stopping = true; await ui.close(); finish(0); };
     process.once('SIGINT', () => void close()); process.once('SIGTERM', () => void close()); return;
