@@ -209,7 +209,18 @@ export async function startUi(manager:Management,options:{chooseDirectory?:()=>P
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(options.remote?.port??0,'127.0.0.1',resolve);});
   const address=server.address();if(!address||typeof address==='string')throw new Error('ui_listen_failed');
   origin=`http://127.0.0.1:${address.port}`;cookieName=`namo_ui_${address.port}`;
-  return {url:origin,entryUrl:options.remote?.origin.href??`${origin}/#${bootstrap}`,close:async()=>{session='';bootstrap='';remote?.clear();oauth.clear();server.closeAllConnections();await manager.close();await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
+  async function close(): Promise<void> {
+    const serverClosed = new Promise<void>((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve());
+    });
+    server.closeAllConnections();
+    session = '';
+    bootstrap = '';
+    remote?.clear();
+    oauth.clear();
+    await Promise.all([serverClosed, manager.close()]);
+  }
+  return { url: origin, entryUrl: options.remote?.origin.href ?? `${origin}/#${bootstrap}`, close };
 }
 function headers(res:ServerResponse,styleNonce:string,remote:boolean):void{
   res.setHeader('Cache-Control','no-store');

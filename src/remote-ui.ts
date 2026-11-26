@@ -130,6 +130,7 @@ export function createRemoteUi(options: RemoteUiOptions, uiHtml: string, uiAsset
         return false;
       }
       const password = (await form(req))?.get('password');
+      if (req.socket.destroyed) return false;
       const now = Date.now();
       if (now >= retryAt) { failures = 0; retryAt = now + attemptWindow; }
       if (failures >= maxAttempts) {

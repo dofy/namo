@@ -10,6 +10,8 @@ import { startUi } from '../src/ui.js';
 import { digest, atomicJson } from '../src/paths.js';
 import { Tasks, policyHash } from '../src/tasks.js';
 import { request as httpRequest } from 'node:http';
+import { once } from 'node:events';
+import { connect } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { remoteUiOptions } from '../src/remote-ui.js';
 import { Profiles } from '../src/profiles.js';
@@ -281,6 +283,31 @@ test('optional remote workbench authenticates on its configured HTTPS origin and
  const limited=await post('/login',form);
  assert.equal(limited.status,429);
  assert(Number(limited.headers.get('retry-after'))>0);
+});
+
+test('remote workbench stops accepting connections while management cleanup is pending', async t => {
+  const { manager } = fixture(t);
+  let finishCleanup!: () => void;
+  t.mock.method(manager, 'close', () => new Promise<void>(resolve => { finishCleanup = resolve; }));
+  const ui = await startUi(manager, { remote: {
+    origin: new URL('https://workbench.example.test'), port: 0, passwordDigest: randomBytes(32),
+  } });
+  const { hostname, port } = new URL(ui.url);
+  const openConnection = () => connect(Number(port), hostname);
+  const existing = openConnection();
+  await once(existing, 'connect');
+  const disconnected = once(existing, 'close', { signal: AbortSignal.timeout(5000) });
+  const closing = ui.close();
+  const next = openConnection();
+  try {
+    await assert.rejects(once(next, 'connect'), { code: 'ECONNREFUSED' });
+    await disconnected;
+  } finally {
+    next.destroy();
+    existing.destroy();
+    finishCleanup();
+    await closing;
+  }
 });
 
 test('directory browser requires a session and returns only directory entries',async t=>{
