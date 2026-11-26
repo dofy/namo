@@ -47,7 +47,7 @@ pnpm run build
 pnpm cli init
 ```
 
-可恢复的向导会引导你选择执行器、完成独立登录、设置目录白名单、填写应用凭据和配对。真实模型和收发验证可选，可能使用账号额度。Claude Code 自定义网关和私聊执行器切换见[运维手册](operations.md#claude-code-与执行器切换)。
+可恢复的向导会引导你选择执行器、完成独立登录、设置目录白名单、填写应用凭据和配对。真实模型和收发验证可选，可能使用账号额度。Claude Code 自定义网关和私聊执行器切换见[运维手册](operations.md#claude-code-and-executor-switching)。
 
 也可构建本地 CLI 安装包：
 
@@ -64,10 +64,10 @@ namo --help
 namo ui               # 本地工作台，不启动另一接收端
 namo docs             # 打开本地文档；按 Ctrl+C 停止服务
 namo config           # 交互式终端配置
-namo login --device-auth # 无桌面环境使用官方 Codex 设备登录
+namo login --profile codex --device-auth # 无桌面环境使用官方 Codex 设备登录
 ```
 
-终端菜单支持方向键、逐项编辑草稿及 Esc 放弃编辑，涵盖执行、飞书及组织准入、GitHub、MCP、助手、用户档案和 Codex 更新。Docker、持久存储与 MCP OAuth 操作见[无桌面环境](operations.md#无桌面环境)。
+终端菜单支持方向键、逐项编辑草稿及 Esc 放弃编辑，涵盖执行器连接、登录、诊断、模型、飞书及组织准入、GitHub、MCP、助手和用户档案。在 **CLI 更新** 中可查看 Codex 和 Claude Code 的版本、手动升级，并设置队列空闲时自动升级。Docker、持久存储与 MCP OAuth 操作见[无桌面环境](operations.md#headless-operation)。
 
 ### 语言
 
@@ -94,7 +94,7 @@ NAMO_LANG=zh-CN namo ui
 
 macOS 上，`namo service install` 安装并启动后台服务；`start`、`stop`、`restart`、`upgrade` 和 `uninstall` 用于管理它，卸载保留配置、数据和登录。源码构建不会自行切换运行中的服务。`namo service upgrade` 会创建并校验发布快照与备份；兼容变更可在接收器在线时应用，新执行版本先试运行五分钟，在确认前接收器重启会回退。接收器、存储或依赖不兼容时，须安排停机，完成空闲检查并验证备份后升级。停止接收器不会自动停止独立 runner；停机升级前应核对任务、等待、runner 和投递状态，不能用旧备份覆盖新数据。
 
-其他平台使用前台模式，完整平台验收尚未完成。恢复与升级细节见[运维指南](operations.md#安装升级与回退)。
+其他平台使用前台模式，完整平台验收尚未完成。恢复与升级细节见[运维指南](operations.md#installation-upgrades-and-rollback)。
 
 ## 聊天命令
 
@@ -103,7 +103,7 @@ macOS 上，`namo service install` 安装并启动后台服务；`start`、`stop
 工作台「设置 → Codex CLI 更新」提供版本检查、手动升级、回退和自动升级开关。自动升级默认关闭；开启后由运行中的服务每天检查官方稳定版，忙碌时延后，失败后至少等待一小时再重试。Namo 将完整安装包下载到独立登录目录内的 `namo-cli/`，校验 SHA-256、CLI 版本、app-server 协议、登录、权限配置及模型目录后，空闲时原子切换；不替换全局 CLI，也不改变模型偏好。回退会关闭自动升级。当前支持 macOS/Linux 的 arm64/x64。飞书模型目录每 5 分钟刷新，CLI 切换后会重新获取；更新失败保留原版本。 历史 CLI 包暂不自动清理。
 
 
-完整用法见[用自然语言与 Namo 协作](getting-started.md#用自然语言与-namo-协作)；文件交付、记忆与审批分别见[文档索引](README.md)。
+完整用法见[用自然语言与 Namo 协作](getting-started.md#working-with-namo-in-chat)；文件交付、记忆与审批分别见[文档索引](README.md)。
 
 ## 执行边界
 
@@ -113,14 +113,14 @@ macOS 上，`namo service install` 安装并启动后台服务；`start`、`stop
 - 写权限也允许删除文件。取消、超时或重置上下文不会撤销已发生的操作。
 - Git push 记录绑定确切任务、用户 / 聊天、明确的仓库目录、预配置远端、分支、HEAD SHA、配置版本和有效期，提交请求后直接执行，无需再次批准。这是**有限保护**，不是完整强制隔离：通用联网 Agent 或其他凭据路径仍可能绕过审批入口。部署没有通用目标实现。
 - OpenClaw 导入必须显式选择来源文件、受支持版本和应用；不继承模型认证、网关、插件或任务，也不会自动接管接收端。切换和回退保留为需验证的人工门槛。
-- GitHub 等待默认匿名读取公开仓库。通过**连接设置 → GitHub** 配置本机 `gh` 登录或独立令牌：已准入成员在私聊和群聊中可按用户请求使用该账号实际拥有的 API 权限，不再设置逐仓库授权或逐次确认。检查等待不会自动执行写操作。见[私有 GitHub 配置](operations.md#github-连接)。
+- GitHub 等待默认匿名读取公开仓库。通过**连接设置 → GitHub** 配置本机 `gh` 登录或独立令牌：已准入成员在私聊和群聊中可按用户请求使用该账号实际拥有的 API 权限，不再设置逐仓库授权或逐次确认。检查等待不会自动执行写操作。见[私有 GitHub 配置](operations.md#github-connections)。
 - 平台发送回执表示平台已接收消息，不代表用户已读。发送结果不明时保留记录供核对。
 - 主机休眠或断网时无法持续服务；当前没有离线历史消息补拉。
 - 禁止提交 `config.local.json`、`data/`、日志、令牌或认证文件。Namo 不会自动接入个人 MCP、插件或第三方模型网关。
 
-CLI 提供 `init`、`config`、`login`、`start`、`service`、`ui`。状态、日志、诊断和 Git 推送与记录在工作台中操作；OpenClaw 来源检查在**连接设置 → 运行与维护**，实际导入使用 `namo init --import`。迁移不会自动切换接收端；推送绑定已配置目标，提交请求后直接执行。详见 [OpenClaw 迁移](operations.md#openclaw-导入)与 [Git 推送](operations.md#git-推送)。
+CLI 提供 `init`、`config`、`login`、`start`、`service`、`ui`。状态、日志、诊断和 Git 推送与记录在工作台中操作；OpenClaw 来源检查在**设置 → 服务维护 → 运行与维护**，实际导入使用 `namo init --import`。迁移不会自动切换接收端；推送绑定已配置目标，提交请求后直接执行。详见 [OpenClaw 迁移](operations.md#openclaw-import)与 [Git 推送](operations.md#git-pushes)。
 
-后台服务管理当前支持 macOS；其他平台可前台运行，但尚未完成全部平台验收。当前仅接入 Codex；其他 Agent 仅保留未来插件扩展的可能性，不包含对应 SDK 或探测功能。
+后台服务管理当前支持 macOS；其他平台可前台运行，但尚未完成全部平台验收。Namo 支持官方 Codex CLI 和 Claude Code CLI 两种执行器。
 
 ## 工作原理
 
@@ -136,7 +136,7 @@ Namo 在确认收件前先持久化入站消息，再将任务交给独立 runne
 
 在 macOS 上启用命令网络后，已配对用户可在私聊中使用受限的 Ego Lite 浏览器。首次使用会请求本任务授权；按键操作需要单独确认。启用卡片回调时可点击授权按钮，也可回复 `永久允许 MA-编号` 允许本人未来私聊任务使用当前固定操作，回复 `撤销浏览器永久授权` 可撤销。浏览器使用自身的网络权限和登录状态。群聊和定时任务不能使用此功能。
 
-工具支持在任务专属空间中打开页面、读取快照、点击、填写以及有限的按键操作，不接受任意脚本、原始 CDP、上传或下载。永久授权不自动覆盖新增能力。正常运行结束时关闭空间；中断或结果不明时不自动重试，可能需要手动检查遗留空间。人工等待后的新运行不会恢复原浏览器空间。详见 [Ego 浏览器运维说明](operations.md#ego-浏览器原型)。
+工具支持在任务专属空间中打开页面、读取快照、点击、填写以及有限的按键操作，不接受任意脚本、原始 CDP、上传或下载。永久授权不自动覆盖新增能力。正常运行结束时关闭空间；中断或结果不明时不自动重试，可能需要手动检查遗留空间。人工等待后的新运行不会恢复原浏览器空间。详见 [Ego 浏览器运维说明](operations.md#ego-browser-prototype)。
 
 ## 开发
 
@@ -148,8 +148,8 @@ pnpm run smoke:codex          # 协议握手，不进行推理
 pnpm run smoke:codex -- --run # 显式真实模型测试
 ```
 
-完整文档见[文档索引](README.md)，源码构建与验证见[开发指南](architecture.md#开发与验证)，待办见[后续计划](development-plan.md)。
+完整文档见[文档索引](README.md)，源码构建与验证见[开发指南](architecture.md#development-and-verification)，待办见[后续计划](development-plan.md)。
 
 项目地址：[github.com/dofy/namo](https://github.com/dofy/namo)。反馈问题时请提供复现步骤，勿附凭据、私有配置或原始会话数据。
 
-组织配置：在工作台的**连接设置**中配置组织准入和 GitHub 连接。旧安装保持原范围，直到管理员明确修改。见[组织接入与权限](operations.md#配置与权限)。
+组织配置：在工作台的**连接设置**中配置组织准入和 GitHub 连接。旧安装保持原范围，直到管理员明确修改。见[组织接入与权限](operations.md#configuration-and-permissions)。

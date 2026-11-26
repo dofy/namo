@@ -2,7 +2,7 @@
 
 [简体中文](technical-guide-zh-cn.md) · [Product overview](../README.md)
 
-This guide covers setup, capabilities, operation and execution boundaries. For module-level details and maintenance procedures, see the existing [architecture](architecture.md) and [operations](operations.md) references (Chinese).
+This guide covers setup, capabilities, operation and execution boundaries. For module-level details and maintenance procedures, see the [architecture](architecture.md) and [operations](operations.md) guides.
 
 ## What it does
 
@@ -26,7 +26,7 @@ The workbench and CLI support **English and Simplified Chinese**. They follow th
 
 PDF/Office/audio material interpretation, autonomous delegation and offline message backfill remain unsupported. Send `/schedule` in a private Feishu chat to manage scheduled reminders and tasks, or view their list in the local workbench. See the [roadmap](development-plan.md) for implemented capabilities and remaining acceptance checks; check the workbench for the running service version.
 
-Organization setup: open **Connections** in the workbench to configure organization access and a GitHub account. Existing installations retain their access rules until an administrator changes them. See [organization access](operations.md#配置与权限).
+Organization setup: open **Connections** in the workbench to configure organization access and a GitHub account. Existing installations retain their access rules until an administrator changes them. See [organization access](operations.md#configuration-and-permissions).
 
 ## Get started
 
@@ -49,7 +49,7 @@ pnpm run build
 pnpm cli init
 ```
 
-The resumable wizard guides you through executor selection, isolated login, a required directory whitelist, app credentials and user pairing. A live model and messaging check is optional and may use account quota. To configure Claude Code with a custom gateway or switch executors in a direct chat, see the [operations guide](operations.md#claude-code-与执行器切换).
+The resumable wizard guides you through executor selection, isolated login, a required directory whitelist, app credentials and user pairing. A live model and messaging check is optional and may use account quota. To configure Claude Code with a custom gateway or switch executors in a direct chat, see the [operations guide](operations.md#claude-code-and-executor-switching).
 
 To build a local CLI package:
 
@@ -66,10 +66,10 @@ namo --help
 namo ui               # Local workbench; does not start another receiver
 namo docs             # Open the local documentation; Ctrl+C stops its server
 namo config           # Interactive terminal configuration
-namo login --device-auth # Official Codex device login for headless hosts
+namo login --profile codex --device-auth # Official Codex device login for headless hosts
 ```
 
-The terminal menu supports arrow keys, field-by-field drafts and Esc to discard an edit. It covers execution, Feishu and organization access, GitHub, MCP, assistant, user profiles and Codex updates. See [headless operation](operations.md#无桌面环境) for Docker, persistent storage and MCP OAuth setup.
+The terminal menu supports arrow keys, field-by-field drafts and Esc to discard an edit. It covers executor connections, sign-in, diagnostics, models, Feishu and organization access, GitHub, MCP, assistant settings and user profiles. Open **CLI updates** for Codex and Claude Code versions, manual updates and idle-queue automatic updates. See [headless operation](operations.md#headless-operation) for Docker, persistent storage and MCP OAuth setup.
 
 ### Language
 
@@ -98,7 +98,7 @@ Use `namo ui --remote-guide` for the optional owner login behind an HTTPS proxy.
 
 On macOS, `namo service install` installs and starts the background service; `start`, `stop`, `restart`, `upgrade` and `uninstall` manage it. Uninstall retains configuration, data and login. A source build alone does not switch the running service. `namo service upgrade` creates and verifies a release snapshot and backup. Compatible changes can be applied while the receiver remains online; a new execution version is provisional for five minutes and rolls back on receiver restart if it has not been confirmed. Incompatible receiver, storage or dependency changes require a planned stop, an idle check and a verified backup before upgrading. Stopping the receiver does not itself stop independent runners. Inspect tasks, waits, runners and delivery state before a stopped upgrade, and never overwrite newer data with an old backup.
 
-On other platforms use foreground mode; full platform acceptance remains outstanding. See the [operations guide (Chinese)](operations.md#安装升级与回退) for recovery and upgrade procedures.
+On other platforms use foreground mode; full platform acceptance remains outstanding. See the [operations guide](operations.md#installation-upgrades-and-rollback) for recovery and upgrade procedures.
 
 ## Chat commands
 
@@ -107,7 +107,7 @@ Use `/directories` to inspect allowed directories and `/refresh` to refresh with
 The workbench’s **Settings → Codex CLI updates** panel provides version checks, manual upgrades, rollback and an automatic update toggle. Automatic upgrades are off by default. While the service runs, enabled updates check the official stable channel daily, defer while busy, and back off for at least an hour after failures. Namo keeps complete private packages in `namo-cli/` under its isolated Codex home, verifies SHA-256, version, app-server handshake, login, permissions and model discovery, then atomically selects the candidate when idle. It preserves the global CLI and model preferences. Rollback disables automatic upgrades. macOS/Linux arm64/x64 are supported. Feishu model discovery refreshes every five minutes and after CLI changes; failed updates retain the selected version. Historical CLI packages are currently retained without automatic cleanup.
 
 
-See the [conversation guide (Chinese)](getting-started.md#用自然语言与-namo-协作) and [documentation index (Chinese)](README.md) for delivery, memory and approvals.
+See the [conversation guide](getting-started.md#working-with-namo-in-chat) and [documentation index](README.md) for delivery, memory and approvals.
 
 ## Execution boundaries
 
@@ -117,14 +117,14 @@ See the [conversation guide (Chinese)](getting-started.md#用自然语言与-nam
 - Write permission also permits file deletion. Cancellation, timeout or context reset does not undo completed actions.
 - Git push records bind an exact task, owner/chat, explicit repository directory, configured remote, branch, HEAD SHA, configuration revision and expiry, then execute directly without another approval step. This is **limited protection**, not complete enforcement: a generally networked agent or another credential path could bypass the approval entrypoint. Deployment is not implemented as a generic target.
 - OpenClaw import requires an explicitly selected source file, supported version and application. It never imports provider authentication, gateways, plugins or tasks, and it cannot automatically take over a receiver; cutover and rollback remain an explicit, verified manual gate.
-- GitHub waits default to anonymous public access. In **Connections → GitHub**, configure a local `gh` login or a dedicated token. Admitted members can use the connected account’s actual API permissions in private and group chats, within the user’s request. No repository grant lists or per-call confirmations apply. CI waits never trigger writes. See [GitHub connection settings (Chinese)](operations.md#github-连接).
+- GitHub waits default to anonymous public access. In **Connections → GitHub**, configure a local `gh` login or a dedicated token. Admitted members can use the connected account’s actual API permissions in private and group chats, within the user’s request. No repository grant lists or per-call confirmations apply. CI waits never trigger writes. See [GitHub connection settings](operations.md#github-connections).
 - A platform send receipt means the platform accepted the message, not that the user read it. Ambiguous sends are retained for review.
 - A sleeping or disconnected host cannot provide continuous service. There is no offline history backfill.
 - Never commit `config.local.json`, `data/`, logs, tokens or authentication files. Namo does not automatically import personal MCP servers, plugins or third-party model gateways.
 
-The CLI provides `init`, `config`, `login`, `start`, `service`, and `ui`. Status, logs, diagnostics, and Git push records are available in the workbench. Inspect OpenClaw sources under **Connections → Runtime and maintenance**; import with `namo init --import`. Migration never switches receivers automatically. Pushes use configured targets and execute on submission without extra confirmation. See [OpenClaw migration](operations.md#openclaw-导入) and [Git pushes](operations.md#git-推送).
+The CLI provides `init`, `config`, `login`, `start`, `service`, and `ui`. Status, logs, diagnostics, and Git push records are available in the workbench. Inspect OpenClaw sources under **Settings → Maintenance → Runtime and maintenance**; import with `namo init --import`. Migration never switches receivers automatically. Pushes use configured targets and execute on submission without extra confirmation. See [OpenClaw migration](operations.md#openclaw-import) and [Git pushes](operations.md#git-pushes).
 
-Background service management currently supports macOS. Other systems can use foreground mode but have not completed full platform acceptance. Codex is the only execution backend. Other agents are reserved for future plugins; no additional agent SDKs or probes are included.
+Background service management currently supports macOS. Other systems can use foreground mode but have not completed full platform acceptance. Namo supports the official Codex CLI and Claude Code CLI as executors.
 
 ## How it works
 
@@ -132,13 +132,13 @@ Namo persists each incoming message before acknowledging it, then schedules a ta
 
 Task state, waits, results and delivery records are stored in SQLite. A runner that is interrupted or lost is not automatically replayed, and an ambiguous delivery is not automatically resent. A model completing, the platform accepting a message and the user receiving it are separate facts. The current database schema is version 16; compatible v13–v15 databases are migrated, while incompatible older databases are rejected rather than deleted.
 
-The local workbench binds to loopback and uses startup authorization, an HttpOnly session, Host and Origin checks, and a content security policy. See [architecture (Chinese)](architecture.md) for module responsibilities, remaining risks and migration details.
+The local workbench binds to loopback and uses startup authorization, an HttpOnly session, Host and Origin checks, and a content security policy. See [architecture](architecture.md) for module responsibilities, remaining risks and migration details.
 
 ## Ego browser access
 
 On macOS, a paired user can use the restricted Ego Lite browser in a private chat when command networking is enabled. The first browser request asks for task-scoped approval; key presses require separate approval. With card callbacks enabled, use the approval buttons, or reply `/mcp-approve MA-ID --always` to authorize the current fixed browser operations for future tasks in that private chat. Send `/browser-revoke` to revoke the persistent grant. The browser can use its own network access and logged-in sessions. Group chats and scheduled tasks cannot use this integration.
 
-The tool supports opening pages, snapshots, clicks, filling fields and a limited set of key presses in a task-owned space. It does not accept arbitrary scripts, raw CDP, uploads or downloads. New capabilities are not automatically covered by the persistent grant. A normal run closes its space; interrupted or uncertain operations are not automatically retried and may leave a space to inspect manually. A new run after a human wait does not resume the old browser space. See [Ego browser operations (Chinese)](operations.md#ego-浏览器原型).
+The tool supports opening pages, snapshots, clicks, filling fields and a limited set of key presses in a task-owned space. It does not accept arbitrary scripts, raw CDP, uploads or downloads. New capabilities are not automatically covered by the persistent grant. A normal run closes its space; interrupted or uncertain operations are not automatically retried and may leave a space to inspect manually. A new run after a human wait does not resume the old browser space. See [Ego browser operations](operations.md#ego-browser-prototype).
 
 ## Development
 
@@ -150,6 +150,6 @@ pnpm run smoke:codex          # Protocol handshake; no inference
 pnpm run smoke:codex -- --run # Explicit real inference test
 ```
 
-See the [documentation index](README.md), [developer guide](architecture.md#开发与验证), and [remaining work](development-plan.md). The existing implementation and operations references are currently in Chinese.
+See the [documentation index](README.md), [developer guide](architecture.md#development-and-verification), and [remaining work](development-plan.md).
 
 Project: [github.com/dofy/namo](https://github.com/dofy/namo). Report reproducible issues without credentials, private configuration or raw conversation data.

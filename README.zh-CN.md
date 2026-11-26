@@ -59,5 +59,5 @@ pnpm cli init
 
 - [文档](docs-site/)：运行 `pnpm cli docs` 打开中英文文档；已安装 CLI 时使用 `namo docs`。
 - [技术指南](docs/technical-guide-zh-cn.md)：安装、功能、权限和开发说明。
-- [文档索引](docs/README.md)：技术实现、运维和开发路线图。
+- [英文文档索引](docs/README.md)：技术实现、运维和开发路线图。
 - [问题反馈](https://github.com/dofy/namo/issues)：请勿附上凭据或私密会话内容。

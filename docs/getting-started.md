@@ -1,86 +1,88 @@
-# 使用指南
+# Getting started
 
-Namo 将飞书 / Lark 聊天连接到本机官方 Codex。当前为早期版本；后台服务管理支持 macOS，其他平台未完成完整验收。
+Namo connects Feishu and Lark chats to a local executor. This guide follows setup with the official Codex CLI. Background service management is supported on macOS. Full acceptance testing on other platforms is still pending.
 
-## 安装与初始化
+## Install and set up
 
-准备 Node.js 24.15+、官方 Codex CLI，以及飞书企业自建应用。
+You need Node.js 24.15 or later, the official Codex CLI and a custom enterprise app in Feishu.
 
 ```sh
 npm install -g @dofy/namo
 namo init
 ```
 
-源码开发需要 pnpm 12.15.0，具体方式见[技术实现](architecture.md#开发与验证)。
+For a source build, use pnpm 12.15.0. See [development and verification](architecture.md#development-and-verification).
 
-`init` 在交互终端中依次完成：目录白名单 → 应用凭据 → 独立 Codex 登录 → 飞书连接与用户配对 → 可选真实收发测试 → 可选后台服务。Secret 不回显，取消后可续做；已有配置和用户保留。不要同时运行同一应用的其他接收端。
+The interactive wizard guides you through writable directories, app credentials, an isolated Codex login, the Feishu connection and user pairing. You can optionally test a live exchange and install the background service. Secret entry is hidden. Setup can resume after cancellation and preserves existing configuration and users. Run only one receiver for the same app.
 
-飞书后台需要：
-
-| 项目 | 配置 |
+| Feishu setting | Required configuration |
 | --- | --- |
-| 应用 | 企业自建应用，启用机器人，设置可用范围并发布 |
-| 接收方式 | 长连接；保持初始化窗口在线后保存 |
-| 消息事件 | `im.message.receive_v1` |
-| 消息权限 | `im:message.p2p_msg:readonly`、`im:message.group_at_msg:readonly`、`im:message:send_as_bot` |
-| 卡片按钮 | 额外订阅 `card.action.trigger` 并发布 |
+| App | Create a custom enterprise app, enable the bot, set its availability and publish it. |
+| Event delivery | Select a persistent connection. Keep the setup terminal connected while saving this setting. |
+| Message event | Subscribe to `im.message.receive_v1`. |
+| Message permissions | Grant `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly` and `im:message:send_as_bot`. |
+| Interactive cards | Also subscribe to `card.action.trigger` and publish the change. |
 
-在机器人私聊发送向导显示的一次性配对码，再回到终端确认身份。组织接入可在初始化后从工作台配置，组织成员无需逐人配对。
+Send the wizard’s one-time pairing code in a direct chat with the bot, then confirm the identity in the terminal. You can configure organization access in the workbench after initialization. Admitted organization members do not need individual pairing.
 
-## 五个命令入口
+## Common CLI commands
 
-| 命令 | 用途 |
+| Command | Purpose |
 | --- | --- |
-| `namo init` | 初始化、配对；`init --import` 导入 OpenClaw 配置 |
-| `namo login` | 登录 Namo 独立的官方 Codex 账号 |
-| `namo start` | 前台运行接收服务 |
-| `namo service <操作>` | `install / start / stop / restart / upgrade / uninstall` |
-| `namo ui` | 打开本机工作台，不启动飞书接收端 |
+| `namo init` | Initialize and pair. Use `namo init --import` to import an OpenClaw configuration. |
+| `namo config` | Configure executor connections, models and CLI updates from a terminal. |
+| `namo login --profile <id>` | Sign in to the selected Codex or Claude Code account in its isolated environment. |
+| `namo start` | Run the receiver in the foreground. |
+| `namo service <action>` | Manage the service with `install`, `start`, `stop`, `restart`, `upgrade` or `uninstall`. |
+| `namo ui` | Open the local workbench independently of the Feishu receiver. |
 
-所有入口支持 `--config /absolute/path/config.json`；语言使用 `--lang system|en|zh-CN` 或 `NAMO_LANG`。完整帮助为 `namo --help`。维护步骤见[运维指南](operations.md)。
+Select a configuration with `--config /absolute/path/config.json`. Set the language with `--lang system|en|zh-CN` or `NAMO_LANG`. Run `namo --help` for the full command list. For maintenance procedures, see the [operations guide](operations.md).
 
-## 工作台
+## Workbench
 
-`namo ui` 自动打开浏览器，终端进程需保持运行；Ctrl+C 关闭，页面授权两小时后失效。侧栏可切换中英文，任务原文与日志不翻译。
+`namo ui` opens your browser. Keep the terminal process running and press Ctrl+C to stop it. Local page authorization expires after two hours. Use the sidebar to switch between English and Simplified Chinese. Task text and logs retain their original language.
 
-| 页面 | 常用操作 |
+| Page | Common actions |
 | --- | --- |
-| 概览、任务、会话 | 查看统计、搜索筛选、执行证据、停止任务、核对异常 |
-| 定时任务 | 查看定时提醒和任务的状态、频率及下次触发时间；通过飞书私聊自然语言管理 |
-| 助手 | 设置身份、回答风格和是否使用本人档案 |
-| 记忆与档案 | 查看、纠正、停用、删除记忆；编辑称呼、语言和时区 |
-| 设置 | 配置可读写目录白名单、模型、并发和时限；保存后自动生效 |
-| 连接设置 | 组织接入、GitHub 账号、连接诊断、日志、推送记录、OpenClaw 来源检查 |
-| 更新日志 | 查看版本变化；新记录在构建时从提交历史生成 |
+| Overview, Tasks, Sessions | View statistics, search and filter tasks, inspect evidence, stop work and reconcile exceptions. |
+| Schedules | Inspect reminder and task status, frequency and next run. Manage schedules in a direct chat. |
+| Assistant | Set the assistant’s identity and response style and choose whether to use your profile. |
+| Memory and profiles | Inspect, correct, deactivate or delete memories. Edit forms of address, language and time zone. |
+| Settings | Configure writable directories, models, concurrency and time limits. Saved changes apply automatically after the old queue drains. |
+| Settings → Connections | Manage organization access and the GitHub account and run connection diagnostics. |
+| Settings → Maintenance | Read service logs, review Git pushes and inspect OpenClaw sources. |
+| Changelog | View release changes. The build generates new entries from commit history. |
 
-配置保存后自动生效；已接受的队列使用原配置，完成后新任务使用新配置。连接诊断不调用模型，“测试 Codex 回复”需确认并可能消耗账号额度。
+Already accepted tasks use their original configuration. New tasks use the saved configuration after the accepted queue drains. Connection diagnostics run without model inference. A live reply test for the selected executor requires confirmation and may consume account quota.
 
-## 用自然语言与 Namo 协作
+<a name="用自然语言与-namo-协作"></a>
 
-直接说出你的目标，群聊默认需要 @ 机器人。例如：“查看我的任务”“停止当前任务”“把刚完成的报告发给我”“切换到之前的项目会话”，或“每天早上九点检查仓库并告诉我新增内容”。需要目标、路径或时间时，Namo 会询问或先查询；它只有在服务确认操作后才会报告成功。
+## Working with Namo in chat
 
-可以要求暂存文本材料，再说明处理要求；回答等待问题时可引用问题回复或点击选项。个人档案、模型偏好、记忆和定时任务在私聊中管理。旧的斜杠入口保留兼容，无需记忆或输入。
+Tell Namo what you want to do. In groups, mention the bot by default. For example, ask it to list your tasks, stop the current task, send a completed report, switch back to a project conversation or check a repository every day at 9 a.m. and report changes. When it needs a target, path or time, Namo asks or looks it up. It reports success after the service confirms the operation.
 
-定时任务仅支持私聊；请说明执行时间和时区，每日和每周按固定间隔重复。服务停机时不会执行，恢复后错过的多次触发合并为一次；暂停或删除不会撤销已经入队或执行中的任务。
+You can stage text for later and then explain how to use it. Answer a waiting task by quoting its question or selecting an option. Manage profiles, model preferences, memory and schedules in direct chats. Existing slash commands remain available.
 
-在 **设置 → 工作与执行** 为各 Agent 设置模型，或在飞书私聊发送 `/model 模型ID` 修改当前 Agent 的共享模型。查询可直接发送 `/model`。显式模型在任务接受时固定，跟随运行时默认时在首次运行前解析。模型不可用时，任务会报告失败。
+Create schedules in a direct chat and specify the time and time zone. Daily and weekly schedules repeat at fixed intervals. When the service restarts, it combines multiple missed occurrences into one. Pausing or deleting a schedule leaves already queued or running tasks in place.
 
-取消不会撤销已经发生的文件或外部操作。发送结果不明时先核对，避免重复执行。
+Configure each agent’s model under **Settings → Work and execution**. In a Feishu direct chat, use `/model` to inspect the current agent’s selection or `/model <model-id>` to change its shared model. Explicit selections are pinned at task acceptance. Runtime defaults resolve before the first run. If the model is unavailable, the task reports failure.
 
-## 材料与记忆
+Cancellation leaves earlier file changes and external operations in place. If a send has an unknown outcome, verify receipt before requesting another send.
 
-材料输入支持合并转发文字、直接发送的 UTF-8 文本 / Markdown、PNG / JPEG。图片可用于新任务、排队补充及等待恢复，运行中追加附件暂不支持；合并转发子消息中的附件、PDF / Office / 音视频解析也不支持。
+## Materials and memory
 
-经明确授权可交付任务内的文本、Markdown、PDF、PNG / JPEG / GIF / WebP；支持发送不代表支持解析。只接受确切工作目录相对路径，拒绝工作目录外、符号链接和敏感文件。
+Namo accepts text from merged forwards, directly uploaded UTF-8 text or Markdown, and PNG or JPEG images. Images can accompany new tasks, queued additions and replies to waits. Adding attachments during execution, reading attachments nested in merged forwards, and parsing PDF, Office, audio or video inputs are unsupported.
 
-通过官方内置图片生成工具生成的图片会在任务完成或进入等待后自动发回原聊天，不需要输入交付命令。每张图片会先校验并冻结内容，再走持久交付队列；飞书接受与用户实际收到是不同状态。图片超过飞书图片接口大小限制时，以文件形式发送；发送结果不明时不会自动重发。其他任务文件可以直接要求 Namo 交付，并说明文件或来源任务。
+With explicit authorization, Namo can deliver task files in text, Markdown, PDF, PNG, JPEG, GIF or WebP format. Delivery and input parsing have separate format support. Specify an exact path relative to the task workspace. Namo rejects symlinks, sensitive files and paths outside the workspace.
 
-需要再次收到已有图片时，可以在同一会话说“把之前生成的图片发给我”；引用某张图片消息可以指定那张。服务只查找当前用户和工作线中已有交付记录，并再次检查权限及文件内容。找不到可安全重发的记录时会明确说明，不会把本地路径当作已发出的图片。
+Images generated by the official built-in image tool are sent to the original chat after the task completes or enters a wait. Each image is verified, frozen and queued for durable delivery. Feishu acceptance and actual user receipt are tracked separately. An image exceeding the Feishu image limit is sent as a file. Unknown deliveries are not automatically retried. For other artifacts, ask for the file and identify it or its source task.
 
-自动记忆默认从直接对话中提取有来源的长期事实，使用独立 Codex 调用，可能消耗额度。临时要求留在任务上下文；迁移材料需审阅后启用。本人档案须在助手设置中显式开启使用，私人内容不会因此向群聊公开。
+To receive a previous image again, ask in the same conversation or quote the specific image message. Namo looks up existing delivery records for the current user and workstream and rechecks access and file contents. If it cannot verify a safe resend, it tells you. A local path alone does not establish delivery.
 
-助手页分为“身份与职责”和“回答方式”。“先给答案，再解释”是回答顺序偏好，例如先给出合并建议，再列原因；不改变任务执行、权限或审批。回复长度控制展开程度，技术细节控制解释深度，具体任务中的明确要求优先。
+By default, automatic memory extraction keeps source-backed long-term facts from direct user conversations. It uses a separate call to the service’s default executor and may consume quota. Temporary instructions stay in task context. Imported memories need review before activation. Enable profile use explicitly in Assistant settings. Private content remains restricted in group chats.
 
-“尚未启用自定义设置”表示尚未保存这套偏好；页面展示的是待启用的默认选项，点击“保存并启用”后生效。内部设置版本 0 仅表示未保存，不是软件版本；保留旧回答方式是为了避免升级时自动改变行为。格式示例不调用模型，也不代表真实回答效果。
+The Assistant page separates identity and responsibilities from response style. “Answer first, then explain” controls the order of the response. For example, the assistant might give a merge recommendation before listing its reasons. Execution, permissions and approvals keep their usual behavior. Response length controls detail, technical depth controls explanation, and explicit instructions for a task take precedence.
 
-纠正、停用或删除会影响后续检索；既有原生 session、历史消息和备份不会一并抹除。需要干净上下文时使用 `/new`。
+Until you save custom settings, the page shows the proposed defaults. Select **Save and enable** to apply them. Internal settings version 0 identifies an unsaved profile. Existing users retain their previous response style until they opt in. Format previews are examples generated without model inference.
+
+Corrections, deactivation and deletion affect future retrieval. Existing native sessions, past messages and backups retain their copies. Use `/new` for a clean context.
