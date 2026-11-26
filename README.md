@@ -59,5 +59,5 @@ In **Settings → Connections → MCP**, choose **Add local MCP**. Set the ID to
 
 - [Documentation](docs-site/) — run `pnpm cli docs` to open the bilingual guide (or `namo docs` with an installed CLI).
 - [Technical guide](docs/technical-guide.md) — setup, capabilities, permissions and development.
-- [Documentation index](docs/README.md) — architecture, operations and roadmap (Chinese).
+- [Documentation index](docs/README.md) — architecture, operations and the development roadmap.
 - [Report an issue](https://github.com/dofy/namo/issues) — please leave out credentials and private conversation data.

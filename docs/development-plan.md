@@ -1,59 +1,59 @@
-# 开发路线图
+# Development roadmap
 
-核对日期：2026-10-30，以当前仓库源码为准。目标是完成官方 Codex 的安装、执行、恢复与交付闭环，再决定发布和扩展。实现、隔离验证、真实收件、在线部署分别判断。
+This roadmap records the priorities reviewed on October 30, 2026. The repository is the source of truth for current behavior. At that review, the goal was to verify installation, execution, recovery and delivery with the official Codex CLI before deciding on a first release or expanding the scope. Implementation, isolated testing, actual message receipt and deployment each require their own evidence.
 
 ```mermaid
 flowchart LR
-  A[已实现：任务闭环 / 记忆状态 / CI] --> B[下一步：新用户安装全链]
-  B --> C[验收：消息 / 隔离 / GitHub / 恢复]
-  C --> D[首发决策：包与运维验收]
-  D -.明确需求后.-> E[候选：附件 / 其他平台 / 插件]
+  A[Implemented: task lifecycle, memory state and CI] --> B[Next: fresh installation from start to finish]
+  B --> C[Verify messaging, isolation, GitHub and recovery]
+  C --> D[First release decision: package and operations]
+  D -.After a concrete need.-> E[Candidates: attachments, platforms and plugins]
 ```
 
-## 当前进度
+## Status at review
 
-| 范围 | 代码状态 | 验证与剩余边界 |
+| Area | Implementation | Verification and remaining work |
 | --- | --- | --- |
-| 持久任务、等待、修订、取消、恢复 | 已实现 | 重启续接、等待取消、运行取消已有选定真实飞书路径验收；未知投递与失联后代以故障注入覆盖 |
-| 安装、升级、数据保护 | 已实现 | 本地重建、更新与重启已验证，配置和 Codex 登录保留；干净安装与从备份恢复仍待验收 |
-| 数据存储 | 重构完成 | schema v16 移除命名资源字段，记忆改用目录；v13 / v14 / v15 可保留历史迁移，旧开发库需重建，历史归档暂未实现 |
-| 组织接入、共享目录与 MCP、群 PR 审查 | 已实现 | 指定群与仓库已确认收件；多成员、撤权和跨租户现场组合待补 |
-| Markdown、图片输入、文件交付 | 已实现有限范围 | 飞书任务执行、实际收件、文件下载内容及 SHA-256 一致性通过；单张 PNG 已确认，多图、JPEG、长文本和多客户端待补 |
-| 首卡与公开执行进展 | 已实现 | 200 ms 合并窗口、真实事件摘要与工具记录有回归；首卡 P95、完整客户端展示待测；图片预览、流式更新未实现 |
-| 助手、档案、自动长期记忆 | 已实现 | 私聊自动提取、新会话召回、删除后不再注入通过；工作台展示等待、运行、重试、失败及无可保存内容；多人隐私与提取质量待测 |
-| GitHub 登录、检查等待、API | 已实现 | 本机 gh 私有 PR 检查与等待收件已验证；简化账号权限和 API 写入主要由隔离测试覆盖 |
-| CLI 与工作台 | 已实现 | 工作台已有浏览器验收；终端配置菜单已做本机交互与隔离测试，Codex 设备登录已验证，真实 Docker 和终端 MCP OAuth 授权仍待验收；不将历史验收视为最新版全量验收 |
-| 远程 MCP | 已实现 | 公网 HTTPS、OAuth / Bearer 和授权后直接调用；Linear 真实读取已验证，真实外部写入及预注册 OAuth 客户端仍待验证或支持 |
-| 定时提醒与任务 | 已实现 | 私聊自然语言创建和管理，工作台查看；固定间隔重复、错过触发合并及权限撤销有自动测试，真实场景与故障恢复待补充验收 |
-| 持续集成 | 已接入 | main 推送与 PR 在 Linux / macOS 构建、测试、检查包内容；不使用真实账号或发送飞书消息，远端结果以 Actions 为准 |
-| Git push 直接执行 | 已实现有限保护 | 本地 bare 仓库与 UI 流程通过；真实 HTTPS / SSH 目标未验收 |
-| OpenClaw 迁移 | 部分实现 | 来源检查和导入可用；接管 / 回退状态机仅在内部模块和测试中，尚无完整管理入口或真实切换验收 |
-| 其他 Agent | 已撤回实现 | SDK、探针、注册和切换已移除；仅保留内部接口及旧 Codex 任务兼容 |
+| Durable tasks, waits, revisions, cancellation and recovery | Implemented | Selected live Feishu flows covered restart and reattachment, cancelling waits and cancelling running tasks. Fault injection covered unknown delivery and lost descendants. |
+| Installation, upgrades and data protection | Implemented | Local rebuilds, updates and restarts preserved configuration and Codex login. Clean installation and backup restoration still needed acceptance testing. |
+| Data storage | Refactored | Schema v16 removed named-resource fields and switched memories to directories. Schemas 13–15 can migrate with history. Older development databases require rebuilding. Historical archiving was pending. |
+| Organization access, shared directories and MCP, group PR reviews | Implemented | Receipt was confirmed for a specific group and repository. Multi-member access, revocation and cross-tenant combinations still needed live testing. |
+| Markdown, image inputs and file delivery | Limited scope implemented | Live Feishu execution, receipt, downloaded contents and matching SHA-256 were verified. One PNG was confirmed. Multiple images, JPEG, long text and multiple clients remained to test. |
+| First card and public progress | Implemented | Regression tests covered the 200 ms coalescing window, real event summaries and tool records. First-card P95 and full client rendering remained to measure. Image previews and streaming updates were pending. |
+| Assistant, profiles and automatic long-term memory | Implemented | Direct-chat extraction, recall in a new session and exclusion after deletion were verified. The workbench shows waiting, running, retry, failure and empty results. Multi-user privacy and extraction quality remained to test. |
+| GitHub login, check waits and API | Implemented | A local `gh` login was verified for private PR checks and receipt after a wait. Simplified account permissions and API writes were covered mainly by isolated tests. |
+| CLI and workbench | Implemented | The workbench had browser acceptance coverage. The terminal menu had local interactive and isolated tests, and Codex device login was verified. Real Docker and terminal MCP OAuth flows remained to test. Earlier checks apply to the versions tested. |
+| Remote MCP | Implemented | Public HTTPS, OAuth, Bearer tokens and direct calls after authorization were supported. Live Linear reads were verified. External writes and preregistered OAuth clients still needed verification or implementation. |
+| Scheduled reminders and tasks | Implemented | Users could create and manage schedules in direct chats and inspect them in the workbench. Automated tests covered fixed intervals, coalescing missed triggers and revocation. Live scenarios and recovery remained to test. |
+| Continuous integration | Configured | Main pushes and PRs build, run tests and check package contents on Linux and macOS using isolated fixtures. Check GitHub Actions for run results. |
+| Direct Git pushes | Limited safeguards implemented | A local bare repository and the UI flow were verified. Real HTTPS and SSH targets remained to test. |
+| OpenClaw migration | Partially implemented | Source inspection and import were available. Takeover and rollback states existed in internal modules and tests. The complete management flow and live switch remained pending. |
+| Other agents | Implementation withdrawn at this review | The SDK, probes, registration and switching had been removed. Internal interfaces and compatibility for existing Codex tasks remained. |
 
-2026-10-27 的现场验收覆盖真实飞书执行、记忆生命周期和文件交付；2026-10-28 验证了 Linear OAuth 读取与逐次审批。构建、自动回归、官方协议、真实收件和本地打包分别判断；后续源码变更不代表已部署，运行版本从工作台核对。不在计划中维护易过时的测试总数。
+Live checks on October 27, 2026 covered Feishu execution, the memory lifecycle and file delivery. On October 28 they covered Linear OAuth reads and the per-call approvals used at the time. Build results, automated regressions, official protocol checks, actual receipt and local packaging were tracked separately. Check the workbench for the running version after subsequent source changes.
 
-## 下一步
+## Priorities at review
 
-先收口 P1 验收；P2 按使用量与明确需求安排。
+Complete P1 acceptance work first. Schedule P2 based on use and concrete requests.
 
-| 顺序 | 工作 | 完成条件 |
+| Order | Work | Completion criteria |
 | --- | --- | --- |
-| 1 · P1 | 新用户安装全链 | 干净包安装 → init → 独立登录 → 配对或组织接入 → 首任务 → UI 保存 / 应用 → 升级；能按文档完成，数据与登录保留，没有第二接收端 |
-| 2 · P1 | 消息体验 | 私聊 / 群话题及桌面 / 移动端覆盖材料、修订、提问、停止、最终回复；计量平台接受首个可读反馈的 P95，目标 ≤ 2 s，客户端显示另记 |
-| 3 · P1 | 权限与长期记忆 | 两用户、群成员变化、目录变更、撤权、纠正 / 删除及新旧 session 实测；私人事实不泄漏，停用后新运行不再采用 |
-| 4 · P1 | GitHub 完整流程 | CI 变化、HEAD 改变、超时、取消、撤权、重启续接；独立令牌和本人 API 写入另选授权目标验证，未知结果不重试 |
-| 5 · P1 | 备份恢复演练 | 将备份恢复至隔离目录，验证任务、记忆、文件记录及登录恢复；不覆盖现用数据、不启动重复接收端 |
-| 6 · P2 | 长期运行与数据保留 | 明确日志轮转、历史记录、产物、旧快照和备份保留规则；不清理未决任务与回执，验证数据增长后的查询 / 备份耗时及磁盘不足行为 |
-| 7 · P2 | 真实 Git push | 明确 HTTPS / SSH 测试仓库、提交与分支；验证直接执行、变更失效、未知结果只读核对；保持有限保护说明 |
-| 8 · P2 | OpenClaw 迁移收口 | 完成接管 / 回退状态的管理入口，再选真实来源验证冲突、重复导入、中断恢复、单接收端切换与回退 |
+| 1 · P1 | Fresh installation | Follow the docs from clean package install through init, isolated login, pairing or organization admission, first task, workbench save/apply and upgrade. Preserve data and login and run a single receiver. |
+| 2 · P1 | Messaging experience | Cover materials, revisions, questions, stop and final replies across direct chats, group topics, desktop and mobile. Measure P95 until the platform accepts the first readable feedback, targeting ≤ 2 s. Record client display separately. |
+| 3 · P1 | Permissions and long-term memory | Test two users, changing group membership and directories, revocation, correction and deletion across old and new sessions. Keep private facts restricted and exclude disabled memories from new runs. |
+| 4 · P1 | Complete GitHub workflow | Exercise CI changes, changed HEAD, timeout, cancellation, revocation and restart. Verify dedicated tokens and account API writes against separately authorized targets. Reconcile unknown outcomes without retrying. |
+| 5 · P1 | Backup recovery drill | Restore to an isolated directory. Verify tasks, memories, file records and login. Protect current data and avoid starting a second receiver. |
+| 6 · P2 | Long-running operation and retention | Define policies for log rotation, history, artifacts, old snapshots and backups. Preserve unresolved tasks and receipts. Measure query and backup time as data grows and test low-disk behavior. |
+| 7 · P2 | Live Git push | Name the HTTPS or SSH test repository, commit and branch. Verify direct execution, invalidation after changes and read-only reconciliation for unknown results. Document the limits of protection. |
+| 8 · P2 | Complete OpenClaw migration | Expose takeover and rollback state in management, then verify conflicts, repeat imports, interrupted recovery, switching a single receiver and rollback with a live source. |
 
-首发前还需确定包名、许可证和发布授权；`private: true` 保持启用。跨 schema 回退不支持；不得用旧数据库覆盖升级后的消息。
+At this review, the first release still required a package name, license and publication approval, and the package was to retain `private: true` until then. Rollback across schemas is unsupported. Preserve messages received after an upgrade.
 
-## 暂不进入当前排期
+## Deferred work
 
-- 受控图片预览、CardKit 流式进展：首卡与普通进展验收后再评估。
-- PDF / Office / 音视频解析、更丰富附件、离线补拉：按实际场景补能力，不将文件可发送写成可解析。
-- 其他 Agent 插件、动态加载、多 Agent 路由和主动派工：先出现明确需求，再定义生命周期与权限。
-- 第二聊天渠道、Linux 后台服务、图形安装包：现有安装维护稳定后推进。
+- Revisit controlled image previews and CardKit streaming after verifying first-card and ordinary progress delivery.
+- Add PDF, Office, audio and video parsing, richer attachments and offline catch-up as use cases justify them. Document which formats can be parsed and which can be delivered.
+- Define the lifecycle and permissions for additional agent plugins, dynamic loading, multi-agent routing and proactive dispatch when there is a concrete need.
+- Consider a second chat platform, Linux background services and a graphical installer after the existing installation and maintenance paths are stable.
 
-技术方案统一见[技术实现](architecture.md)；旧批次编号、分支说明和逐次测试数量从计划中移除。历史验收可从[Git 快照](README.md)查阅。
+See [Architecture](architecture.md) for technical design and the [documentation index](README.md) for the Git snapshot containing historical acceptance records.

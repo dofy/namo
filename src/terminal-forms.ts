@@ -2,7 +2,7 @@ import { Back, Home, parseSelectedAction, type ConfigPrompter, type Option } fro
 import { ManagementError } from './management.js';
 import { t } from './locale.js';
 
-export type Field = { key:string; label:string; kind:'text'|'multiline'|'secret'|'number'|'boolean'|'list'|'choice'; choices?:{value:string;label:string}[]; clearable?:boolean };
+export type Field = { key:string; label:string; kind:'text'|'multiline'|'secret'|'number'|'boolean'|'list'|'choice'; choices?:{value:string;label:string}[]; clearable?:boolean; visible?:(draft:Draft)=>boolean };
 export type Draft = Record<string,string|number|boolean|string[]>;
 const safe = (value:string) => value.replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/gu,' ').slice(0,120);
 function shown(field:Field,value:Draft[string]):string {
@@ -54,9 +54,11 @@ async function editList(ui:ConfigPrompter,field:Field,initial:string[],parentDir
  }
 }
 /** Edit in memory; only the explicit save option invokes the version-checked writer. */
-export async function editForm(ui:ConfigPrompter,title:string,initial:Draft,fields:Field[],save:(draft:Draft,changed:ReadonlySet<string>)=>void|Promise<void>, allowUnchanged=false,context=''):Promise<boolean> {
- const draft=structuredClone(initial);let notice='';let dirty=false;let active=fields[0]?.key;
+export async function editForm(ui:ConfigPrompter,title:string,initial:Draft,allFields:Field[],save:(draft:Draft,changed:ReadonlySet<string>)=>void|Promise<void>, allowUnchanged=false,context=''):Promise<boolean> {
+ const draft=structuredClone(initial);let notice='';let active=allFields[0]?.key;
  for (;;) {
+  const fields = allFields.filter(field => !field.visible || field.visible(draft));
+  const dirty = fields.some(field => JSON.stringify(draft[field.key]) !== JSON.stringify(initial[field.key]));
   ui.screen?.();if(context)ui.info(context);if(notice){ui.info(notice);notice='';}
   const singleList=fields.length===1&&fields[0].kind==='list'?fields[0]:undefined;
   const options:Option[]=singleList?listOptions(singleList,draft[singleList.key] as string[],initial[singleList.key] as string[]):fields.map(f=>({value:f.key,label:f.label,
@@ -88,7 +90,6 @@ export async function editForm(ui:ConfigPrompter,title:string,initial:Draft,fiel
    try {
     const result=await updateList(ui,draft[singleList.key] as string[],selected,target?.[0]);if(!result)continue;
     draft[singleList.key]=result.entries;
-    dirty=JSON.stringify(result.entries)!==JSON.stringify(initial[singleList.key]);
     active=result.entries.length?`$list:${singleList.key}:${result.index}`:`$list:${singleList.key}:empty`;
    }catch(error){if(error instanceof Home){await goHome(ui,error,dirty);continue;}if(!(error instanceof Back))throw error;}
    continue;
@@ -107,7 +108,7 @@ export async function editForm(ui:ConfigPrompter,title:string,initial:Draft,fiel
       next=field.kind==='number'?Number(input):field.kind==='multiline'?input.replace(/\\(n|\\)/g,(_match,char:string)=>char==='n'?'\n':'\\'):input;
       if(field.kind==='secret'&&!input)continue;
    }
-   if(JSON.stringify(next)!==JSON.stringify(old)){draft[field.key]=next;dirty=fields.some(f=>JSON.stringify(draft[f.key])!==JSON.stringify(initial[f.key]));}
+   draft[field.key]=next;
   }catch(error){if(error instanceof Home){await goHome(ui,error,dirty);continue;}if(error instanceof Back)continue;throw error;}
  }
 }

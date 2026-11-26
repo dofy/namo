@@ -636,7 +636,7 @@ export class Management {
     catch (error) { if (error instanceof ApprovalError) throw new ManagementError(this.redactor()(error.message)); throw error; }
     finally { store.close(); }
   }
-  async diagnose(live = false, confirmed = false, profile?: unknown): Promise<any> {
+  async diagnose(live = false, confirmed = false, profile?: unknown) {
     if (live && !confirmed) throw new ManagementError(tr('operations.confirmRequired'), 400);
     if (profile !== undefined && (typeof profile !== 'string' || !/^[a-z][a-z0-9_-]{0,47}$/.test(profile)))
       throw new ManagementError(tr('claude.configInvalid'), 400);

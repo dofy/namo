@@ -1,150 +1,177 @@
-# 运维指南
+# Operations guide
 
-日常状态、诊断与日志从 `namo ui` 查看。运行版本以工作台侧栏的版本信息为准，源码版本和历史验收记录不能代表当前服务。
+Open `namo ui` to check service health, run diagnostics and read logs. The version in the workbench sidebar identifies the running service. A source checkout or a past acceptance test can describe a different version.
 
+<a name="无桌面环境"></a>
 
-## 无桌面环境
+## Headless operation
 
-在容器或 SSH 终端中使用 `namo config` 配置模型、执行参数、目录、飞书消息与组织准入、GitHub、MCP、助手、用户档案和 Codex 更新；Docker 可运行 `docker exec -it <容器名> namo config`。菜单在支持的终端中原位刷新，退出后恢复原终端画面；使用方向键选择字段、Enter 编辑；表单底部的 `S` 保存、`Esc` 返回，返回时可放弃未保存的草稿；初次配置仍使用 `namo init`。配置、数据和独立 Codex 登录目录必须使用持久卷；Linux 服务以前台 `namo start` 运行，由容器管理器管理。保存后的生效状态以菜单显示为准，“等待生效”表示尚未生效。各表单在内存中保存草稿，可逐项编辑、清空或放弃，明确确认后才写入；MCP 连接支持新增、编辑、移除、测试及从 Codex 导入。工作台的浏览器主题属于浏览器本地偏好，不适用于终端。Codex 更新检查、升级和回退在后台执行；启动后保持终端打开，并重新进入更新菜单查看最终状态，退出管理进程会取消尚未完成的操作。
+Use `namo config` over SSH or in a container to manage models, execution settings, directories, Feishu messaging, organization access, GitHub, MCP, the assistant, user profiles and CLI updates for Codex and Claude Code. In Docker, run `docker exec -it <container> namo config`. For first-time setup, run `namo init`.
 
-Codex 可使用 `namo login --profile codex --device-auth` 调用官方设备登录（已完成真实登录验证）；GitHub 本机登录先执行 `gh auth login`，也可在菜单中使用独立令牌。MCP OAuth 会在终端显示授权链接：在浏览器完成授权后，复制最终的 `http://127.0.0.1:.../api/mcp-oauth/callback?...` 地址并粘贴到终端的隐藏输入，即使浏览器提示无法连接也可复制。该地址含一次性授权码，请勿分享；授权流程保持 10 分钟有效。服务商仍需支持现有 OAuth 发现与动态注册要求；终端 MCP OAuth 尚未通过真实服务商验收。
+In a supported terminal, the menu updates in place and restores the previous screen on exit. Select a field with the arrow keys and press Enter to edit. Drafts stay in memory while you edit or clear fields. Use **S** at the bottom of a form to save with confirmation, or **Esc** to go back and discard the draft. The menu shows whether the receiver has applied a saved change. You can add, edit, remove, test and import MCP connections from Codex. The workbench theme is a browser preference.
 
-## Claude Code 与执行器切换
+Mount persistent volumes for the configuration, data and isolated Codex login directories. On Linux, run `namo start` in the foreground under the container manager. Open **CLI updates** to see which executables the host can use and their versions. Select an installation to see its available actions. A native Claude Code installation supports checking releases, upgrading and toggling automatic updates. Codex also supports rollback when a previous managed version exists. Keep the terminal open during a manual upgrade and revisit this menu to check the result. The receiver runs automatic updates independently.
 
-安装官方 Claude Code CLI 2.1.330 或更新版本。在本机工作台 **连接设置**启用 Claude Code。使用 Claude 账号时，保存后运行页面提供的 `namo login --profile claude`，由官方 CLI 处理浏览器登录。也可以在 `namo init` 选择 `claude` 作为首个执行器。
+For Codex, `namo login --profile codex --device-auth` starts the official device login flow, which has been verified with a real account. For GitHub, run `gh auth login` on the host or configure a dedicated token in the menu. For MCP OAuth, open the authorization URL printed in the terminal. After authorization, copy the final `http://127.0.0.1:.../api/mcp-oauth/callback?...` URL into the terminal’s hidden input, even if the browser cannot connect to the callback. Keep this URL private because it contains a one-time code. The flow expires after ten minutes. The provider must support OAuth discovery and dynamic registration. Verification of terminal OAuth against a live MCP provider is still pending.
 
-使用 Kaon Router 等支持 Anthropic Messages API 的自定义网关时，在「认证方式」选择与现有 Claude Code 相同的认证方式。原来使用 `ANTHROPIC_AUTH_TOKEN` 时选 Bearer Token，使用 `ANTHROPIC_API_KEY` 时选 API Key。填写原来的 `ANTHROPIC_BASE_URL`、网关凭据以及网关要求的模型 ID。地址支持 HTTPS 或本机回环 HTTP，填基础地址及网关要求的路径前缀。保存后可运行真实回复测试验证。凭据保存在 Namo 私有配置中，仅传给所选 Claude Code 进程。
+<a name="claude-code-与执行器切换"></a>
 
-工作台的默认执行器用于没有个人选择的新工作线。飞书私聊中用 `/agent` 查看当前和可用的执行器，用 `/agent claude` 或 `/agent codex` 切换，用 `/agent default` 恢复服务默认。切回时会续接该执行器最近的工作线。请先完成或停止当前会话里尚未结束的任务。
+## Claude Code and executor switching
 
-Claude Code 支持文字、图片、获准目录内的文件工具和沙箱 Bash。命令联网开关适用于 Codex 和 Claude Code，Claude 的命令通过沙箱代理联网，Linux 需要 bubblewrap 和 socat。消息带有单个 GitHub PR 审查链接时，Claude 进入只读审查轮，经宿主读取该 PR 的补丁和固定提交的源码。GitHub 凭据由宿主持有。Skills、通用 Namo MCP、模型触发的持久等待和运行中追加指令由 Codex 支持。后台自动记忆跟随服务的默认执行器，两者共用记忆库。卡片标题仍使用 Codex。授权目录应与 Namo 的数据和登录目录分开，避免重叠。
+Install the official Claude Code CLI, version 2.1.330 or later. Enable Claude Code under **Executor connections and sign-in** in `namo config` or **Connections** in the local workbench. To use a Claude account, save the settings and run the displayed `namo login --profile claude` command. The official CLI handles browser login. You can also select `claude` as the first executor in `namo init`.
 
-仅有终端时，可在配置文件的顶层加入 `"agents": {"defaultProfile":"codex","profiles":{"claude":{"adapter":"claude","enabled":true,"bin":"claude"}}}`。使用自定义网关时，在 Claude 配置中增加 `"gateway":{"baseUrl":"https://gateway.example/anthropic","auth":"bearer","secret":"替换为网关凭据"}`，API Key 则使用 `"auth":"api-key"`。将 `defaultProfile` 改为 `claude` 可让新工作线默认使用 Claude Code。
+For a custom gateway that supports the Anthropic Messages API, such as Kaon Router, match the authentication method to your existing Claude Code installation. Choose **Bearer Token** for `ANTHROPIC_AUTH_TOKEN` or **API Key** for `ANTHROPIC_API_KEY`. Enter the existing `ANTHROPIC_BASE_URL`, gateway credential and required model ID. Use HTTPS or loopback HTTP and include any required path prefix in the base URL. After saving, you can run a live reply test. Namo stores the credential in its private configuration and passes it only to the selected Claude Code process.
 
-## 配置与权限
+In the terminal, open **Executors, models and concurrency** to edit an enabled profile’s model, command and timeout or to change the default backend. The default applies to new workstreams without a personal selection. In a Feishu direct chat, use `/agent` to see the current and available executors, `/agent claude` or `/agent codex` to switch, and `/agent default` to restore the service default. Switching back resumes that executor’s most recent workstream. Finish or stop unfinished tasks in the current conversation before switching.
 
-配置优先级：`--config` → `NAMO_CONFIG` → 当前目录的 `config.local.json` → 系统用户目录。`NAMO_HOME` 可指定隔离实例；默认目录为 macOS `~/Library/Application Support/Namo`、Linux `~/.config/namo`（遵循 `XDG_CONFIG_HOME`）、Windows `%APPDATA%/Namo`。
+Claude Code supports text, images, file tools in authorized directories and sandboxed Bash. The command network setting applies to both executors. Claude commands connect through a sandbox proxy and require bubblewrap and socat on Linux. A message with a single GitHub PR review link starts a read-only Claude review. The host fetches the patch and source at the pinned commit and holds the GitHub credentials. Codex supports Skills, general Namo MCP tools, model-initiated durable waits and instructions added during a run. Background memory extraction follows the service’s default executor. Both executors share the memory store. Card titles still use Codex. Keep authorized directories separate from Namo’s data and login directories.
 
-- 使用初始化向导、终端配置菜单或工作台修改配置，字段示例见 [config.example.json](../config.example.json)。保存会备份并检查并发修改；新版服务自动等待已接受队列完成后切换配置。等待期间新普通请求先持久化，切换成功后才创建任务；取消、审批和等待回答继续处理。在途任务不因普通设置变更重启，撤权仍即时检查。切换失败保留旧配置和等待请求；修正配置后自动重试。更换 App ID、飞书区域或数据目录属于实例迁移，不自动切换。
-- 并发上限可设置为 4–64，未设置时默认为 8。旧配置中的 1–3 会保留在文件中，运行时按最低值 4 处理。
-- 初始化必须明确填写可写目录，所有准入成员共享写权限；系统临时目录也可写。普通任务可以读取本机其他未禁止文件，包括其他应用的配置或凭据，应仅准入可信成员。Namo 配置、数据、隔离登录和显式拒绝路径仍受保护。新数据与对话工作目录位于用户级 Namo 目录，不默认使用启动目录。
-- Codex 使用独立登录目录；重新认证运行 `namo login`，不要复制个人认证或改用第三方网关。
-- 组织模式校验租户身份与应用可用范围；成员使用各自的对话工作目录，共享全部白名单目录和已授权 MCP；私人历史与记忆仍按原归属隔离。
-- 配置变化在旧队列完成后自动用于新任务；需要主动重建原生会话时发送 `/refresh`，携带有限历史摘录。`/new` 只用于开启空上下文。旧任务及历史绑定保留。
+For file-based setup, add `"agents": {"defaultProfile":"codex","profiles":{"claude":{"adapter":"claude","enabled":true,"bin":"claude"}}}` at the top level of the configuration. To configure a gateway, add `"gateway":{"baseUrl":"https://gateway.example/anthropic","auth":"bearer","secret":"<gateway-credential>"}` to the Claude profile. For an API key use `"auth":"api-key"`. Set `defaultProfile` to `claude` to use Claude Code for new workstreams.
 
-## GitHub 连接
+<a name="配置与权限"></a>
 
-在**连接设置 → GitHub**选择本机 `gh` 登录或独立令牌，保存后自动生效。所有获准与机器人对话的成员，无论私聊还是群聊，都可按用户请求使用该账号的实际读写权限；不再另设本人、群聊或仓库范围，也不再逐次审批。旧配置中的范围字段仅供兼容读取。
+## Configuration and permissions
 
-切换本机 `gh` 当前账号不会自动改绑；重新保存才能换账号。“仅公开仓库”停用账号访问。PR 审查与检查等待本身不会触发额外写入；用户已请求的后续操作可直接继续。写请求结果不明时先核对，不能换请求编号重复执行。
+Namo searches for configuration in order, starting with `--config`, followed by `NAMO_CONFIG`, `config.local.json` in the current directory, then the OS user directory. Set `NAMO_HOME` for an isolated instance. Defaults are `~/Library/Application Support/Namo` on macOS, `~/.config/namo` on Linux (respecting `XDG_CONFIG_HOME`), and `%APPDATA%/Namo` on Windows.
 
-审查时可以要求在某个 JS 或 TS 文件中用 ast-grep 匹配指定语法模式。Namo 读取已授权 PR 的固定版本，对完整文件做搜索并返回行号。每次搜索支持最多 64 KB 的单个文件，返回前 30 个位置及命中总数。现有 Codex 会话使用旧工具参数时，可发送 `/refresh` 更新工具定义。
+- Edit settings using the setup wizard, terminal menu or workbench. Saving creates a backup and checks for concurrent edits. Current receivers drain the accepted queue before switching. They persist new requests during the drain and create tasks for them after the switch. Cancellations, approvals and answers to waits continue. Existing tasks keep running and revocations are rechecked immediately. If a switch fails, the old configuration and waiting requests are retained. Correcting the configuration allows an automatic retry. Changing the app ID, Feishu region or data directory requires an instance migration. See the [example configuration](../config.example.json).
+- Set concurrency to 4–64. The default is 8. Legacy values of 1–3 remain in the file and run with an effective minimum of 4.
+- Enter writable directories explicitly during setup. All admitted members share write access to them and can write to the system temporary directory. Ordinary tasks can read other host files outside denied paths, potentially including other applications’ configurations and credentials. Admit only trusted members. Namo protects its own configuration, data, isolated login and explicitly denied paths. New data and conversation workspaces live under the user’s Namo directory.
+- Codex uses an isolated login directory. Run `namo login` to reauthenticate using the official provider. Keep personal authentication files and third-party gateways out of this configuration.
+- Organization mode verifies tenant identity and app availability. Members use their own conversation directories and share allowlisted directories and authorized MCP connections. Ownership still governs private history and memory.
+- After the old queue drains, new tasks use the new configuration. Send `/refresh` to rebuild the native session with bounded history excerpts, or `/new` to start with an empty context. Past tasks and their bindings are retained.
 
-## 异常处理
+<a name="github-连接"></a>
 
-| 现象 | 操作 |
+## GitHub connections
+
+Under **Connections → GitHub**, choose the host’s `gh` login or a dedicated token and save. The change takes effect automatically. In direct and group chats, all admitted members can request operations within that account’s actual read and write permissions. Legacy owner, chat and repository scope fields are read for compatibility. The connection does not add per-call approvals.
+
+If you switch the active account in `gh`, save the connection again to bind the new account. Select public repositories only to disable authenticated access. PR reviews and check waits do not perform writes on their own. Follow-up actions already requested by the user can proceed. If a write has an unknown outcome, reconcile it before issuing another request.
+
+For a PR under review, ask Namo to match a JavaScript or TypeScript syntax pattern in a specific file using ast-grep. Namo searches the full file at the authorized, pinned revision and reports line numbers. A search accepts one file of up to 64 KB and returns the first 30 matches and the total count. Send `/refresh` if an existing Codex session has the old tool parameters.
+
+## Troubleshooting
+
+| Symptom | Action |
 | --- | --- |
-| 无法收消息 | 连接设置运行诊断；核对应用发布、事件、权限、可用范围和是否有重复接收端 |
-| Codex 未登录 | 本机执行 `namo login`，再运行诊断 |
-| 等待补充 | 回答原问题或取消；不要新发同一任务来绕过等待 |
-| runner 失联 | 工作台核对进程、后代进程和实际效果，再解除占位；不自动重跑 |
-| `delivery_unknown` | 先在飞书核实；工作台填写依据后确认已收到、仅重发保存的结果分段或放弃 |
-| `delivery_failed` | 修复明确的权限 / 配置错误，再决定如何处理已保存结果 |
-| 配置冲突 / 页面过期 | 刷新并重审；授权过期时重新运行 `namo ui` |
+| No incoming messages | Run diagnostics under Connections. Check app publication, events, permissions, availability and whether a second receiver is running. |
+| Codex is signed out | Run `namo login` locally, then rerun diagnostics. |
+| A task needs more information | Answer the original question or cancel the task. Submitting the same task again can duplicate the work. |
+| Lost runner | Inspect the process, its descendants and their effects in the workbench before releasing the reservation. Namo does not automatically rerun it. |
+| `delivery_unknown` | Verify receipt in Feishu first. Record the evidence in the workbench and confirm receipt, resend only saved result segments, or dismiss the delivery. |
+| `delivery_failed` | Correct the known permission or configuration error, then decide how to handle the saved result. |
+| Configuration conflict or stale page | Refresh and review the change again. If authorization expired, rerun `namo ui`. |
 
-平台接受消息不等于用户收到或已读。核对只补记事实或处理已保存结果，不重新调用模型；取消也不回滚已发生的操作。日志按需读取固定文件末尾，每份最多 80 行 / 64 KiB，并遮蔽已知凭据。
+Platform acceptance, user receipt and a read receipt establish separate facts. Reconciliation records evidence or acts on the saved result without calling the model again. Cancellation leaves completed actions in place. Logs are read on demand from the end of designated files, up to 80 lines and 64 KiB per file, with known credentials redacted.
 
-## 安装、升级与回退
+<a name="安装升级与回退"></a>
 
-`namo service install` 安装并启动 macOS 后台服务。开发构建不改变服务的固定发布快照；`start / restart` 继续使用已登记版本，`uninstall` 保留配置、数据和登录。
+## Installation, upgrades and rollback
 
-支持热更新的接收器运行期间，编译或安装新的 npm 包不会改变其固定发布快照。构建完成后运行 `namo service upgrade`：先生成并校验快照和在线备份，再保留同一个飞书连接、暂停消息路由、切换执行代码。暂停期间消息先写入 SQLite，提交成功后才确认收件；恢复后按原队列和并发限制处理。独立 runner 的已开始执行不会因此重新发起，发送结果未知的消息也不会自动重发。
+`namo service install` installs and starts the macOS background service. The service remains pinned to its registered release snapshot across development builds, starts and restarts. `namo service uninstall` preserves configuration, data and login.
 
-执行版本单独保存在 `active-runtime.json`；接收器登记仍固定原快照。新执行版本先试运行五分钟，接收器正常存活后才确认；确认前退出则重启时回到此前执行版本，不自动重放升级。在线备份是一致的读取快照，备份之后收到的消息继续保留在当前数据库，不能用备份覆盖它们。CLI 等待超时仅表示升级结果待核对，应先在工作台查看版本，不能据此停止服务或重复发送升级请求。
+For a receiver that supports live upgrades, build or install the new npm package, then run `namo service upgrade`. Namo creates and verifies a snapshot and online backup, pauses message routing and switches execution code while keeping the Feishu connection open. During the pause it acknowledges messages only after committing them to SQLite. Routing resumes with the existing queue and concurrency limits. In-flight independent runners continue their existing runs. Messages with unknown delivery outcomes are kept for reconciliation.
 
-Codex CLI 更新的下载元数据、包及 SHA-256 均来自 `releases.openai.com`，信任根是该站点与 TLS，而非独立签名。忙碌时已校验的候选包会保留并在空闲时复用；同一自动更新错误最多连续尝试五次，并按指数间隔退避，之后需人工检查并重新开启或手动重试。
+`active-runtime.json` records the execution release separately from the registered receiver snapshot. A new runtime runs on trial for five minutes and is confirmed only if the receiver stays healthy. If the receiver exits before confirmation, the next start selects the previous runtime without replaying the upgrade. The online backup captures a consistent read snapshot. Preserve messages received afterward in the current database. If the CLI times out waiting for an upgrade, check the version in the workbench before stopping the service or issuing another request.
 
-工作台 **设置 → 服务维护** 从宿主机读取配置中的 Codex 和 Claude Code CLI 版本。对于使用默认原生启动器的 Claude Code，“检查更新”只从 Anthropic 的发布源读取最新发布版。确认升级后，`claude update` 按宿主机配置的发布渠道更新，完成后工作台重新读取安装版本。通过包管理器或自定义启动器安装的 Claude Code 由原安装方式负责更新。
+Codex CLI release metadata, packages and SHA-256 digests all come from `releases.openai.com`. Verification relies on that site and TLS without an independent signature. Namo retains a verified candidate while the queue is busy and reuses it when idle. Repeated identical automatic failures use exponential backoff and stop after five consecutive attempts. Inspect the failure before re-enabling automatic updates or retrying manually.
 
-默认原生安装可以开启“自动升级 Claude Code CLI”，开关默认关闭。接收器用同一个分钟定时器调度 Codex 和 Claude Code，正常情况下每 24 小时查询官方发布源。Claude Code 的稳定版和最新发布版都比当前版本新时，才在任务队列空闲后运行官方更新命令。升级期间新消息照常入队，升级结束后继续启动任务。该操作更新宿主机共享安装。
+Open **Settings → Maintenance** to see the versions of the configured Codex and Claude Code CLIs on the host. For a default native Claude installation, **Check for updates** reads the latest release from Anthropic. Confirming an upgrade runs `claude update` using the host’s release channel, then rereads the installed version. For package-manager or custom launcher installations, update through the original installation method.
 
-热更新只接受接收器、数据库结构、存储实现和运行依赖均兼容的执行代码变更。为保护跨版本持久数据，任务、审批、记忆、调度和其他共享状态读写模块变化也要求重启。首次从不支持热更新的版本启用，或变更接收组件、schema、依赖时，命令会拒绝并保留运行中的服务；不会自动降级为停机升级。这些情况需安排一次明确的接收器切换窗口，不能保证断连期间尚未投递的消息都能补回。停机升级前先完成或取消全部任务，并核对失联运行、等待和未完成投递。**停止接收服务不等于停止独立 runner。**
+**Automatically upgrade Claude Code CLI** is off by default for the native installation. The receiver uses one timer for Codex and Claude Code. It ticks once a minute and normally checks the official release sources every 24 hours. Claude Code upgrades only when both the stable and latest versions are newer than the installed version and the task queue is idle. New messages continue to queue during the upgrade. Tasks resume afterward. This updates the host’s shared Claude installation.
 
-工作台显示当前接收器进程加载热更新的次数；达到五次后提示在安全窗口重启，以释放无法卸载的旧模块。计数随接收器进程重启重置，不删除发布快照或备份。
+A live upgrade requires compatible receiver code, database schema, storage implementation and runtime dependencies. Changes to modules that read or write shared task, approval, memory or scheduling state also require a restart. If the receiver predates live upgrades or an incompatible component changed, the command leaves the service running. Schedule a receiver switch explicitly. Messages that Feishu has not delivered during a disconnection may be unrecoverable. Finish or cancel outstanding tasks and reconcile lost runs, waits and pending deliveries first. **Independent runners can keep running after the receiver stops.**
+
+The workbench counts live upgrades loaded by the current receiver process. After five, it recommends restarting during a safe window to release modules that cannot be unloaded. Restarting resets the counter and preserves release snapshots and backups.
 
 ```sh
 namo service stop
-# 在工作台确认服务停止，任务、等待、runner 和投递均已收口
+# In the workbench, verify that the service has stopped and all tasks, waits, runners and deliveries are accounted for.
 namo service upgrade
 namo service start
 ```
 
-停机升级及对已有数据重装要求空闲检查与可验证备份通过，才允许切换登记；失败保留原登记，不自动启动。停机升级支持 schema 13 / 14 / 15 到 16 的事务迁移，旧开发库不再自动迁移。新服务启动后核对连接、版本、历史数据与真实收件。
+An offline upgrade or reinstall over existing data requires an idle system and a verifiable backup before switching the registration. Failure preserves the old registration and leaves the service stopped. Offline upgrades can migrate schemas 13, 14 and 15 to 16 in a transaction. Older development databases require a rebuild. After starting the new service, verify the connection, running version, historical data and actual message receipt.
 
-每次安装、停机升级或热更新都会在 `data/backups/` 下生成一份已校验备份。新备份写入成功后自动清理：保留最近 5 份已校验备份，并删除 7 天前中断留下的 `.pending` 目录；名称不符合 Namo 备份格式的目录不会被触碰。清理失败不影响本次备份结果。
+Each install, offline upgrade and live upgrade creates a verified backup in `data/backups/`. After a successful new backup, Namo keeps the five newest verified backups and removes interrupted `.pending` directories older than seven days. It leaves directories with unrecognized names alone. A cleanup error does not invalidate the backup just created.
 
-**旧测试库重建（v0–12 → v13）：** 停止接收服务并确认没有运行中的 worker；备份数据目录后，将 `bot.sqlite` 及存在的 `bot.sqlite-wal` / `bot.sqlite-shm` 一起移至备份目录，保留配置及 `codex-home`。再安装 / 启动新版本创建空库，复验首个任务与工作台。历史任务、记忆和回执不会导入新库；程序不会替你清空旧库。
+**Rebuilding a legacy test database (v0–12, v13 baseline).** Stop the receiver and verify that no workers are running. Back up the data directory, then move `bot.sqlite` and any `bot.sqlite-wal` and `bot.sqlite-shm` files together to the backup location. Keep the configuration and `codex-home`. Install or start the new version to create an empty database and verify the first task and the workbench. Historical tasks, memories and receipts stay in the old database. Namo leaves deletion to the operator.
 
-备份使用 SQLite backup 并验证内容；完整停机备份需保留配置、整个数据目录和独立登录目录。不能只复制正在写入的 SQLite 主文件而忽略 WAL。回退需选择兼容快照并保留新增数据；不支持跨 schema 逆迁移，也不能用旧库覆盖新消息。启动器拒绝缺失、被改动或登记不一致的快照。
+Namo uses SQLite’s backup mechanism and verifies the contents. A complete offline backup also includes the configuration, entire data directory and isolated login directory. Copying only the main file of a live database omits the WAL. For rollback, select a compatible snapshot and preserve newer data. Reverse schema migration is unsupported. The launcher rejects missing, altered or incorrectly registered snapshots.
 
-## Git 推送
+<a name="git-推送"></a>
 
-先在本机配置的 `gitApprovals` 中明确设置 `gitBin` 和允许的远端，例如：
+## Git pushes
+
+Configure the absolute `gitBin` and allowed remotes in `gitApprovals` on the host. The following example allows an SSH push to `origin`. Merge it into your existing configuration.
 
 ```json
 {"gitApprovals":{"gitBin":"/usr/bin/git","remotes":[{"name":"origin","url":"git@github.com:owner/repo.git","transport":"ssh"}]}}
 ```
 
-配置合并进现有文件，不覆盖其他字段。进入**连接设置 → 运行与维护 → Git 推送与记录**，选择成功任务、白名单内的仓库绝对路径与分支后直接执行。聊天中使用 `/push N-任务编号 origin refs/heads/main --directory /仓库路径`；`/push-request` 保留为别名。无需再批准或确认。`/push-status AP-编号` 查看结果；结果不明时“核对远端”只读检查，不重新推送。升级前已排队的预览请求保持原意，不会自动推送。
+In **Settings → Maintenance → Runtime and maintenance → Git pushes and history**, select a successful task, the absolute path of an allowlisted repository and the target branch. Submitting executes the push. In chat, use `/push N-<task-id> origin refs/heads/main --directory /path/to/repo`. The alias `/push-request` is still supported. Check results with `/push-status AP-<id>`. For an unknown outcome, the remote reconciliation action performs a read-only check. Preview requests queued before an upgrade retain their original intent and do not push automatically.
 
-只支持干净工作区的确切提交与预配置分支，不支持 force、tag、删除分支或部署；自定义 hook、Git LFS 过滤器等会被拒绝。这是该入口的有限保护，不能约束通用联网工具的所有外部操作。
+A push requires a clean worktree, an exact commit and a preconfigured target branch. The push entry point rejects force pushes, tags, branch deletion, deployments, custom hooks and Git LFS filters. These checks apply only to this entry point. Other network-enabled tools have their own controls.
 
-## OpenClaw 导入
+<a name="openclaw-导入"></a>
 
-工作台可只读检查来源；实际导入运行 `namo init --import`。目前只接受标准 JSON、版本 `2026.10.6` 的普通 `openclaw.json` 文件，需明确选择实例和应用。其他版本、JSON5、SecretRef 等转人工处理，不猜字段或解析来源凭据系统。
+## OpenClaw import
 
-导入前审阅冲突、白名单、工作区和候选材料；默认收紧权限，不导入模型认证、网关、插件、任务或 session。候选记忆先暂存待审阅，不能自动注入。
+The workbench can inspect a source read-only. To import, run `namo init --import`. Select the instance and app explicitly. The importer accepts a regular `openclaw.json` file in standard JSON for version `2026.10.6`. Handle other versions, JSON5 and SecretRef manually. The importer does not infer fields or resolve credentials through the source system.
 
-导入只保存配置并输出人工切换说明，不会停启 OpenClaw。完整接管 / 回退尚无管理入口：先明确目标应用，处理在途工作并人工停用旧入口，核对双方都未接收后再启动 Namo；Webhook 还需停用旧回调并切为长连接。以同一应用真实收发及用户确认验收。回退先停 Namo，再恢复原入口，保留期间新增数据，始终避免双接收端。
+Review conflicts, allowlists, workspaces and candidate materials. Import narrows permissions by default and excludes model credentials, gateways, plugins, tasks and sessions. Candidate memories are staged for review and require activation.
 
-## MCP 连接
+Import saves configuration and prints instructions for a manual switch. It leaves the OpenClaw service running as configured. There is no complete management UI for takeover or rollback. Identify the target app, resolve in-flight work, disable the old receiver manually and verify that both receivers are inactive before starting Namo. For webhook setups, disable the old callback and switch to a long connection. Verify actual send, receive and user confirmation with the same app. For rollback, stop Namo before restoring the previous receiver and preserve data created in the interim. Run only one receiver at a time.
 
-在工作台 **连接设置 → MCP 连接**中添加公网 HTTPS 的 Streamable HTTP MCP。在连接列表打开新增或编辑弹窗，填写连接 ID 和地址后，可直接“保存并授权”，或填写 Namo 专用 Bearer 令牌并保存；保存授权后即可使用。OAuth 会根据服务元数据发现授权服务器，使用 PKCE 和一次性回调；点击“探测可选权限”读取服务公布的权限并按需勾选；不会自动选择全部权限。服务未公布列表时可使用默认范围，或在高级设置中填写文档指定的范围。探测失败会保留已有选择并显示错误。修改地址或 OAuth 范围时无须清除旧授权：授权草稿只在当前工作台内存中保存，新授权成功后才同时替换配置和凭据；取消、失败或配置冲突均保留原连接。关闭弹窗会取消未完成的授权。令牌保存在本机私有数据目录并在需要时刷新，不使用 Codex 的凭据。动态客户端注册及标准授权服务器发现是此版本的登录前提；授权服务器的授权、注册和令牌端点须位于同一 HTTPS 来源。
+## MCP connections
 
-也可以从 Codex 用户配置中选择导入远程连接。导入仅复制名称和不带查询参数的地址，初始没有凭据，完成授权后自动开放；不导入凭据、环境变量或本地命令，也不读取插件内部的连接。远程连接不支持地址中的查询参数、本地和内网地址或自定义请求头。网络连接会检查 DNS 解析结果并拒绝重定向。旧 Linear 配置会以普通远程连接读取，保留原只读地址、授权范围和可用的已有凭据；如刷新失败可重新登录授权。
+Under **Connections → MCP connections**, add a public HTTPS Streamable HTTP MCP server. Open the add or edit dialog, enter its connection ID and address, then select **Save and authorize** for OAuth or enter a dedicated Bearer token and save. The connection becomes available after authorization. OAuth discovers the authorization server from its metadata and uses PKCE and a one-time callback. Probe the advertised optional scopes and select those you need. If the provider publishes no list, use its defaults or enter documented scopes under advanced settings. A failed probe preserves the selection and displays an error.
 
-工作台也可选择“添加本地 MCP”，填写可执行文件绝对路径及 JSON 字符串数组形式的参数；`namo config` 的 MCP 管理中也可添加、编辑和测试。仅添加可信程序：Namo 会以其运行用户的系统权限启动该进程，所有获准与机器人对话的成员可调用其工具。环境变量和凭据不会从个人 Codex 配置导入。本地 Inkflit 使用命令 `/Applications/Inkflit.app/Contents/MacOS/Inkflit` 和参数 `["--mcp"]`，且 Namo 和 Inkflit 必须在同一台 Mac、同一用户环境运行。
+When changing the address or scopes, keep the old authorization in place. The workbench holds the draft in memory and replaces the configuration and credentials together only after successful authorization. Cancellation, failure or a configuration conflict preserves the existing connection. Closing the dialog cancels unfinished authorization. Namo stores tokens in its private local data directory and refreshes them when needed, independently of Codex credentials. This version requires dynamic client registration and standard authorization server discovery. The authorization, registration and token endpoints must share one HTTPS origin.
 
-所有获准与机器人对话的成员可使用已授权 MCP。请求的读写操作按外部账号实际具备的权限直接执行，不再逐次确认，也没有 10 分钟审批有效期。每次远程发送前仍校验准入、连接凭据、任务取消状态及工具定义；执行结果不明时记录持久状态，同一任务不会自动重发相同操作。操作仍受任务时限和网络超时约束。旧审批记录保留供核对，不自动重放已结束的任务。
+You can also import selected remote connections from the Codex user configuration. Import copies the names and query-free addresses. Authorize each new connection before use. Credentials, environment variables, local commands and connections internal to plugins are excluded. Remote connections reject URL query parameters, local or private network addresses and custom headers. Network access checks DNS results and rejects redirects. Legacy Linear settings load as a regular remote connection, retaining the original read-only address, scopes and usable credentials. Reauthorize if refresh fails.
 
-MCP 不再设置成员、群聊或项目范围，也不设置“任务中启用”。外部账号本身的授权权限决定服务端能访问的资源；机器人准入仍决定谁能发起任务。
+To add a local MCP server in the workbench, specify the absolute executable path and its arguments as a JSON array of strings. The MCP section of `namo config` also supports adding, editing and testing local connections. Add only trusted executables. Namo launches the process with its OS user’s permissions, and all admitted chat members can call its tools. Personal Codex environment variables and credentials are excluded from import. For Inkflit, use `/Applications/Inkflit.app/Contents/MacOS/Inkflit` with `["--mcp"]`. Run Namo and Inkflit under the same user on the same Mac.
 
-MCP 与其他服务设置一起在旧队列完成后自动切换；旧队列保留旧配置，撤销权限仍在调用和结果交付时重验。旧版接收服务仍需手动应用配置。旧工作线未注册 MCP 工具时可在飞书发送 `/refresh`：工作线和任务记录保留，下一任务开始新模型会话并携带有限的近期历史摘录，不能视为完整上下文；`/new` 则开启新的工作线。撤权前读入的旧上下文不能自动清除。配置 MCP 连接后，Codex 原生插件和应用会被关闭；如 Codex 配置中仍有启用的未纳管 MCP 服务，任务会拒绝启动，需在独立 Codex 配置中先停用它们。GitHub 原有连接和审查流程不受此设置替换。
+All admitted chat members can use authorized MCP connections. Reads and writes execute within the external account’s permissions. There is no per-call confirmation or ten-minute approval expiry for these calls. Before each remote send, Namo checks user access, connection credentials, task cancellation and the tool definition. An unknown outcome is recorded durably. The same task does not automatically resend the operation. Task deadlines and network timeouts still apply. Historical approvals remain available for reconciliation without replaying completed tasks. MCP has no separate member, group, project or per-task enablement scope. Bot admission determines who can request work, and the external account determines what resources the server can access.
 
-定时任务使用独立工作线，不会接走私聊中暂存的材料。每次触发时使用对应 Agent 当时的模型设置；创建定时任务不会冻结模型。定时任务按创建时的用户要求和当前实际权限执行 GitHub 操作。人工等待回复最长 24 小时，超时后任务结束并保留记录；升级前已有的等待自启用这一机制起至少保留 24 小时。已经发生的操作不会自动撤销。 单次等待可包含 2–4 个独立选择问题；每题首次回答会保存，全部回答后才恢复任务。按钮有效期为 15 分钟，过期后可引用消息或用 `/resume WAIT-ID ...` 一次回答全部问题；`/task` 可查看哪些问题已回答。回答只用于补充信息，不是操作授权。已有 Codex 会话可能需要 `/refresh` 才能使用新的多问题工具参数。卡片会逐题显示已选择的答案；若更新结果无法确认，系统不会盲目重发更新，仍可用 `/task` 查看状态。重复点击不会重复保存。
+MCP changes take effect with other service settings after the old queue drains. The old queue keeps its original configuration, and Namo rechecks revocations at tool use and result delivery. Older receivers require manual application. If an existing workstream lacks the MCP tools, send `/refresh` in Feishu. The workstream and task records remain, and the next task starts a new model session with bounded recent excerpts. Use `/new` for a new workstream. Previously read context cannot be removed automatically after revocation. Configuring MCP connections disables native Codex plugins and apps. If the isolated Codex configuration still enables unmanaged MCP services, disable them before starting a task. The existing GitHub connection and review flow remain available.
 
-## Ego 浏览器原型
+## Scheduled tasks and waits
 
-macOS 上安装并完成 Ego Lite 初始化后，已配对用户在私聊中请求浏览器任务时，首次使用会收到本任务的浏览器权限确认。启用卡片并订阅回调后，可点击“本次允许”“永久允许”或“拒绝”；也可使用文字回复。回复“确认操作 MA-编号”只批准本次任务的打开、快照、点击和填写，按键仍须单独确认；回复“永久允许 MA-编号”则允许本人以后在同一私聊中使用当前固定的打开、快照、点击、填写和按键操作，不再逐次确认。永久授权包括访问已登录网站并按用户任务执行网站操作；浏览器使用自身的网络权限和登录状态。发送“撤销浏览器永久授权”可随时撤销，后续调用立即恢复确认，已发出的操作不会撤回。授权绑定飞书应用、用户和私聊，不适用于其他用户、群聊或定时任务；关闭命令网络权限也会禁用它。
+Scheduled tasks use separate workstreams. Staged materials stay in the direct chat. Each trigger uses the selected agent’s model setting at that time and executes GitHub operations within the original user request and current permissions. A human wait expires after 24 hours and the task record is retained. Waits that predate this expiry mechanism have at least 24 hours from activation. Previously completed actions stay in effect.
 
-原型不支持任意脚本、CDP、上传下载或选择已有空间。永久授权只覆盖授权时列出的固定操作和按键；新增能力须先由开发者实现受限接口，再由用户在对话中确认，对话不能把任意代码变成可授权的工具。空间只属于本次 worker 运行，正常完成后关闭；停止、用户接管或结果不明时不自动重试或接管，可能需要在 Ego 中手动检查和关闭遗留空间。人工等待后另一个运行不会恢复原浏览器空间。接收器重启不影响仍在运行的 worker；worker 本身失联时不会自动重放。
+A wait can contain 2–4 independent multiple-choice questions. Namo saves the first answer to each and resumes only after all answers arrive. Buttons expire after 15 minutes. After expiry, quote the message or use `/resume WAIT-ID ...` to answer all questions together. Use `/task` to see which questions have answers. Answers supply information and do not grant permission to act. Existing Codex sessions may need `/refresh` to register the multi-question tool parameters. Cards show each selected answer. If a card update has an unknown outcome, use `/task` to check the state. Namo avoids blind retries and deduplicates repeated clicks.
 
-在启用群聊 @ 要求时，单独发送的合并转发也会作为发送人自己的暂存材料接收，不会自行启动任务；该发送人随后可 @ 机器人并用 `/run` 处理。平台是否向机器人投递未 @ 的群消息取决于飞书应用权限；合并转发内的图片和文件仍可能无法读取。
+<a name="ego-浏览器原型"></a>
 
-在工作台 **设置 → 工作与执行** 选择默认 Agent 并编辑对应的模型、命令路径和执行时限。每个 Agent 只有一份模型配置。Codex 保存到该 Agent 隔离目录的 `config.toml`，Claude Code 保存到隔离配置目录的 `settings.json`。终端 `namo config` 使用同一份配置。
+## Ego browser prototype
 
-在飞书私聊发送 `/model` 会显示当前 Agent、新任务模型和最近记录的任务模型。本机已配对成员可用 `/model 模型ID` 修改当前 Agent 的共享模型，用 `/model default` 恢复运行时默认。工作台的默认 Agent 适用于新工作线，已绑定的飞书工作线可用 `/agent` 切换。每次任务的模型见任务详情和结果卡片。
+On macOS, install and initialize Ego Lite. When a paired user requests browser work in a direct chat, Namo asks for a task-scoped browser grant on first use. With cards and callbacks configured, use the allow-once, always-allow or deny button. Text replies are also supported. For example, `/mcp-approve MA-<id> --confirm` grants open, snapshot, click and fill operations for the task. Key presses require separate approval. `/mcp-approve MA-<id> --always` grants that user the current set of open, snapshot, click, fill and key-press operations for future tasks in the same direct chat. This includes operating signed-in sites with the browser’s own network access and login state. Send `/browser-revoke` to restore confirmation for subsequent calls. Operations already issued remain in effect. The grant is bound to the Feishu app, user and direct chat. It excludes other users, group chats and schedules. Disabling command network access also disables this capability.
 
-升级后接收器首次启动时，已有的 Namo Agent 模型会迁入尚未设置模型的隔离配置。显式选定的模型在任务接收时固定。跟随运行时默认的任务在首次运行时解析模型。
+The prototype excludes arbitrary scripts, CDP, uploads, downloads and selecting an existing space. A persistent grant covers only the operations and keys listed when it was issued. New capabilities require a bounded implementation and a new user confirmation. Each browser space belongs to one worker run and closes on normal completion. After a stop, user takeover or uncertain outcome, inspect and close any remaining space in Ego manually. Namo avoids automatic retries or takeovers. A new run after a human wait cannot resume the old space. Restarting the receiver leaves surviving workers running. A lost worker is not replayed.
 
-`codex.dailyTurnLimit` 可设置每天（UTC）允许启动的模型轮次数，包含前台任务、后台记忆提取和卡片标题总结；`0` 表示不限。组织模式缺省为 100，非组织模式缺省不限。达到上限的任务保留排队并告知用户，下一 UTC 日自动继续；记忆提取也会等待，标题则直接使用截取内容。该计数只记录轮次，实际费用以处理请求的服务为准。
+## Forwarded messages, models and usage
 
-任务卡片先显示任务和结果的简短截取。若服务账号的模型目录包含受支持的小模型，Namo 可在有空闲并发名额时异步生成标题；模型不可用、超时、额度不足或前台任务需要名额时保留截取标题，不阻塞任务或回复。模型目录只是候选列表，不保证账号对每个模型有推理权限。每个任务的开始和完成标题各最多尝试一次。
+In a group that requires an @mention, a merged forward sent alone is staged as the sender’s material. It does not start a task. The same sender can then mention the bot and use `/run`. Delivery of unmentioned group messages depends on the Feishu app’s permissions. Images and files inside a merged forward may be unreadable.
 
-默认保留 inbox 原文，不自动清理。若明确需要限制未来消息的保留期，可在本地设置 `retention: {"enabled": true, "inboxDays": 30, "acknowledgeRedaction": true}` 并应用；仅处理启用后收到、超过期限且已安全完成的消息正文和材料描述，保留去重与路由元数据。启用前或服务观察到关闭策略期间收到的历史消息不会被改写。设置 `enabled: false` 关闭清理。该策略不清理结果、附件、记忆、日志或备份，也不保证从所有位置抹除内容；启用前请自行备份并确认。
+Under **Settings → Work and execution**, select the default agent and edit each agent’s model, command path and timeout. Each agent has one model setting. Namo writes the Codex selection to `config.toml` in that agent’s isolated directory and the Claude Code selection to `settings.json` in its isolated configuration directory. The terminal menu edits the same settings.
 
-### 工作台编辑流程
+Send `/model` in a Feishu direct chat to see the current agent, the model for new tasks and the most recently recorded task model. A locally paired member can use `/model <model-id>` to change the current agent’s shared model or `/model default` to restore the runtime default. The default agent applies to new workstreams. Switch an existing workstream with `/agent`. Task details and result cards show each task’s model.
 
-连接页保留各连接的摘要和状态；MCP、GitHub、机器人接入均在独立弹窗内编辑。操作按钮位于弹窗底部，未保存时不会因点击背景而关闭。MCP 新增和权限变更可直接“保存并授权”；匿名或 Bearer 令牌连接可单独保存。授权失败后可返回修改并重试，取消编辑会撤销未完成的授权草稿。助手、全局设置和档案保留独立页面，并将保存区固定在底部。
+On the receiver’s first start after an upgrade, Namo migrates existing agent model settings into isolated configurations that have no model set. An explicitly selected model is pinned when a task is accepted. A task following the runtime default resolves its model on first execution.
 
-目录访问可由已配对所有者在飞书私聊中发起确认：Namo 展示实际解析后的绝对目录及共享读写范围，所有者可回复或点击按钮批准或拒绝。批准后使用原配置校验和安全重载，等待旧队列结束；配置改变、身份撤销或目录发生变化时不会应用。授权生效后仅继续申请中列出的未完成工作，不自动重放中断任务。组织成员不能自行批准共享目录扩权。
+`codex.dailyTurnLimit` caps daily model turns in UTC, including foreground tasks, background memory extraction and card title summaries. Set it to `0` for no limit. The default is 100 in organization mode and unlimited otherwise. At the limit, tasks stay queued, the user is notified, and work resumes on the next UTC day. Memory extraction waits and titles use text excerpts. This counts turns. For actual charges, consult the service handling the request.
+
+Task cards initially show short excerpts of the task and result. If the service account’s model catalog lists a supported small model and a concurrency slot is free, Namo can generate titles asynchronously. If the model is unavailable, times out, exceeds quota or yields its slot to foreground work, the excerpt stays in place. Task execution and replies continue. A catalog listing alone does not establish inference access. Namo makes at most one attempt each for the start and completion titles.
+
+## Inbox retention
+
+By default Namo retains the original inbox text. To limit future retention, explicitly apply `retention: {"enabled": true, "inboxDays": 30, "acknowledgeRedaction": true}` in local settings. Redaction covers message bodies and material descriptions only for safely completed messages received after the policy was enabled and older than the configured period. Deduplication and routing metadata remain. Messages received before activation or while the service observed the policy disabled retain their original contents. Set `enabled: false` to stop cleanup. Results, attachments, memories, logs and backups have separate retention. Back up the data and confirm the intended scope before enabling this policy.
+
+## Editing in the workbench
+
+Connections shows a summary and status for each connection. Edit MCP, GitHub and bot access in their respective dialogs. Actions are at the bottom of each dialog. Clicking the backdrop preserves unsaved edits. New MCP connections and permission changes support **Save and authorize**. Anonymous and Bearer-token connections can be saved directly. After authorization failure, return to the draft, edit and retry. Cancelling discards the unfinished authorization draft. Assistant settings, global settings and profiles have separate pages with a fixed save area at the bottom.
+
+A paired owner can request directory access in a Feishu direct chat. Namo shows the resolved absolute directory and the shared read/write scope. The owner can approve or deny by reply or button. Approval uses the same configuration validation and safe reload after the old queue drains. If the configuration changes, access is revoked or the directory changes, the grant is not applied. Once effective, only the unfinished work listed in the request continues. Interrupted tasks are not replayed automatically. Organization members cannot grant themselves broader shared directory access.

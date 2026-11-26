@@ -881,11 +881,109 @@ test('terminal form keeps draft when save confirmation or authorization is cance
 });
 
 test('terminal Codex update settings preserve revision and explicit choice',async()=>{
- const {manageUpdates}=await import('../src/terminal-settings.js');let request:unknown;
+ const {manageUpdates}=await import('../src/terminal-updates.js');let request:unknown;
  const status={supported:true,currentVersion:'1.0',latestVersion:'1.1',checkedAt:null,automatic:false,state:'idle' as const,updateAvailable:true,managed:false,previousVersion:null,error:null};
- const manager={codexUpdate:async(input?:unknown)=>{request=input;return {...status,automatic:!!input};}} as unknown as Management;
- const ui=terminalScript([],[],[true,true]);await manageUpdates(manager,ui,{revision:'fixture-revision'} as any,'automatic');
+ const manager={claudeUpdate:async()=>[],codexUpdate:async(input?:unknown)=>{request=input;return {...status,automatic:!!input};}} as unknown as Management;
+ const ui=terminalScript([selectedAction('automatic','codex')],[],[true,true]);await manageUpdates(manager,ui,{revision:'fixture-revision'} as any);
  assert.deepEqual(request,{action:'automatic',configRevision:'fixture-revision',enabled:true});
+});
+
+test('terminal config enables Claude, edits its isolated model and selects the default executor independently', async t => {
+  const { terminalConfig } = await import('../src/terminal-config.js');
+  const f = fixture(t);
+  const ui = terminalScript([
+    '6', 'claude', 'enabled', '$save',
+    '1', 'claude', 'model', 'bin', 'timeoutMs', '$save',
+    '1', '$default', 'defaultAgentProfile', 'claude', '$save', '$escape',
+  ], ['terminal-model', 'custom-claude', '90000']);
+  await terminalConfig(f.manager, ui);
+  const { defaultProfile, profiles } = f.manager.config().agentConnections;
+  assert.equal(defaultProfile, 'claude');
+  assert.deepEqual(profiles.map((p: {id:string;model:string;bin:string;timeoutMs:number}) => [p.id,p.model,p.bin,p.timeoutMs]),
+    [['codex','','codex',600000], ['claude','terminal-model','custom-claude',90000]]);
+  await terminalConfig(f.manager, terminalScript(['6','claude','settings','enabled','$save','$escape'], [], [false,true]));
+  assert.equal(f.manager.config().agentConnections.defaultProfile, 'codex');
+});
+
+test('terminal Claude gateway edits mask credentials and require a replacement when changing the endpoint', async t => {
+  const { manageAgentConnections } = await import('../src/terminal-agents.js');
+  const f = fixture(t), secret = 'fixture-claude-credential';
+  const open = (ui: ReturnType<typeof terminalScript>) => manageAgentConnections(f.manager, ui, f.manager.config());
+  const ui = terminalScript(['claude','enabled','auth','api-key','baseUrl','newSecret','$save'], ['https://one.example',secret]);
+  const input = ui.text;
+  ui.text = async (label,initial,hidden) => {
+    const result = await input(label,initial,hidden);
+    if (result === secret) { assert.equal(hidden,true); assert.equal(initial,''); }
+    return result;
+  };
+  await open(ui);
+  const source = () => JSON.parse(readFileSync(f.file,'utf8')).agents.profiles.claude;
+  assert.equal(source().gateway.secret,secret);
+  assert.equal(source().gateway.auth,'api-key');
+  const move = terminalScript(['claude','settings','baseUrl','$save','$back'], ['https://two.example']);
+  await open(move);
+  assert.equal(source().gateway.baseUrl, 'https://one.example');
+  assert.ok([...ui.messages,...move.messages].every(line => !line.includes(secret)));
+  await open(terminalScript(['claude','settings','auth','login','$save']));
+  assert.equal(source().gateway,undefined);
+});
+
+test('terminal login and diagnostic actions use the selected profile and confirm live inference', async t => {
+  const { manageAgentConnections } = await import('../src/terminal-agents.js');
+  const calls: unknown[][] = [];
+  const f = fixture(t,{diagnose:async (_file:string,live:boolean,id:string) => {
+    calls.push([live,id]); return [{id:'agent.binary',status:'ok',message:'fixture result'}];
+  }});
+  const view = f.manager.save(f.manager.config().revision, {claudeCode:{enabled:true}});
+  const open = (ui: ReturnType<typeof terminalScript>) => manageAgentConnections(f.manager, ui, view);
+  const normal = terminalScript(['claude','diagnose']);
+  assert.match(await open(normal),/fixture result/);
+  assert.ok(normal.messages.some(line => line.includes('namo login --profile claude') && line.includes(f.file)));
+  assert.ok(normal.messages.every(line => !line.includes('--device-auth')));
+  await open(terminalScript(['claude','live'],[],[false]));
+  assert.deepEqual(calls,[[false,'claude']]);
+  await open(terminalScript(['claude','live'],[],[true]));
+  const codex = terminalScript(['codex','diagnose']);
+  await open(codex);
+  assert.ok(codex.messages.some(line => line.includes('namo login --profile codex') && line.includes('--device-auth')));
+  assert.deepEqual(calls,[[false,'claude'],[true,'claude'],[false,'codex']]);
+});
+
+test('terminal CLI updates offer actions by installation and use the selected Claude target and revision', async () => {
+  const { manageUpdates } = await import('../src/terminal-updates.js');
+  const view = {revision:'selected-revision'} as import('../src/ui-contract.js').ConfigView;
+  const host = {label:'Claude Code', profileId:null, currentVersion:'2.1.330', latestVersion:'2.1.331', automatic:false,
+    state:'idle' as const, updateSupported:true, updateAvailable:true, checkedAt:1};
+  const statuses = [host, {...host,profileId:'external',updateSupported:false}, {...host,profileId:'missing',currentVersion:null,
+    updateSupported:false,automatic:true}];
+  const calls: unknown[] = [];
+  const manager = {
+    codexUpdate: async () => { throw new Error('synthetic-private-diagnostic'); },
+    claudeUpdate: async (input?:unknown,action?:string) => { if(input) calls.push([input,action]); return statuses; },
+  } as unknown as Management;
+  const inspect = {
+    ...terminalScript([]), select: async (_title:string,options:import('../src/config-prompts.js').Option[]) => {
+      assert.deepEqual(options.filter(item=>!item.action).map(item=>[item.value,item.availableActions]), [
+        ['claude:', ['check','automatic','upgrade']], ['claude:external', []], ['claude:missing', ['automatic']],
+      ]);
+      assert.ok(!options.some(item => item.value==='rollback'));
+      return 'claude:external';
+    },
+  };
+  assert.match(await manageUpdates(manager,inspect,view),/安装|installer/);
+  assert.ok(inspect.messages.every(line => !line.includes('synthetic-private-diagnostic')));
+  await manageUpdates(manager,terminalScript(['claude:','upgrade'],[],[false]),view);
+  assert.deepEqual(calls,[]);
+  for (const action of ['check','automatic','upgrade']) {
+    await manageUpdates(manager,terminalScript([selectedAction(action,'claude:')]),view);
+  }
+  await manageUpdates(manager,terminalScript([selectedAction('automatic','claude:missing')],[],[false,true]),view);
+  assert.deepEqual(calls,[
+    [{configRevision:view.revision,profileId:null}, 'check'],
+    [{configRevision:view.revision,profileId:null,enabled:true}, 'automatic'],
+    [{configRevision:view.revision,profileId:null}, 'upgrade'],
+    [{configRevision:view.revision,profileId:'missing',enabled:false}, 'automatic'],
+  ]);
 });
 
 test('terminal GitHub settings explicitly clear a token without exposing it',async t=>{

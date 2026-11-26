@@ -59,4 +59,6 @@ Tests are archived by feature with shared fixtures in `test/helpers.ts`. Add bou
 
 ## Docs
 
-`docs/architecture.md` (Chinese) is the authority for module entrypoints and the behavior each must preserve; `docs/operations.md` covers maintenance and recovery. When prose and scripts/config disagree, the executable wins.
+Write single-language public documentation in English, including directory READMEs for multilingual sites. Keep the English and Simplified Chinese editions of bilingual documentation in sync.
+
+`docs/architecture.md` defines module entry points and the behavior each must preserve. `docs/operations.md` covers maintenance and recovery. When prose and scripts/config disagree, the executable wins.
