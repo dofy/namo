@@ -19,7 +19,7 @@ import { currentRuntimeRelease } from './release.js';
 import { parseLocale, systemLocale } from './i18n.js';
 import { REPOSITORY_URL } from './repository.js';
 import { NAMO_VERSION } from './version.js';
-import { startCodexAutoUpdates } from './codex-updates.js';
+import { startCliAutoUpdates } from './cli-update-scheduler.js';
 import { queuedConfiguration, watchConfiguration } from './config-reload.js';
 import { runtimeSecrets } from './runtime-config.js';
 
@@ -172,12 +172,12 @@ async function main(): Promise<void> {
     const card=(event:Parameters<RuntimeHost['acceptCard']>[0])=>withLocale('zh-CN',()=>service.acceptCard(event));
     await transport.connect(accept,card); if (closing) return;
     withLocale('zh-CN', () => service.start()); log('ready', { dataDir: config.dataDir, concurrency: config.concurrency });
-    stopUpdates=startCodexAutoUpdates(config);
+    stopUpdates=startCliAutoUpdates(config,configRevision);
     if (startupRelease && activeId) stopLiveUpgrades=watchLiveUpgrades(config,startupRelease,activeId,service,options,fields=>{
       health={...health,...fields,updatedAt:new Date().toISOString()};
       atomicJson(join(config.dataDir,'health.json'),health);
     });
-    let applied=config;
+    let applied=config, appliedRevision=configRevision;
     reload=watchConfiguration(store,service,config,configRevision,async next=>{
       await stopLiveUpgrades?.(); stopLiveUpgrades=undefined;
       const nextOptions={...options,config:next};
@@ -190,10 +190,10 @@ async function main(): Promise<void> {
       if(applied.feishu.appSecret!==next.feishu.appSecret){
         transport!.close(); const candidate=new FeishuTransport(next.feishu,log);
         try {await candidate.connect(accept,card);transport=candidate;log('ready');}
-        catch {candidate.close();transport=new FeishuTransport(applied.feishu,log);await transport.connect(accept,card);log('ready');stopUpdates=startCodexAutoUpdates(applied);throw Error('configuration_reconnect_failed');}
+        catch {candidate.close();transport=new FeishuTransport(applied.feishu,log);await transport.connect(accept,card);log('ready');stopUpdates=startCliAutoUpdates(applied,appliedRevision);throw Error('configuration_reconnect_failed');}
       } else transport!.updatePolicy(next.feishu);
-      applied=next;options.config=next;
-      stopUpdates=startCodexAutoUpdates(next);
+      applied=next;appliedRevision=revision;options.config=next;
+      stopUpdates=startCliAutoUpdates(next,revision);
       health={...health,configRevision:revision,configurationReload:'applied',automaticConfiguration:true,updatedAt:new Date().toISOString()};
       atomicJson(join(config.dataDir,'health.json'),health);
       const id=typeof health.releaseId==='string'?health.releaseId:undefined;

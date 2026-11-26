@@ -11,6 +11,7 @@ import { Tasks } from '../src/tasks.js';
 import { conversationControl } from '../src/conversation-control.js';
 import { awaitMcpApproval } from '../src/mcp-write-approval.js';
 import type { Config } from '../src/config.js';
+import { holdCliMaintenance } from '../src/cli-maintenance.js';
 
 test('shared writable directories serialize distinct chats while all tasks run in private scratch directories',async t=>{
   const dir=realpathSync(mkdtempSync(join(tmpdir(),'namo-directory-engine-'))),store=new Store(join(dir,'bot.sqlite'));
@@ -28,6 +29,31 @@ test('shared writable directories serialize distinct chats while all tasks run i
 
 const msg = (key: string, chatKey = 'chat', text = 'hello'): Incoming => ({ key, chatKey, chatId: chatKey, messageId: key, senderId: 'user', text });
 const wait = (condition: () => boolean, timeoutMs = 4000) => waitFor(condition, timeoutMs);
+
+test('CLI maintenance survives receiver startup, leaves new tasks queued and resumes after release', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'namo-cli-maintenance-')), store = new Store(join(dir, 'bot.sqlite'));
+  let runs = 0;
+  const engine = new Engine(store, { async run() { runs++; return { text: 'done', threadId: 'thread', turnId: 'turn' }; } },
+    { async send(_chat, _text, id) { return id; } }, { dataDir: dir, concurrency: 2 });
+  t.after(async () => { await engine.stop(); store.close(); rmSync(dir, { recursive: true, force: true }); });
+  const maintenance = holdCliMaintenance({ dataDir: dir });
+  assert.ok(maintenance);
+  maintenance.child(process.pid);
+  engine.start();
+  assert.equal(engine.accept(msg('during-update')), true);
+  await engine.pump();
+  assert.equal(store.get('during-update')?.state, 'queued');
+  assert.equal(runs, 0);
+  assert.equal(holdCliMaintenance({ dataDir: dir }), undefined);
+  maintenance.release();
+  await wait(() => store.get('during-update')?.state === 'replied');
+  assert.equal(runs, 1);
+
+  store.db.prepare("INSERT INTO settings VALUES('maintenance','cli-update:2147483647:0:dead')").run();
+  assert.equal(engine.accept(msg('after-updater-exit')), true);
+  await wait(() => store.get('after-updater-exit')?.state === 'replied');
+  assert.equal(runs, 2);
+});
 
 test('recovered control commands never run as model prompts', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'bot-engine-')); const store = new Store(join(dir, 'bot.sqlite'));

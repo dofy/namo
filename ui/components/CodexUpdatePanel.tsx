@@ -1,18 +1,18 @@
-import { SectionHeading } from './PageSection';
 import { SettingToggle } from './SettingToggle';
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Button, Flex, Text } from '@radix-ui/themes';
 import type { CodexUpdateStatus } from '../../src/ui-contract';
 import { api, ApiError } from '../api';
 import { ConfirmButton, Notice } from '../components';
 import { Icon } from '../Icon';
-import { getLocale, t as tr, type MessageKey } from '../i18n';
+import { t as tr, type MessageKey } from '../i18n';
+import { CliUpdateDetails, CliUpdatePanel } from './CliUpdatePanel';
 
 type Action = 'check' | 'upgrade' | 'automatic' | 'rollback';
 const errorKeys: Record<string, MessageKey> = {
   update_busy: 'codexUpdate.busy',
   update_config_changed: 'codexUpdate.configChanged',
   update_unsupported: 'codexUpdate.unsupported',
+  update_cli_unavailable: 'codexUpdate.cliUnavailable',
   update_download_failed: 'codexUpdate.downloadFailed',
   update_checksum_failed: 'codexUpdate.checksumFailed',
   codex_download_failed: 'codexUpdate.downloadFailed',
@@ -82,42 +82,31 @@ export function CodexUpdatePanel({ configRevision, disabled, pendingApplication=
 
   const busy = pending !== null || active;
   const unavailable = !status?.supported || disabled || busy;
+  const canUpdate = !!(status?.supported && status.currentVersion);
+  const canRollback = !!(status?.supported && status.previousVersion);
   const stateKeys: Record<CodexUpdateStatus['state'], MessageKey> = {
     idle: 'codexUpdate.idle', checking: 'codexUpdate.checking', installing: 'codexUpdate.installing',
     deferred: 'codexUpdate.deferred', failed: 'codexUpdate.failed',
   };
-  return <section className="page-panel" aria-labelledby="codex-update-title">
-    <div className="section-title">
-      <SectionHeading icon="refresh" id="codex-update-title" title={tr('codexUpdate.title')} />
-      {status && <Badge color={status.managed ? 'green' : 'gray'}>{tr(status.managed ? 'codexUpdate.managed' : 'codexUpdate.external')}</Badge>}
-    </div>
-    <Text as="p" size="2" color="gray">{tr('codexUpdate.help')}</Text>
+  const statusText = status && (status.state !== 'idle' || canUpdate) ? tr(stateKeys[status.state]) +
+    (status.state === 'idle' && status.latestVersion ? ` · ${tr(status.updateAvailable ? 'codexUpdate.available' : 'codexUpdate.upToDate')}` : '') : undefined;
+  return <CliUpdatePanel id="codex-update-title" title={tr('codexUpdate.title')}
+    description={tr(status?.currentVersion && !status.managed ? 'codexUpdate.externalHelp' : 'codexUpdate.help')}>
     {pendingApplication&&status?.automatic&&<Notice>{tr('codexUpdate.pendingApplication')}</Notice>}
     {error && <Notice error>{error}</Notice>}
     {status?.error && <Notice error>{tr(errorKey(status.error, 'codexUpdate.failed'))}</Notice>}
     {status && !status.supported && <Notice>{tr('codexUpdate.unsupported')}</Notice>}
-    <div className="form-grid">
-      <Text as="p" size="2">{tr('codexUpdate.current')}: <Text weight="medium">{status?.currentVersion ?? tr('codexUpdate.unknown')}</Text></Text>
-      <Text as="p" size="2">{tr('codexUpdate.latest')}: <Text weight="medium">{status?.latestVersion ?? tr('codexUpdate.notChecked')}</Text></Text>
-    </div>
-    <Text as="p" size="1" color="gray">{tr('codexUpdate.checked')}: {status?.checkedAt ? new Date(status.checkedAt).toLocaleString(getLocale()) : tr('codexUpdate.notChecked')}</Text>
+    {status?.supported && !status.currentVersion && !busy && <Notice>{tr('codexUpdate.cliUnavailable')}</Notice>}
     {disabled && <Notice>{tr('codexUpdate.settingsDraft')}</Notice>}
-    <div className="inline-action-row codex-update-actions">
-    <div>{status && <Text as="p" size="2" role="status" aria-live="polite">{tr(stateKeys[status.state])}
-      {status.state === 'idle' && status.latestVersion && ` · ${tr(status.updateAvailable ? 'codexUpdate.available' : 'codexUpdate.upToDate')}`}
-    </Text>}</div>
-    <Flex gap="3" wrap="wrap">
-      <Button type="button" variant="soft" loading={pending === 'check' || status?.state === 'checking'} disabled={busy || status?.supported === false}
-        onClick={() => void act('check')}><Icon name="refresh" />{tr('codexUpdate.check')}</Button>
-      <ConfirmButton title={tr('codexUpdate.upgradeTitle')} description={tr('codexUpdate.upgradeDescription', status?.latestVersion ?? '')}
-        action={tr('codexUpdate.upgrade')} disabled={unavailable || !status?.updateAvailable} onConfirm={() => act('upgrade')}>
-        <Icon name="play" />{tr('codexUpdate.upgrade')}
-      </ConfirmButton>
-      <ConfirmButton title={tr('codexUpdate.rollbackTitle')} description={tr('codexUpdate.rollbackDescription', status?.previousVersion ?? '')}
+    <CliUpdateDetails version={status} latestLabel={tr('codexUpdate.latest')} statusText={statusText}
+      check={canUpdate ? { loading: pending === 'check' || status?.state === 'checking', disabled: busy, run: () => void act('check') } : undefined}
+      upgrade={canUpdate ? { title: tr('codexUpdate.upgradeTitle'), description: tr('codexUpdate.upgradeDescription', status?.latestVersion ?? ''),
+        disabled: unavailable || !status?.updateAvailable, run: () => act('upgrade') } : undefined}>
+      {(canUpdate || canRollback) && <ConfirmButton title={tr('codexUpdate.rollbackTitle')} description={tr('codexUpdate.rollbackDescription', status?.previousVersion ?? '')}
         action={tr('codexUpdate.rollback')} disabled={unavailable || !status?.previousVersion} onConfirm={() => act('rollback')}>
         <Icon name="reset" />{tr('codexUpdate.rollback')}
-      </ConfirmButton>
-    </Flex></div>
-    <div className="setting-options"><SettingToggle icon="refresh" title={tr('codexUpdate.automatic')} description={tr('codexUpdate.automaticHelp')} checked={status?.automatic === true} disabled={unavailable} onChange={value => void act('automatic', value)} /></div>
-  </section>;
+      </ConfirmButton>}
+    </CliUpdateDetails>
+    {(canUpdate || status?.automatic) && <div className="setting-options"><SettingToggle icon="refresh" title={tr('codexUpdate.automatic')} description={tr('codexUpdate.automaticHelp')} checked={status?.automatic === true} disabled={unavailable} onChange={value => void act('automatic', value)} /></div>}
+  </CliUpdatePanel>;
 }

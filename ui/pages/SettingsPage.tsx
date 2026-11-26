@@ -9,6 +9,7 @@ import { PageSection } from '../components/PageSection';
 import { SettingToggle } from '../components/SettingToggle';
 import { ModelSelect } from '../components/ModelSelect';
 import { CodexUpdatePanel } from '../components/CodexUpdatePanel';
+import { ClaudeUpdatePanel } from '../components/ClaudeUpdatePanel';
 import { useToast } from '../Toast';
 
 type MessageOption = 'requireMention' | 'cards' | 'reactions' | 'progressUpdates';
@@ -247,6 +248,11 @@ export function SettingsPage({ config, expired, recoveryAvailable, refresh, noti
         disabled={dirty || saving || pickingDirectory || !recoveryAvailable} onConfirm={async () => { const result = await api.apply(revision); notify(result.message, !result.ready); await refresh(); }}><Icon name="play" />{tr("settings.applyConfiguration")}</ConfirmButton>}
     </div>
   </form>
-    <Tabs.Content value="maintenance" forceMount hidden={tab !== 'maintenance'} className="settings-tab-panel"><CodexUpdatePanel configRevision={config.revision} disabled={dirty || saving || !config.valid} pendingApplication={config.application==='pending'} />{operations}</Tabs.Content>
+    <Tabs.Content value="maintenance" forceMount hidden={tab !== 'maintenance'} className="settings-tab-panel">
+      <CodexUpdatePanel configRevision={config.revision} disabled={dirty || saving || !config.valid} pendingApplication={config.application==='pending'} />
+      {tab === 'maintenance' && <ClaudeUpdatePanel key={config.revision} configRevision={config.revision}
+        disabled={dirty || saving || !config.valid} pendingApplication={config.application === 'pending'} />}
+      {operations}
+    </Tabs.Content>
   </div>;
 }

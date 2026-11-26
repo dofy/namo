@@ -50,12 +50,16 @@ function privateClaudeHome(dataDir: string, home: string): boolean {
     && (!existsSync(join(home, '.claude')) || lstatSync(join(home, '.claude')).isDirectory());
 }
 
-export async function claudeVersion(bin: string, home: string): Promise<string | undefined> {
+export async function readClaudeCliVersion(bin: string, home: string): Promise<string | undefined> {
   const { stdout } = await cli(bin, ['--version'], { env: claudeEnvironment(home), timeout: 5000, maxBuffer: 16_384 });
-  const version = /^(\d+)\.(\d+)\.(\d+) \(Claude Code\)\s*$/.exec(stdout);
+  return /^(\d+\.\d+\.\d+) \(Claude Code\)\s*$/.exec(stdout)?.[1];
+}
+
+export async function claudeVersion(bin: string, home: string): Promise<string | undefined> {
+  const version = await readClaudeCliVersion(bin, home);
   if (!version) return;
-  const [, major, minor, patch] = version.map(Number);
-  return major > 2 || major === 2 && (minor > 1 || minor === 1 && patch >= 330) ? version[0].trim().split(' ')[0] : undefined;
+  const [major, minor, patch] = version.split('.').map(Number);
+  return major > 2 || major === 2 && (minor > 1 || minor === 1 && patch >= 330) ? version : undefined;
 }
 
 export async function claudeAuthenticated(bin: string, dataDir: string, home: string): Promise<boolean> {

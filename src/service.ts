@@ -16,7 +16,8 @@ import { createRuntimeRelease, sourcePackageRoot, verifyRuntimeRelease, type Run
 import { SCHEMA_VERSION } from './store.js';
 import { activeRuntimeId, assertLiveCompatible, runtimeRelease, requestLiveUpgrade } from './live-upgrade.js';
 import { createUpgradeBackup } from './upgrade-backup.js';
-import { acquireLock } from './safety.js';
+import { acquireLock, processAlive } from './safety.js';
+export { processAlive } from './safety.js';
 
 const legacyLabel = 'local.feishu-codex-bot';
 const plistFile = (label: string) => join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
@@ -77,7 +78,6 @@ function replacePlist(file: string, content: string, mode = 0o600): void {
   }
   finally { if (existsSync(temp)) unlinkSync(temp); }
 }
-export function processAlive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code !== 'ESRCH'; } }
 export function activeData(data: string): boolean {
   try { const pid = Number(readFileSync(join(data, 'service.lock', 'pid'), 'utf8')); return Number.isSafeInteger(pid) && pid > 0 && processAlive(pid); }
   catch { return false; }

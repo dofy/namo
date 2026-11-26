@@ -8,6 +8,11 @@ export interface CodexUpdateStatus {
   automatic: boolean; state: 'idle' | 'checking' | 'installing' | 'deferred' | 'failed';
   updateAvailable: boolean; managed: boolean; previousVersion: string | null; error: string | null;
 }
+export interface ClaudeUpdateStatus {
+  profileId: string | null; label: string; currentVersion: string | null; updateSupported: boolean;
+  latestVersion: string | null; checkedAt: number | null; updateAvailable: boolean; automatic: boolean;
+  state: 'idle' | 'deferred' | 'updating' | 'updated' | 'unchanged' | 'failed';
+}
 
 export interface ConfigValues {
   directories?:string[];

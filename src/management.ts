@@ -33,6 +33,7 @@ import { Profiles, ProfileError } from './profiles.js';
 import { AgentModelError, readAgentModel, saveAgentModel } from './agent-models.js';
 import { listCodexModels } from './codex-connection.js';
 import { CodexUpdates } from './codex-updates.js';
+import { ClaudeUpdates } from './claude-updates.js';
 import type { ProfileState, UserProfile } from './ui-contract.js';
 import { Browse, BrowseError } from './browse.js';
 import { isOAuthReference, resolveMcpCredential, discoverMcpOAuthScopes } from './mcp-oauth.js';
@@ -45,20 +46,22 @@ import { DailyTurns, dailyTurnDay } from './daily-turns.js';
 export class ManagementError extends Error { constructor(message:string,readonly status=409){super(message);} }
 export interface ManagementDeps {
   status: typeof serviceStatus; action: typeof serviceAction; wait: typeof waitForService; diagnose: typeof doctor;
-  localGh: typeof discoverLocalGh; codexMcpConfig?:string; mcpReader:typeof remoteRead;
+  localGh: typeof discoverLocalGh; codexMcpConfig?:string; mcpReader:typeof remoteRead; claudeUpdates?: ClaudeUpdates;
 }
 const defaults:ManagementDeps={status:serviceStatus,action:serviceAction,wait:waitForService,diagnose:doctor,localGh:discoverLocalGh,mcpReader:remoteRead};
 export class Management {
   readonly dataDir: string;
   private deps:ManagementDeps;
   private codexUpdater?: { revision: string; updates: CodexUpdates };
+  private claudeUpdater: ClaudeUpdates;
   private updateOperations=new Set<CodexUpdates>();
-  async close(): Promise<void> { await Promise.allSettled([...this.updateOperations].map(updater=>updater.close())); }
+  async close(): Promise<void> { await Promise.allSettled([this.claudeUpdater, ...this.updateOperations].map(updater=>updater.close())); }
   constructor(readonly file:string, deps:Partial<ManagementDeps>={}) {
     const raw=readJson(file),path=raw.dataDir??'./data';
     if(typeof path!=='string') throw new ManagementError(tr("management.invalidDataDirectoryConfigurationFixNamoInit"));
     this.dataDir=path.startsWith('~/')?resolve(homedir(),path.slice(2)):resolve(dirname(file),path);
     this.deps={...defaults,...deps};
+    this.claudeUpdater=deps.claudeUpdates ?? new ClaudeUpdates();
   }
   private source():{raw:any;revision:string} {
     const text=readFileSync(this.file,'utf8'),raw=JSON.parse(text);
@@ -349,6 +352,19 @@ export class Management {
     }
     try { return input ? await this.codexUpdater.updates.action(input.action,input.enabled) : await this.codexUpdater.updates.status(); }
     catch(error) { throw new ManagementError(error instanceof Error && /^update_[a-z_]+$/.test(error.message)?error.message:'update_failed'); }
+  }
+  async claudeUpdate(input?: {profileId: unknown; configRevision: unknown; enabled?: boolean}, action: 'check' | 'upgrade' | 'automatic' = 'upgrade') {
+    const { revision } = this.source();
+    if (input && input.configRevision !== revision) throw new ManagementError('update_config_changed');
+    if (input && input.profileId !== null && typeof input.profileId !== 'string') throw new ManagementError('update_action_invalid', 400);
+    const config = loadConfig(this.file);
+    try {
+      return input
+        ? await this.claudeUpdater.action(action, config, input.profileId as string | null, revision, input.enabled)
+        : await this.claudeUpdater.status(config);
+    } catch (error) {
+      throw new ManagementError(error instanceof Error && /^update_[a-z_]+$/.test(error.message) ? error.message : 'update_failed');
+    }
   }
   async mcpOAuthScopes(revision:unknown,url:unknown) {
     if(typeof revision!=='string'||this.source().revision!==revision)throw new ManagementError('mcp_config_changed');

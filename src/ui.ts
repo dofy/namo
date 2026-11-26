@@ -168,6 +168,7 @@ export async function startUi(manager:Management,options:{chooseDirectory?:()=>P
         if(path==='/api/codex-mcp')return send(200,manager.codexMcpCatalog());
         if(path==='/api/models')return send(200,await manager.models(new URL(req.url!,origin).searchParams.get('profile') ?? 'codex'));
         if(path==='/api/codex-update')return send(200,await manager.codexUpdate());
+        if(path==='/api/claude-update')return send(200,await manager.claudeUpdate());
         if(path==='/api/tasks')return send(200,manager.browse('tasks',new URL(req.url!,origin).searchParams));
         if(path==='/api/schedules')return send(200,manager.browse('schedules',new URL(req.url!,origin).searchParams));
         if(path==='/api/sessions')return send(200,manager.browse('sessions',new URL(req.url!,origin).searchParams));
@@ -198,6 +199,9 @@ export async function startUi(manager:Management,options:{chooseDirectory?:()=>P
         if(path==='/api/profiles')return send(200,manager.saveProfile(input.configRevision,input.userId,input.version,input.patch));
         if(path==='/api/agent-model')return send(200,{model:manager.saveExecutionModel(input.revision,input.profile,input.expected,input.model)});
         if(path==='/api/codex-update')return send(200,await manager.codexUpdate(input));
+        if(path==='/api/claude-update')return send(200,await manager.claudeUpdate(input));
+        if(path==='/api/claude-update/check')return send(200,await manager.claudeUpdate(input,'check'));
+        if(path==='/api/claude-update/automatic')return send(200,await manager.claudeUpdate(input,'automatic'));
         if(path==='/api/resolve')return send(200,manager.reconcile(input));
         if(path==='/api/schedules/action')return send(200,manager.scheduleAction(input));
         if(path==='/api/cancel')return send(200,manager.cancel(input.id,input.inputVersion,input.requestId));

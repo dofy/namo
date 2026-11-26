@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadConfig } from '../src/config.js';
 import { Store } from '../src/store.js';
-import { CodexUpdates, newerVersion, type UpdateDependencies } from '../src/codex-updates.js';
+import { CodexUpdates, type UpdateDependencies } from '../src/codex-updates.js';
+import { startCliAutoUpdates } from '../src/cli-update-scheduler.js';
+import { digest } from '../src/paths.js';
+import { newerVersion } from '../src/version.js';
 import { installationRoot, installationState, resolveCodexBinary, saveInstallation } from '../src/codex-installation.js';
 
 function fixture(t: TestContext, overrides: Partial<UpdateDependencies> = {}) {
@@ -46,6 +49,48 @@ test('checking records the latest stable release without installing or selecting
   assert.equal(f.state.installs, 0); assert.deepEqual(f.state.probes, []);
   assert.equal(resolveCodexBinary(f.original, f.home), f.original);
   assert.equal(readFileSync(f.file, 'utf8'), before);
+});
+
+test('the shared CLI scheduler dispatches both updaters and waits for in-flight checks on shutdown', async t => {
+  const f = fixture(t);
+  let finishFirst!: () => void, finishSecond!: () => void;
+  const first = new Promise<void>(resolve => { finishFirst = resolve; });
+  const second = new Promise<void>(resolve => { finishSecond = resolve; });
+  const config = readFileSync(f.file, 'utf8'), events: string[] = [];
+  let checks = 0;
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const stop = startCliAutoUpdates(f.config, digest(config), [
+    {
+      async tick() { events.push('codex'); throw Error('temporary failure'); },
+      async close() { events.push('close codex'); },
+    },
+    {
+      async tick() { events.push('claude'); checks++; await (checks === 1 ? first : second); },
+      async close() { events.push('close claude'); },
+    },
+  ]);
+  t.after(async () => { finishFirst(); finishSecond(); await stop(); });
+  assert.deepEqual(events, ['codex', 'claude']);
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(events, ['codex', 'claude']);
+  finishFirst();
+  await new Promise(resolve => setImmediate(resolve));
+  writeFileSync(f.file, config + '\n');
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(events, ['codex', 'claude']);
+  writeFileSync(f.file, config);
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(events, ['codex', 'claude', 'codex', 'claude']);
+  const stopped = stop();
+  assert.equal(stop(), stopped);
+  let finished = false;
+  void stopped.then(() => { finished = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(finished, false);
+  finishSecond();
+  await stopped;
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(events, ['codex', 'claude', 'codex', 'claude', 'close codex', 'close claude']);
 });
 
 test('upgrade activates a validated private binary, survives reconstruction and can roll back to the original', async t => {
@@ -97,6 +142,39 @@ test('automatic updates defer while tasks are queued and continue when the queue
   const output = f.store.nextOutput()!; f.store.sending(output.id); f.store.sent(output.id, 'fixture-reply');
   await f.updater.tick(); await f.updater.settled();
   assert.equal((await f.updater.status()).currentVersion, '0.200.0'); assert.equal(f.state.installs, 1);
+});
+
+test('disabling Codex automatic updates cancels only the deferred automatic request', async t => {
+  for (const manual of [false, true]) {
+    const f = fixture(t);
+    f.store.enqueue({ key: 'busy', messageId: 'busy', chatKey: 'chat', chatId: 'chat', senderId: 'user', text: 'task' });
+    await f.updater.action('automatic', true);
+    if (manual) await f.updater.action('upgrade');
+    else await f.updater.tick();
+    await f.updater.settled();
+    assert.equal((await f.updater.status()).state, 'deferred');
+    await f.updater.action('check'); await f.updater.settled();
+    assert.equal((await f.updater.status()).state, 'deferred');
+    await f.updater.action('automatic', false);
+    f.store.claim('busy'); f.store.finish('busy', 'done');
+    const output = f.store.nextOutput()!;
+    f.store.sending(output.id); f.store.sent(output.id, 'delivered');
+    const reopened = new CodexUpdates(f.config, f.deps);
+    await reopened.tick(); await reopened.settled();
+    assert.equal(f.state.installs, manual ? 1 : 0);
+    assert.equal((await reopened.status()).state, 'idle');
+  }
+});
+
+test('disabling automatic updates on older records honors manual rollbacks and previously disabled upgrades', async t => {
+  const f = fixture(t);
+  const base = installationState(f.original, f.home);
+  for (const [automatic, pendingAction, expected] of [
+    [true, 'upgrade', 'idle'], [false, 'upgrade', 'deferred'], [true, 'rollback', 'deferred'],
+  ] as const) {
+    saveInstallation(f.home, { ...base, automatic, state: 'deferred', pendingAction });
+    assert.equal((await f.updater.action('automatic', false)).state, expected);
+  }
 });
 
 test('manual upgrade and rollback deferred while busy resume with automatic updates disabled',async t=>{
