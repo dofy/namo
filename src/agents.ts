@@ -21,7 +21,9 @@ export function detectAgents(codexBin = 'codex'): AgentInfo[] {
   return ([['codex', findExecutable(codexBin)], ['claude', findClaudeBinary('claude')]] as const).map(([id, path]) => {
     // Discovery must not execute an arbitrary PATH command or inherit host
     // credentials. Codex diagnostics own bounded protocol and account checks.
-    return { id, kind: 'local-cli', supported: true, path: path ? realpathSync(path) : undefined, installed: !!path };
+    // Native Claude updates replace the target behind its launcher link.
+    const executable = path && (id === 'claude' ? resolve(path) : realpathSync(path));
+    return { id, kind: 'local-cli', supported: true, path: executable, installed: !!path };
   });
 }
 export function findClaudeBinary(bin: string, home = homedir()): string | undefined {
