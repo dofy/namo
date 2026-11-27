@@ -1,6 +1,21 @@
 # Release notes
 
-## 0.7.1 — Unreleased
+## 0.8.0 — 2026-11-27
+
+- The workbench can be accessed remotely through an explicitly configured
+  HTTPS reverse proxy. Run `namo ui --remote-guide` for setup instructions.
+- Set a model for each executor and configure Claude Code from `namo config`.
+  Both the terminal and workbench show update controls for supported CLI
+  installations. The receiver waits for an idle task queue before applying
+  automatic updates to Codex or native Claude Code.
+- Claude Code can review private GitHub pull requests at fixed revisions and
+  search JavaScript and TypeScript syntax trees during review.
+- Reply to a paused schedule's notification to resume it.
+- Upgrading an existing 0.7.1 background service requires an idle queue.
+  Follow the [offline upgrade procedure](operations.md#installation-upgrades-and-rollback)
+  to stop the receiver, switch its runtime and start it again.
+
+## 0.7.1 — 2026-11-24
 
 - The local workbench stays available when a configured working directory is
   missing, so the directory can be repaired from Settings.

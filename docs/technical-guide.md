@@ -55,7 +55,7 @@ To build a local CLI package:
 
 ```sh
 pnpm pack
-npm install -g ./dofy-namo-0.7.1.tgz
+npm install -g ./dofy-namo-0.8.0.tgz
 namo init
 ```
 

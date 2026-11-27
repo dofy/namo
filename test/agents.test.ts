@@ -1,6 +1,6 @@
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, realpathSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, realpathSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { detectAgents, findExecutable, probeAgent, loginAgent } from '../src/agents.js';
@@ -59,7 +59,15 @@ test('agent discovery never executes a generic PATH binary or exposes inherited 
 touch '${marker}'
 `,{mode:0o700});
  const path=process.env.PATH;process.env.PATH=dir;
- try { const agents=detectAgents();assert.deepEqual(agents.map(a=>a.id),['codex','claude']);assert.equal(agents[0].installed,false);assert.equal(existsSync(marker),false); }
+ try {
+  const launcher=join(dir,'claude');
+  symlinkSync('agent',launcher);
+  const agents=detectAgents();
+  assert.deepEqual(agents.map(a=>a.id),['codex','claude']);
+  assert.equal(agents[0].installed,false);
+  assert.equal(agents[1].path,launcher,'setup must keep the launcher so it follows future native updates');
+  assert.equal(existsSync(marker),false);
+ }
  finally {if(path===undefined)delete process.env.PATH;else process.env.PATH=path;}
 });
 
