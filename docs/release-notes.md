@@ -11,8 +11,9 @@
 - Claude Code can review private GitHub pull requests at fixed revisions and
   search JavaScript and TypeScript syntax trees during review.
 - Reply to a paused schedule's notification to resume it.
-- Restart an existing background receiver after upgrading to load the new
-  runtime and its dependencies.
+- Upgrading an existing 0.7.1 background service requires an idle queue.
+  Follow the [offline upgrade procedure](operations.md#installation-upgrades-and-rollback)
+  to stop the receiver, switch its runtime and start it again.
 
 ## 0.7.1 — 2026-11-24
 
