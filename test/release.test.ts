@@ -38,6 +38,8 @@ test('release snapshot is deterministic, self-contained, and detects tampering',
   t.after(() => { if (lstatSync(temp).isDirectory()) { writable(temp); rmSync(temp, { recursive: true, force: true }); } });
   const fixture = source(join(temp, 'source'));
   put(join(fixture.root, 'docs-site/index.html'), '<main>documentation</main>\n');
+  const remoteAssets = ['remote-ui/login.html', 'remote-ui/login.css', 'remote-ui/login.js', 'skills/namo-remote-workbench/SKILL.md'];
+  for (const asset of remoteAssets) put(join(fixture.root, asset), asset);
   const releases = join(temp, 'data', 'releases');
   const first = createRuntimeRelease(fixture.root, releases);
   const second = createRuntimeRelease(fixture.root, releases);
@@ -45,6 +47,7 @@ test('release snapshot is deterministic, self-contained, and detects tampering',
   assert.equal(second.root, first.root);
   assert.equal(verifyRuntimeRelease(first.root).id, first.id);
   assert.equal(readFileSync(join(first.root, 'docs-site/index.html'), 'utf8'), '<main>documentation</main>\n');
+  for (const asset of remoteAssets) assert.equal(readFileSync(join(first.root, asset), 'utf8'), asset);
   assert.equal(readFileSync(join(first.root, 'node_modules/fixture_runtime/index.js'), 'utf8'), 'export const dependency = "one";\n');
   assert.equal(lstatSync(join(first.root, 'node_modules/fixture_runtime')).isSymbolicLink(), false);
   assert.equal(dirname(first.worker), join(first.root, 'dist/src'));

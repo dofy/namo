@@ -152,7 +152,10 @@ export function createRuntimeRelease(sourceRoot: string, releasesRoot: string): 
       if (!existsSync(source)) throw new Error(tr("release.incompleteNamoBuildMissing", required));
       copyTree(source, join(staging, required));
     }
-    if (existsSync(join(sourceRoot, 'docs-site'))) copyTree(join(sourceRoot, 'docs-site'), join(staging, 'docs-site'));
+    for (const asset of ['docs-site', 'remote-ui', 'skills/namo-remote-workbench/SKILL.md']) {
+      const source = join(sourceRoot, asset);
+      if (existsSync(source)) copyTree(source, join(staging, asset));
+    }
     const dependencies = Object.keys(pkg.dependencies ?? {}).sort();
     for (const name of dependencies) {
       const source = dependencySource(sourceRoot, name);
